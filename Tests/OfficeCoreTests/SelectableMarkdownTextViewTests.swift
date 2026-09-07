@@ -6,6 +6,13 @@ import XCTest
 
 @MainActor
 final class SelectableMarkdownTextViewTests: XCTestCase {
+    nonisolated func testInlineCodeAttributeKeyIsAvailableOutsideMainActor() {
+        XCTAssertEqual(
+            NSAttributedString.Key.conversationInlineCodeBackground.rawValue,
+            "conversationInlineCodeBackground"
+        )
+    }
+
     func testInlineCodeAtParagraphEndHasOnlyGlyphWidth() {
         let rendered = SelectableMarkdownAttributedRenderer.render(
             source: "수정: `SelectableMarkdownTextView.swift`, `SelectableMarkdownTextViewTests.swift`",

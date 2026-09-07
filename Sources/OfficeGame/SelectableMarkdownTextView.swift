@@ -78,7 +78,8 @@ struct SelectableMarkdownTextView: NSViewRepresentable {
     }
 }
 
-@MainActor
+// Immutable attribute names are shared by rendering and layout code; they do
+// not access UI state and must not require a main-actor hop.
 extension NSAttributedString.Key {
     static let conversationInlineCodeBackground = NSAttributedString.Key("conversationInlineCodeBackground")
 }
