@@ -109,8 +109,17 @@ GUI로 돌아오면 터미널에서 진행한 내용도 같은 직원의 기록�
 > 실행해줘. 기존 AI CLI 로그인과 프로젝트는 건드리지 말고, 먼저 환경을 확인한 뒤 빠진
 > 의존성만 설치해. 앱과 로컬 백엔드가 정상 실행되는 것까지 확인해줘.”
 
-OFFICESTRA는 아직 최신 DMG를 제공하지 않습니다. 현재는 저장소를 내려받아 실행하는
-방식이 기준입니다.
+### 앱으로 내려받기
+
+[OFFICESTRA v1.4.0 DMG 다운로드](https://github.com/neosp8888-design/officestra/releases/tag/v1.4.0)
+— Apple silicon · macOS 14 이상 · 영문/한글.
+
+DMG를 열고 OFFICESTRA를 응용 프로그램 폴더로 옮기세요. Node.js는 앱에 포함되어
+있으며, Docker Desktop과 사용할 AI CLI의 설치·로그인은 별도로 필요합니다.
+
+> 이 배포본은 Apple 공증을 받지 않은 **Community Preview**입니다. macOS가 실행을
+> 차단하면 출처를 확인한 뒤 시스템 설정 → 개인정보 보호 및 보안에서 해당 앱의
+> **그래도 열기**를 선택하세요. 기존 설치의 대화·작업 기록은 지우지 마세요.
 
 <details>
 <summary><strong>직접 설치하기 — 숙련자용</strong></summary>

@@ -118,8 +118,18 @@ use one of them:
 > environment first, and install only missing dependencies. Verify that both the
 > app and its local backend are running.”
 
-OFFICESTRA does not yet provide an up-to-date DMG. Running it from the repository
-is currently the standard path.
+### Download the app
+
+[Download OFFICESTRA v1.4.0 DMG](https://github.com/neosp8888-design/officestra/releases/tag/v1.4.0)
+— Apple silicon · macOS 14 or later · English/Korean.
+
+Open the DMG and drag OFFICESTRA into Applications. Node.js is included. You still
+need Docker Desktop and the AI CLIs you want to use, installed and signed in.
+
+> This is a **Community Preview** without Apple notarization. If macOS blocks
+> launch, verify the download's source, then use **Open Anyway** for this app in
+> System Settings → Privacy & Security. Preserve your existing conversations and
+> work records when updating.
 
 <details>
 <summary><strong>Manual installation — for experienced users</strong></summary>

@@ -9,7 +9,7 @@ import {
 } from "../src/claude-persistent-worker.mjs";
 
 class FakeChild extends EventEmitter {
-  constructor() {
+  constructor(context) {
     super();
     this.stdin = new PassThrough();
     this.stdout = new PassThrough();
@@ -17,9 +17,15 @@ class FakeChild extends EventEmitter {
     this.pid = undefined;
     this.exitCode = null;
     this.killed = false;
+    // 실제 ChildProcess의 열린 pipe처럼 unref 타이머를 기다리는 동안에도
+    // 테스트 이벤트 루프를 유지한다. 실패한 테스트에서도 반드시 정리한다.
+    this.keepAlive = setInterval(() => {}, 1_000);
+    context.after(() => this.kill("SIGTERM"));
   }
 
   kill(signal) {
+    if (this.killed) return true;
+    clearInterval(this.keepAlive);
     this.killed = true;
     this.exitCode = signal === "SIGKILL" ? 137 : 0;
     this.stdout.end();
@@ -40,8 +46,8 @@ async function submittedMessage(child, run) {
   return { message: JSON.parse(String(chunk)), promise };
 }
 
-test("같은 Claude 프로세스가 연속 turn을 받고 누적 사용량은 turn별 증분으로 전달한다", async () => {
-  const child = new FakeChild();
+test("같은 Claude 프로세스가 연속 turn을 받고 누적 사용량은 turn별 증분으로 전달한다", async (context) => {
+  const child = new FakeChild(context);
   let spawnCount = 0;
   const received = [];
   const worker = new ClaudePersistentWorker({
@@ -149,8 +155,8 @@ test("같은 Claude 프로세스가 연속 turn을 받고 누적 사용량은 tu
   assert.equal(child.killed, true);
 });
 
-test("이전 turn에서 늦은 추천은 다음 turn에 붙이지 않는다", async () => {
-  const child = new FakeChild();
+test("이전 turn에서 늦은 추천은 다음 turn에 붙이지 않는다", async (context) => {
+  const child = new FakeChild(context);
   const worker = new ClaudePersistentWorker({
     executable: "claude",
     argumentsList: ["-p"],
@@ -228,8 +234,8 @@ test("누적 집계가 감소하면 새 query 기준으로 그대로 사용한�
   assert.equal(scoped.result.modelUsage.model.costUSD, 0.4);
 });
 
-test("Claude 수동 압축은 /compact와 완료 경계의 토큰을 사용한다", async () => {
-  const child = new FakeChild();
+test("Claude 수동 압축은 /compact와 완료 경계의 토큰을 사용한다", async (context) => {
+  const child = new FakeChild(context);
   const worker = new ClaudePersistentWorker({
     executable: "claude",
     argumentsList: ["-p"],
@@ -277,8 +283,8 @@ test("Claude 수동 압축은 /compact와 완료 경계의 토큰을 사용한�
   worker.close();
 });
 
-test("중단 요청은 interrupt 제어 요청을 먼저 보내고 비용이 담긴 result를 받은 뒤 종료한다", async () => {
-  const child = new FakeChild();
+test("중단 요청은 interrupt 제어 요청을 먼저 보내고 비용이 담긴 result를 받은 뒤 종료한다", async (context) => {
+  const child = new FakeChild(context);
   const received = [];
   const worker = new ClaudePersistentWorker({
     executable: "claude",
@@ -326,8 +332,8 @@ test("중단 요청은 interrupt 제어 요청을 먼저 보내고 비용이 담
   assert.equal(result.modelUsage["claude-sonnet-5"].inputTokens, 1_218);
 });
 
-test("중단 result가 제한 시간 안에 오지 않으면 프로세스를 그대로 종료한다", async () => {
-  const child = new FakeChild();
+test("중단 result가 제한 시간 안에 오지 않으면 프로세스를 그대로 종료한다", async (context) => {
+  const child = new FakeChild(context);
   const worker = new ClaudePersistentWorker({
     executable: "claude",
     argumentsList: ["-p"],
