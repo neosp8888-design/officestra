@@ -137,7 +137,7 @@ need Docker Desktop and the AI CLIs you want to use, installed and signed in.
 ### 1. Requirements
 
 - An Apple silicon Mac running macOS 14 or later
-- Xcode Command Line Tools with Git and Swift 5.10 or later
+- Xcode Command Line Tools with Git and Swift 6.0 or later
 - Node.js 20 or later and npm
 - Docker Desktop
 - At least one signed-in Codex, Claude Code, or Antigravity CLI

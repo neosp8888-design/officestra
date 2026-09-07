@@ -109,20 +109,32 @@ final class UsageReportTests: XCTestCase {
     }
 
     func testReportDecodesBackendRows() throws {
+        for timestamp in ["2026-09-06T09:00:00.000Z", "2026-09-06T09:00:00Z"] {
+            let json = """
+            {"backend":"codex","granularity":"day","timeZone":"Asia/Seoul",
+             "generatedAt":"\(timestamp)",
+             "rows":[{"period":"2026-09-06","characterId":"boss","model":"gpt-5.6-sol",
+                      "effort":"max","turns":3,"costUSD":1.25,"inputTokens":1000,
+                      "cachedInputTokens":200,"outputTokens":50,"liked":2,"disliked":0}]}
+            """
+            let report = try client.decodeUsageReport(Data(json.utf8))
+
+            XCTAssertEqual(report.rows.count, 1)
+            XCTAssertEqual(report.rows[0].characterId, "boss")
+            XCTAssertEqual(report.rows[0].liked, 2)
+            XCTAssertEqual(
+                report.generatedAt,
+                ISO8601DateFormatter().date(from: "2026-09-06T09:00:00Z")
+            )
+        }
+    }
+
+    func testReportRejectsInvalidBackendDate() {
         let json = """
         {"backend":"codex","granularity":"day","timeZone":"Asia/Seoul",
-         "generatedAt":"2026-09-06T09:00:00.000Z",
-         "rows":[{"period":"2026-09-06","characterId":"boss","model":"gpt-5.6-sol",
-                  "effort":"max","turns":3,"costUSD":1.25,"inputTokens":1000,
-                  "cachedInputTokens":200,"outputTokens":50,"liked":2,"disliked":0}]}
+         "generatedAt":"not-a-date","rows":[]}
         """
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let report = try decoder.decode(UsageReport.self, from: Data(json.utf8))
-
-        XCTAssertEqual(report.rows.count, 1)
-        XCTAssertEqual(report.rows[0].characterId, "boss")
-        XCTAssertEqual(report.rows[0].liked, 2)
+        XCTAssertThrowsError(try client.decodeUsageReport(Data(json.utf8)))
     }
 
     private func row(

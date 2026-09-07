@@ -127,7 +127,7 @@ DMG를 열고 OFFICESTRA를 응용 프로그램 폴더로 옮기세요. Node.js�
 ### 1. 준비할 것
 
 - Apple silicon Mac과 macOS 14 이상
-- Git과 Swift 5.10 이상을 포함한 Xcode Command Line Tools
+- Git과 Swift 6.0 이상을 포함한 Xcode Command Line Tools
 - Node.js 20 이상과 npm
 - Docker Desktop
 - Codex, Claude Code, Antigravity 중 로그인된 CLI 하나 이상

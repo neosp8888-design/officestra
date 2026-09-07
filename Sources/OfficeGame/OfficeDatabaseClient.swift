@@ -259,7 +259,11 @@ struct OfficeDatabaseClient: Sendable {
             from: usageReportURL(backend: backend, granularity: granularity)
         )
         try validate(response, data: data)
-        return try historyDecoder().decode(UsageReport.self, from: data)
+        return try decodeUsageReport(data)
+    }
+
+    func decodeUsageReport(_ data: Data) throws -> UsageReport {
+        try historyDecoder().decode(UsageReport.self, from: data)
     }
 
     func wikiPagesURL(query: String, limit: Int) -> URL {
