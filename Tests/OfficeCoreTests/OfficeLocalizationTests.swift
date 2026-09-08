@@ -32,7 +32,9 @@ final class OfficeLocalizationTests: XCTestCase {
             ("좋아요 %d건", [1], "1 like"),
             ("싫어요 %d건", [1], "1 dislike"),
             ("작업 계획 %d단계 중 %d단계 완료", [1, 0], "Work plan: 0 of 1 step completed"),
-            ("첨부 파일 %@, 경로 %@", ["보고서.pdf", "/tmp/보고서.pdf"], "Attachment 보고서.pdf, path /tmp/보고서.pdf")
+            ("첨부 파일 %@, 경로 %@", ["보고서.pdf", "/tmp/보고서.pdf"], "Attachment 보고서.pdf, path /tmp/보고서.pdf"),
+            ("1턴당 평균 비용(추정) %@ · 전체 %d턴", ["$0.1200", 1], "Average cost per turn (est.) $0.1200 · 1 turn total"),
+            ("1턴당 평균 비용(추정) %@ · 전체 %d턴", ["$0.1200", 4], "Average cost per turn (est.) $0.1200 · 4 turns total")
         ]
         for (key, arguments, expected) in cases {
             XCTAssertEqual(OfficeLocalization.format(key, arguments: arguments, languages: ["en", "ko"]), expected)
@@ -336,7 +338,9 @@ final class OfficeLocalizationTests: XCTestCase {
             ("launchctl 실행에 실패했습니다.", "Failed to run launchctl."),
             ("생각 중", "Thinking"),
             ("협업 검토", "Review collaboration"),
-            ("업무가 진행 중입니다.", "Work is in progress.")
+            ("업무가 진행 중입니다.", "Work is in progress."),
+            ("1턴당 평균 비용(추정) —", "Average cost per turn (est.) —"),
+            ("전체 기간 · 비용이 기록된 종료 턴 기준", "All time · Finished turns with recorded costs")
         ]
 
         for testCase in testCases {
