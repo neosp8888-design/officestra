@@ -3,6 +3,51 @@
 export const USAGE_REPORT_BACKENDS = ["codex", "claude", "antigravity"];
 export const USAGE_REPORT_GRANULARITIES = ["day", "month"];
 
+// 대화 페이지/스트리밍과 무관한 직원별 전체 비용. 최초 조회와 비용 변경
+// 이후에만 집계하고, 나머지 피드 조회는 같은 작은 캐시를 재사용한다.
+export class CharacterTurnCostSummaryCache {
+  constructor(pool) {
+    this.pool = pool;
+    this.generation = 0;
+    this.version = 0;
+    this.cached = null;
+    this.pending = null;
+  }
+
+  observe(event) {
+    if (event.type !== "feed.changed" || event.costChanged !== true) return;
+    this.generation += 1;
+    this.cached = null;
+  }
+
+  async read() {
+    while (!this.cached) {
+      if (!this.pending) {
+        const generation = this.generation;
+        this.pending = Promise.resolve().then(() => this.pool.query(`
+          SELECT character.id AS "characterId",
+            COUNT(usage.cost_usd)::integer AS "pricedTurnCount",
+            COALESCE(SUM(usage.cost_usd), 0)::double precision AS "totalCostUsd"
+          FROM characters AS character
+          LEFT JOIN cli_sessions AS session ON session.character_id = character.id
+          LEFT JOIN turns AS turn ON turn.cli_session_id = session.id
+            AND turn.status IN ('completed', 'failed', 'interrupted')
+          LEFT JOIN usage_records AS usage ON usage.turn_id = turn.id
+            AND usage.cost_usd >= 0
+          GROUP BY character.id
+          ORDER BY character.id
+        `)).then(({ rows }) => {
+          if (generation !== this.generation) return;
+          this.version = Math.max(Date.now(), this.version + 1);
+          this.cached = { version: this.version, characters: rows };
+        }).finally(() => { this.pending = null; });
+      }
+      await this.pending;
+    }
+    return this.cached;
+  }
+}
+
 export class UsageReportError extends Error {
   constructor(message, statusCode = 400) {
     super(message);

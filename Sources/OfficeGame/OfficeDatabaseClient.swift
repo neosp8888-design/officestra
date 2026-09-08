@@ -691,7 +691,7 @@ struct OfficeDatabaseClient: Sendable {
         .turns
     }
 
-    func fetchLiveFeed(limit: Int) async throws -> [LiveFeedTurn] {
+    func fetchLiveFeed(limit: Int) async throws -> LiveFeedResponse {
         let endpoint = baseURL
             .appending(path: "api")
             .appending(path: "live-feed")
@@ -713,10 +713,9 @@ struct OfficeDatabaseClient: Sendable {
             LiveFeedResponse.self,
             from: data
         )
-        .turns
     }
 
-    func fetchLiveFeedTurn(id: String) async throws -> LiveFeedTurn {
+    func fetchLiveFeedTurn(id: String) async throws -> LiveFeedTurnResponse {
         let url = baseURL
             .appending(path: "api")
             .appending(path: "live-feed")
@@ -727,7 +726,6 @@ struct OfficeDatabaseClient: Sendable {
             LiveFeedTurnResponse.self,
             from: data
         )
-        .turn
     }
 
     func updateTurnFeedback(
@@ -1658,12 +1656,14 @@ private struct GlobalHistoryResponse: Decodable {
     let turns: [GlobalHistoryTurn]
 }
 
-private struct LiveFeedResponse: Decodable {
+struct LiveFeedResponse: Decodable {
     let turns: [LiveFeedTurn]
+    let costSummary: CharacterTurnCostSnapshot?
 }
 
-private struct LiveFeedTurnResponse: Decodable {
+struct LiveFeedTurnResponse: Decodable {
     let turn: LiveFeedTurn
+    let costSummary: CharacterTurnCostSnapshot?
 }
 
 private struct TurnFeedbackRequest: Encodable {

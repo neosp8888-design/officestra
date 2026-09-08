@@ -631,6 +631,11 @@ private struct OfficeGameView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            CharacterTurnCostFooter(
+                store: director.turnCostStore,
+                selection: director.characterSelectionStore
+            )
+
             Divider()
                 .opacity(0.55)
 

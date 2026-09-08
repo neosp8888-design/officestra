@@ -70,7 +70,11 @@ import {
   replaceTurnFeedback,
 } from "./turn-feedback.mjs";
 import { startSlackBridge } from "./slack-bridge.mjs";
-import { UsageReportError, readUsageReport } from "./usage-report.mjs";
+import {
+  CharacterTurnCostSummaryCache,
+  UsageReportError,
+  readUsageReport,
+} from "./usage-report.mjs";
 import {
   WikiKnowledgeError,
   approveWikiProposal,
@@ -117,6 +121,7 @@ let pricingCatalogService;
 let modelCatalogService;
 let shuttingDown = false;
 const readUsageSummary = createUsageSummaryReader({ pool });
+const turnCostSummaryCache = new CharacterTurnCostSummaryCache(pool);
 const cliUpdateChecker = createCLIUpdateChecker();
 const localEmbeddingService = new LocalEmbeddingService();
 
@@ -137,6 +142,7 @@ async function hasRunningWork(backends) {
 }
 
 function broadcast(event) {
+  turnCostSummaryCache.observe(event);
   const payload = JSON.stringify(event);
   for (const socket of sockets) {
     if (socket.readyState === WebSocket.OPEN) {
@@ -1456,6 +1462,7 @@ async function liveFeed(response, url) {
   const limit = Math.max(20, Math.min(requestedLimit, 300));
   send(response, 200, {
     turns: await queryLiveFeed({ limit }),
+    costSummary: await turnCostSummaryCache.read(),
   });
 }
 
@@ -1477,7 +1484,10 @@ async function liveFeedTurn(response, turnID) {
     send(response, 404, { error: "대화를 찾을 수 없습니다." });
     return;
   }
-  send(response, 200, { turn: turns[0] });
+  send(response, 200, {
+    turn: turns[0],
+    costSummary: await turnCostSummaryCache.read(),
+  });
 }
 
 function withArtifactPreviews(turn, sessionID = turn.externalSessionId) {

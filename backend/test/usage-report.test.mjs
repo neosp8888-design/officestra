@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  CharacterTurnCostSummaryCache,
   USAGE_REPORT_DAY_SPAN,
   USAGE_REPORT_MONTH_SPAN,
   UsageReportError,
@@ -12,6 +13,57 @@ import {
   readUsageReport,
   usageReportQuery,
 } from "../src/usage-report.mjs";
+
+test("직원 전체 비용은 페이지·모델과 무관하며 미확인 비용과 진행 중 턴을 제외한다", async () => {
+  const cache = new CharacterTurnCostSummaryCache({ async query(sql) {
+    assert.match(sql, /GROUP BY character.id/);
+    assert.match(sql, /COUNT\(usage.cost_usd\)/);
+    assert.match(sql, /SUM\(usage.cost_usd\)/);
+    assert.match(sql, /'completed', 'failed', 'interrupted'/);
+    assert.doesNotMatch(sql, /LIMIT|external_id|active_cli_sessions|turn.model/);
+    return { rows: [{ characterId: "boss", pricedTurnCount: 4, totalCostUsd: 12 }] };
+  } });
+  const snapshot = await cache.read();
+  assert.deepEqual(snapshot.characters, [{ characterId: "boss", pricedTurnCount: 4, totalCostUsd: 12 }]);
+});
+
+test("평균 비용 캐시는 동시 조회·스트리밍 이벤트에서 재집계하지 않고 비용 변경만 반영한다", async () => {
+  let calls = 0;
+  const cache = new CharacterTurnCostSummaryCache({ async query() {
+    calls += 1;
+    return { rows: [{ characterId: "boss", pricedTurnCount: calls, totalCostUsd: calls * 2 }] };
+  } });
+  const snapshots = await Promise.all(Array.from({ length: 50 }, () => cache.read()));
+  assert.equal(calls, 1);
+  for (const snapshot of snapshots) assert.equal(snapshot, snapshots[0]);
+  for (let i = 0; i < 100; i += 1) {
+    cache.observe({ type: "feed.changed", turnId: "streaming" });
+    await cache.read();
+  }
+  assert.equal(calls, 1);
+  cache.observe({ type: "feed.changed", costChanged: true });
+  const updated = await cache.read();
+  assert.equal(calls, 2);
+  assert.ok(updated.version > snapshots[0].version);
+  assert.equal(updated.characters[0].pricedTurnCount, 2);
+});
+
+test("집계 도중 비용이 변경되면 오래된 결과를 보내지 않고 한번 더 조회한다", async () => {
+  let release;
+  let calls = 0;
+  const cache = new CharacterTurnCostSummaryCache({ async query() {
+    calls += 1;
+    if (calls === 1) await new Promise(resolve => { release = resolve; });
+    return { rows: [{ characterId: "boss", pricedTurnCount: calls, totalCostUsd: calls }] };
+  } });
+  const pending = cache.read();
+  await Promise.resolve();
+  cache.observe({ type: "feed.changed", costChanged: true });
+  release();
+  const updated = await pending;
+  assert.equal(calls, 2);
+  assert.equal(updated.characters[0].totalCostUsd, 2);
+});
 
 test("백엔드·집계 단위·시간대는 허용 값만 받는다", () => {
   assert.deepEqual(

@@ -792,6 +792,7 @@ final class AgentDirector: ObservableObject {
     weak var terminalInputSink: TerminalInputSink?
 
     let liveFeedStore = LiveFeedStore()
+    let turnCostStore = CharacterTurnCostStore()
     let archiveFeedStore = ArchiveFeedStore()
     let speechBubbleStore = SpeechBubbleStore()
     let characterSelectionStore = CharacterSelectionStore()
@@ -2660,15 +2661,16 @@ final class AgentDirector: ObservableObject {
         let requestSequence = nextLiveFeedRequestSequence
 
         do {
-            let turns = try await database.fetchLiveFeed(
+            let snapshot = try await database.fetchLiveFeed(
                 limit: Self.liveFeedSnapshotLimit
             )
             guard requestSequence > lastAppliedLiveFeedRequestSequence else {
                 return true
             }
             lastAppliedLiveFeedRequestSequence = requestSequence
+            turnCostStore.apply(snapshot.costSummary)
             applyLiveFeed(
-                turns,
+                snapshot.turns,
                 announcingTransitions: announcingTransitions
             )
             hasLoadedLiveFeedSnapshot = true
@@ -2692,7 +2694,9 @@ final class AgentDirector: ObservableObject {
         announcingTransitions: Bool
     ) async -> Bool {
         do {
-            let turn = try await database.fetchLiveFeedTurn(id: turnID)
+            let snapshot = try await database.fetchLiveFeedTurn(id: turnID)
+            let turn = snapshot.turn
+            turnCostStore.apply(snapshot.costSummary)
             if let character = OfficeCharacter(rawValue: turn.characterId) {
                 // session.changed는 활성 세션을 DB에 확정한 뒤 전송된다.
                 // 새 CLI 세션의 ID가 작업 시작 응답보다 늦게 도착해도

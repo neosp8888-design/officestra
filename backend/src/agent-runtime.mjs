@@ -1001,6 +1001,7 @@ export class AgentRuntime {
         type: "feed.changed",
         turnId: state.turnID,
         characterId: characterID,
+        costChanged: true,
       });
     }
 
@@ -1901,6 +1902,7 @@ export class AgentRuntime {
       type: "feed.changed",
       turnId: turnID,
       characterId: characterID,
+      costChanged: true,
     });
     return true;
   }
@@ -1964,7 +1966,7 @@ export class AgentRuntime {
       [turnID, characterID],
     );
     if (result.rowCount > 0) {
-      this.broadcast({ type: "feed.changed", turnId: turnID, characterId: characterID });
+      this.broadcast({ type: "feed.changed", turnId: turnID, characterId: characterID, costChanged: true });
       return true;
     }
     return false;
@@ -3344,6 +3346,7 @@ export class AgentRuntime {
       type: "feed.changed",
       turnId: state.turnID,
       characterId: state.character.id,
+      costChanged: true,
     });
   }
 
@@ -4177,6 +4180,7 @@ export class AgentRuntime {
       type: "feed.changed",
       turnId: state.turnID,
       characterId: state.character.id,
+      costChanged: true,
     });
   }
 }
