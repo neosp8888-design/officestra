@@ -79,7 +79,7 @@ This README describes features on the current `main` branch.
 
 ## Get started
 
-The **v1.4.0** DMG does not include some later additions. For the latest features, use the AI-assisted source setup below.
+The latest DMG release is **v1.4.1**. To run from source, use the AI-assisted setup below.
 
 ### Easiest path: ask an AI to do it
 
@@ -93,7 +93,7 @@ use one of them:
 
 ### Download the app
 
-[Download OFFICESTRA v1.4.0 DMG](https://github.com/neosp8888-design/officestra/releases/tag/v1.4.0)
+[Download OFFICESTRA v1.4.1 DMG](https://github.com/neosp8888-design/officestra/releases/tag/v1.4.1)
 — Apple silicon · macOS 14 or later · English/Korean.
 
 Open the DMG and drag OFFICESTRA into Applications. Node.js is included. You still

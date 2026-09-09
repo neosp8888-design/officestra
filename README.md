@@ -77,7 +77,7 @@ Claude Code · Codex · Antigravity를 한 화면에서 운영하는 macOS 앱�
 
 ## 시작하기
 
-배포 DMG **v1.4.0**에는 이후 추가된 일부 기능이 포함되지 않습니다. 최신 기능은 아래 AI 설치 요청으로 소스에서 실행할 수 있습니다.
+최신 배포 DMG는 **v1.4.1**입니다. 소스에서 실행하려면 아래 AI 설치 요청을 사용하세요.
 
 ### 가장 쉬운 방법: AI에게 맡기기
 
@@ -89,7 +89,7 @@ Claude Code · Codex · Antigravity를 한 화면에서 운영하는 macOS 앱�
 
 ### 앱으로 내려받기
 
-[OFFICESTRA v1.4.0 DMG 다운로드](https://github.com/neosp8888-design/officestra/releases/tag/v1.4.0)
+[OFFICESTRA v1.4.1 DMG 다운로드](https://github.com/neosp8888-design/officestra/releases/tag/v1.4.1)
 — Apple silicon · macOS 14 이상 · 영문/한글.
 
 DMG를 열고 OFFICESTRA를 응용 프로그램 폴더로 옮기세요. Node.js는 앱에 포함되어
