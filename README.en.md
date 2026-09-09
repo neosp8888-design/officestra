@@ -2,111 +2,84 @@
 
 [한국어](README.md) | **English**
 
-> Put Claude Code, Codex, and Antigravity in the same office.
+> **Independent AI sessions. One team.**
 
-**This is not another model picker. It is a control room for independent AI sessions.**
-
-OFFICESTRA is a local-first multi-AI orchestration app for macOS that turns
-Claude Code, Codex, and Antigravity coding agents into a visible team. Every
-coworker keeps its own provider, model, role, and conversation session. Instead
-of jumping between terminals and chat windows, you can divide the work, watch it
-unfold, and bring in the next AI from one place.
-
-App interface languages: **English · Korean (한국어)**
+Run Claude Code, Codex, and Antigravity together in one macOS app.<br>
+**Five independent sessions · Coworker collaboration · English / Korean**
 
 <p align="center">
-  <img src="docs/images/officestra-social-preview.png" alt="OFFICESTRA orchestrating Claude Code, Codex, and Antigravity in one place" width="100%">
+  <img src="docs/images/officestra-social-preview.png" alt="OFFICESTRA bringing Claude Code, Codex, and Antigravity into one office" width="100%">
 </p>
 
-<p align="center">
-  <strong>Three AI providers · Five independent sessions · One local control room</strong>
-</p>
-
-## Why should using more AI make work more complicated?
-
-Claude Code conversations stay in Claude Code. Codex work stays in Codex.
-Antigravity sessions stay in Antigravity. OFFICESTRA does not force them into
-one artificial conversation. It preserves each provider's native flow and
-brings their operation into one shared view.
-
-## The features that matter
-
-### Five AI coworkers, five independent sessions
-
-Assign Claude Code, Codex, or Antigravity to each coworker, then give every one
-a different role and model. Their conversations never get mixed together, and
-each coworker resumes its own session when you return. However, all conversation
-history is shared through the database, RAG, and the internal wiki.
-
-### New models and reasoning options, automatically — you choose
-
-OFFICESTRA automatically refreshes the available models and supported reasoning
-levels from Claude Code, Codex, and Antigravity. New models appear in the picker
-automatically. In settings, hide only the models you do not want to see, then
-choose each coworker's model and reasoning level yourself.
-
-### Run work in parallel and see it all
-
-Give different tasks to several coworkers at once. For each coworker, see who is
-thinking, which commands and tools are running, what changed, and what answer
-they produced.
-
-### Let a lead AI delegate and consolidate
-
-Ask the lead coworker to assign work to several coworkers. Their conversations
-remain independent while the lead coworker gathers the results and finishes the
-job.
-
-### Move between the GUI and a real terminal
-
-Open a coworker's current session as an interactive native CLI whenever you
-want direct control. Return to the GUI and the terminal work remains part of
-that coworker's history.
-
-### Keep conversations, work, and limits together
-
-Completed work and conversations stay local. Find a coworker's previous work,
-check each CLI's remaining limits and context, and decide which AI should take
-the next task.
-
-## Two ways to work: GUI and real terminal
+## GUI or real terminal — your choice
 
 <table>
   <tr>
     <td width="50%" align="center">
-      <img src="docs/images/officestra-gui-mode.png" alt="OFFICESTRA GUI mode" width="100%"><br>
+      <a href="docs/images/officestra-gui-mode.png"><img src="docs/images/officestra-gui-mode.png" alt="Actual GUI showing coworkers, conversations, work history, and usage limits" width="100%"></a><br>
       <strong>GUI mode</strong><br>
-      <sub>Conversations, work history, and coworkers in one view</sub>
+      <sub>See conversations and work in progress</sub>
     </td>
     <td width="50%" align="center">
-      <img src="docs/images/officestra-terminal-mode.png" alt="Claude Code CLI running inside OFFICESTRA terminal mode" width="100%"><br>
+      <a href="docs/images/officestra-terminal-mode.png"><img src="docs/images/officestra-terminal-mode.png" alt="Actual Claude Code CLI running inside OFFICESTRA terminal mode" width="100%"></a><br>
       <strong>Terminal mode</strong><br>
-      <sub>The same coworker's live Claude Code CLI session</sub>
+      <sub>Work directly in a coworker's CLI</sub>
     </td>
   </tr>
 </table>
 
-Move between a conversational GUI and real interactive CLIs while keeping each
-coworker's progress, limits, and history in one place. Visual styles can change;
-the underlying AI sessions and workflow stay intact.
+Continue a coworker's session in the terminal, then return to the GUI to review the work.<br>
+*Original app screenshots. Click to view full size. Screenshots show the Korean interface; the app also supports English.*
 
-## OFFICESTRA is for you if
+## Work independently. Collaborate as a team.
 
-- You use Claude Code, Codex, and Antigravity but are tired of managing windows and sessions.
-- You prefer separate role-based AI conversations over one enormous chat.
-- You want to explore multi-AI orchestration without building a platform yourself.
-- You want one clear view of what every AI is actually doing.
+Split work across coworkers. A lead AI can delegate and consolidate the results,
+while coworkers exchange requests, replies, and reviews through the API.
+**Each conversation session stays independent.**
 
-## Supported CLIs
+<p align="center">
+  <a href="docs/images/officestra-architecture-en.svg"><img src="docs/images/officestra-architecture-en.svg" alt="CLI and model choices feed five independent coworkers, connected by API collaboration and shared local records" width="100%"></a>
+</p>
 
-- OpenAI Codex CLI
-- Anthropic Claude Code
-- Google Antigravity CLI
+Conversations and work records stay local. Search past work when needed,
+and publish knowledge to the company wiki with your approval.
 
-Available models, reasoning levels, and limit information depend on each
-account and installed CLI version.
+## New models arrive automatically. You choose.
+
+<p align="center">
+  <a href="docs/images/officestra-gui-mode.png"><img src="docs/images/officestra-controls-detail.png" alt="Detail from the original screenshot showing five coworker tabs and CLI, model, reasoning, and permission controls" width="100%"></a>
+</p>
+
+Choose a different CLI, model, reasoning level, and role for each coworker.
+Supported models and reasoning options refresh automatically.
+In **model visibility settings**, hide only the models you do not want.<br>
+*A detail cropped from the original GUI screenshot, without rescaling its pixels.*
+
+## See which AI is ready for the next task
+
+<p align="center">
+  <a href="docs/images/officestra-gui-mode.png"><img src="docs/images/officestra-usage-detail.png" alt="Actual whiteboard detail showing usage limits, reset times, and API-equivalent costs for three providers" width="480"></a>
+</p>
+
+Check provider limits and reset times before assigning the next task.
+Review work activity, answers, and costs in conversations, and find past records when needed.<br>
+*A detail from the original whiteboard screenshot. Amounts are API-equivalent costs, not subscription charges.*
+
+## Compare costs and work ratings
+
+<p align="center">
+  <a href="docs/images/officestra-statistics.jpg"><img src="docs/images/officestra-statistics.jpg" alt="Actual usage statistics: cost summary, coworker and model ratings, and daily cost chart" width="100%"></a>
+</p>
+
+See when costs rise and which coworker–model combinations earn better feedback, all in one view.<br>
+*Actual Claude Code statistics. Displayed amounts are not subscription charges.*
+
+Models, reasoning options, and usage information depend on your account and CLI version.
+This README describes features on the current `main` branch.
 
 ## Get started
+
+The **v1.4.0** DMG does not include some later additions. For the latest features, use the AI-assisted source setup below.
 
 ### Easiest path: ask an AI to do it
 

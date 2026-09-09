@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="2000" viewBox="0 0 1200 1000" role="img" aria-labelledby="title desc">
+<title id="title">Independent AI. Shared knowledge.</title>
+<desc id="desc">Choose a CLI and model for each of five independent coworker sessions. Coworkers exchange tasks and replies via API and use shared local records.</desc>
+<defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#071820"/><stop offset="1" stop-color="#111c2c"/></linearGradient></defs>
+<rect width="1200" height="1000" rx="28" fill="url(#bg)"/>
+<g font-family="-apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Segoe UI', sans-serif">
+<text x="60" y="65" font-size="38" fill="#f4fafc" text-anchor="start" font-weight="700">Independent AI. Shared knowledge.</text>
+<text x="60" y="107" font-size="24" fill="#a6bdc9" text-anchor="start" font-weight="500">OFFICESTRA · Choose models. Connect coworkers.</text>
+<rect x="60" y="151" width="230" height="76" rx="18" fill="#153937" stroke="#51cdbb" stroke-width="1.5"/><text x="175" y="199" font-size="28" fill="#e5fff9" text-anchor="middle" font-weight="600">You</text>
+<path d="M292 189H340V134H945V147 M555 134V147" stroke="#64d6cd" stroke-width="2.5" fill="none"/>
+<rect x="380" y="151" width="350" height="76" rx="18" fill="#11252d" stroke="#29414d" stroke-width="1.5"/><text x="555" y="199" font-size="28" fill="#e5fff9" text-anchor="middle" font-weight="600">GUI chat</text>
+<rect x="750" y="151" width="390" height="76" rx="18" fill="#11252d" stroke="#29414d" stroke-width="1.5"/><text x="945" y="199" font-size="28" fill="#c5e7ff" text-anchor="middle" font-weight="600">Real terminal</text>
+<path d="M555 230V267 M548 259L555 267L562 259 M945 230V267 M938 259L945 267L952 259" stroke="#64d6cd" stroke-width="2.5" fill="none"/>
+<rect x="40" y="278" width="1120" height="684" rx="24" fill="#0b1d27" stroke="#34505c" stroke-width="1.5"/>
+<text x="68" y="318" font-size="23" fill="#7fe3d3" text-anchor="start" font-weight="600">OFFICESTRA on your Mac</text>
+<text x="600" y="365" font-size="28" fill="#f1f7fb" text-anchor="middle" font-weight="600">Choose a CLI and model for each coworker</text>
+<rect x="68" y="390" width="330" height="66" rx="14" fill="#30251f" stroke="#b58463" stroke-width="1.5"/><text x="233" y="433" font-size="27" fill="#f3b992" text-anchor="middle" font-weight="600">Claude Code</text>
+<rect x="418" y="390" width="330" height="66" rx="14" fill="#12352f" stroke="#388c7c" stroke-width="1.5"/><text x="583" y="433" font-size="27" fill="#7be2c2" text-anchor="middle" font-weight="600">Codex</text>
+<rect x="768" y="390" width="364" height="66" rx="14" fill="#152d48" stroke="#497ec2" stroke-width="1.5"/><text x="950" y="433" font-size="27" fill="#94c5ff" text-anchor="middle" font-weight="600">Antigravity</text>
+<!-- A shared selection pool, not fixed provider-to-coworker assignments. -->
+<path d="M233 458V484 M583 458V484 M950 458V484 M170 484H1030" stroke="#64d6cd" stroke-width="2.5" fill="none"/>
+<path d="M170 484V522 M163 514L170 522L177 514" stroke="#64d6cd" stroke-width="2.5" fill="none"/>
+<rect x="68" y="532" width="204" height="91" rx="16" fill="#132d36" stroke="#365563" stroke-width="1.5"/><text x="170" y="569" font-size="25" fill="#eaf6f9" text-anchor="middle" font-weight="600">Coworker 1</text><text x="170" y="604" font-size="20" fill="#adc4d0" text-anchor="middle" font-weight="500">Independent session</text>
+<path d="M385 484V522 M378 514L385 522L392 514" stroke="#64d6cd" stroke-width="2.5" fill="none"/>
+<rect x="283" y="532" width="204" height="91" rx="16" fill="#132d36" stroke="#365563" stroke-width="1.5"/><text x="385" y="569" font-size="25" fill="#eaf6f9" text-anchor="middle" font-weight="600">Coworker 2</text><text x="385" y="604" font-size="20" fill="#adc4d0" text-anchor="middle" font-weight="500">Independent session</text>
+<path d="M600 484V522 M593 514L600 522L607 514" stroke="#64d6cd" stroke-width="2.5" fill="none"/>
+<rect x="498" y="532" width="204" height="91" rx="16" fill="#132d36" stroke="#365563" stroke-width="1.5"/><text x="600" y="569" font-size="25" fill="#eaf6f9" text-anchor="middle" font-weight="600">Coworker 3</text><text x="600" y="604" font-size="20" fill="#adc4d0" text-anchor="middle" font-weight="500">Independent session</text>
+<path d="M815 484V522 M808 514L815 522L822 514" stroke="#64d6cd" stroke-width="2.5" fill="none"/>
+<rect x="713" y="532" width="204" height="91" rx="16" fill="#132d36" stroke="#365563" stroke-width="1.5"/><text x="815" y="569" font-size="25" fill="#eaf6f9" text-anchor="middle" font-weight="600">Coworker 4</text><text x="815" y="604" font-size="20" fill="#adc4d0" text-anchor="middle" font-weight="500">Independent session</text>
+<path d="M1030 484V522 M1023 514L1030 522L1037 514" stroke="#64d6cd" stroke-width="2.5" fill="none"/>
+<rect x="928" y="532" width="204" height="91" rx="16" fill="#132d36" stroke="#365563" stroke-width="1.5"/><text x="1030" y="569" font-size="25" fill="#eaf6f9" text-anchor="middle" font-weight="600">Coworker 5</text><text x="1030" y="604" font-size="20" fill="#adc4d0" text-anchor="middle" font-weight="500">Independent session</text>
+<!-- Bidirectional task and reply exchange; no shared conversation context. -->
+<path d="M170 634V650H1030V634 M385 634V650 M600 634V650 M815 634V650 M170 626L164 633M170 626L176 633 M385 626L379 633M385 626L391 633 M600 626L594 633M600 626L606 633 M815 626L809 633M815 626L821 633 M1030 626L1024 633M1030 626L1036 633 M255 644L248 650L255 656 M295 644L302 650L295 656 M905 644L898 650L905 656 M945 644L952 650L945 656" stroke="#7ee4d1" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="250" y="671" width="700" height="55" rx="16" fill="#123b36" stroke="#479d8d" stroke-width="1.5"/><text x="600" y="707" font-size="27" fill="#acffea" text-anchor="middle" font-weight="600">Delegate · reply · discuss via API</text>
+<text x="600" y="800" font-size="28" fill="#f1f7fb" text-anchor="middle" font-weight="600">Shared local records</text>
+<rect x="68" y="825" width="344" height="111" rx="16" fill="#102935" stroke="#365563" stroke-width="1.5"/><text x="240" y="868" font-size="25" fill="#eaf6f9" text-anchor="middle" font-weight="600">Conversations &amp; work</text><text x="240" y="907" font-size="22" fill="#adc4d0" text-anchor="middle" font-weight="500">Saved automatically</text><rect x="428" y="825" width="344" height="111" rx="16" fill="#102935" stroke="#365563" stroke-width="1.5"/><text x="600" y="868" font-size="25" fill="#eaf6f9" text-anchor="middle" font-weight="600">Search past work</text><text x="600" y="907" font-size="22" fill="#adc4d0" text-anchor="middle" font-weight="500">Retrieved when needed</text><rect x="788" y="825" width="344" height="111" rx="16" fill="#102935" stroke="#365563" stroke-width="1.5"/><text x="960" y="868" font-size="25" fill="#eaf6f9" text-anchor="middle" font-weight="600">Company wiki</text><text x="960" y="907" font-size="22" fill="#adc4d0" text-anchor="middle" font-weight="500">Published with approval</text><text x="1138" y="990" font-size="20" fill="#8ca9ba" text-anchor="end" font-weight="400">Conceptual overview</text>
+</g></svg>

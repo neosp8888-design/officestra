@@ -2,104 +2,82 @@
 
 **한국어** | [English](README.en.md)
 
-> Claude Code, Codex, Antigravity를 한 사무실에서 움직이세요.
+> **서로 다른 AI 세션을, 하나의 팀처럼.**
 
-**한 모델을 고르는 앱이 아닙니다. 서로 다른 AI 세션을 한 팀처럼 운영하는 앱입니다.**
-
-OFFICESTRA는 Claude Code, Codex, Antigravity 같은 AI 코딩 에이전트를 직원처럼
-배치하는 로컬 우선 멀티 AI 오케스트레이션 macOS 앱입니다. 각 직원은 자신만의
-프로바이더, 모델, 역할과 대화 세션을 유지합니다. 사용자는 여러 터미널과 대화창을
-오가는 대신 한 화면에서 일을 나누고, 진행 상황을 보고, 다음 직원을 이어서 투입할 수
-있습니다.
-
-앱 지원 언어: **영어(English) · 한국어**
+Claude Code · Codex · Antigravity를 한 화면에서 운영하는 macOS 앱입니다.<br>
+**다섯 독립 세션 · 직원 간 협업 · 영어 / 한국어**
 
 <p align="center">
   <img src="docs/images/officestra-social-preview.png" alt="Claude Code, Codex, Antigravity를 한곳에서 운영하는 OFFICESTRA" width="100%">
 </p>
 
-<p align="center">
-  <strong>세 개의 AI 프로바이더 · 다섯 개의 독립 세션 · 하나의 로컬 제어실</strong>
-</p>
-
-## 여러 AI를 쓰는 일이 왜 더 복잡해야 할까요?
-
-Claude Code의 대화는 Claude Code에, Codex의 작업은 Codex에, Antigravity의 세션은
-Antigravity에 남아 있습니다. OFFICESTRA는 이 세션들을 억지로 하나로 합치지 않습니다.
-각 AI의 흐름은 그대로 살리고, 운영 화면만 하나로 모읍니다.
-
-## 가장 강력한 기능
-
-### 다섯 명의 AI, 다섯 개의 독립 세션
-
-직원마다 Claude Code, Codex, Antigravity 중 하나를 선택하고 서로 다른 역할과 모델을
-줄 수 있습니다. 각 대화는 섞이지 않으며, 나중에 돌아와도 자신의 세션에서 계속됩니다.
-하지만 모든 대화 내역은 DB·RAG·사내 위키로 공유됩니다.
-
-### 새 모델·추론 옵션은 자동으로, 선택은 직접
-
-Claude Code, Codex, Antigravity에서 사용 가능한 모델과 지원 추론 단계를 자동으로
-갱신합니다. 새 모델은 선택기에 자동으로 추가되며, 설정의 **표시 모델 관리**에서
-사용하지 않을 모델만 제외하면 됩니다. 직원마다 사용할 모델과 추론 수준은 직접
-선택할 수 있습니다.
-
-### 동시에 맡기고 한눈에 지켜보기
-
-여러 직원에게 서로 다른 일을 맡기고 동시에 진행할 수 있습니다. 누가 생각 중인지,
-어떤 명령과 도구를 쓰는지, 무엇을 바꿨고 어떤 답을 냈는지 각 직원별로 확인할 수
-있습니다.
-
-### 대표 직원이 업무를 나누고 취합하기
-
-대표 직원에게 요청하면 여러 직원에게 업무를 할당할 수 있습니다. 각자의 대화는
-독립적이지만, 대표 직원이 결과를 취합하고 마무리합니다.
-
-### GUI와 실제 터미널을 오가기
-
-필요할 때는 직원의 현재 세션을 실제 CLI 터미널로 열어 직접 대화할 수 있습니다. 다시
-GUI로 돌아오면 터미널에서 진행한 내용도 같은 직원의 기록으로 이어집니다.
-
-### 대화, 작업 기록, 한도를 한곳에
-
-완료된 업무와 대화는 로컬에 쌓입니다. 직원별 기록을 다시 찾고, 각 CLI의 남은 한도와
-컨텍스트 상태를 보며 다음에 어떤 AI를 투입할지 판단할 수 있습니다.
-
-## GUI와 실제 터미널, 두 가지 작업 방식
+## GUI와 실제 터미널, 원하는 방식으로
 
 <table>
   <tr>
     <td width="50%" align="center">
-      <img src="docs/images/officestra-gui-mode.png" alt="OFFICESTRA GUI 모드" width="100%"><br>
+      <a href="docs/images/officestra-gui-mode.png"><img src="docs/images/officestra-gui-mode.png" alt="직원 선택, 대화, 작업 기록과 한도를 보여주는 실제 GUI 화면" width="100%"></a><br>
       <strong>GUI 모드</strong><br>
-      <sub>대화·작업 기록·직원 전환을 한 화면에서</sub>
+      <sub>대화와 작업 진행을 한눈에</sub>
     </td>
     <td width="50%" align="center">
-      <img src="docs/images/officestra-terminal-mode.png" alt="OFFICESTRA 터미널 모드에서 실행 중인 Claude Code CLI" width="100%"><br>
+      <a href="docs/images/officestra-terminal-mode.png"><img src="docs/images/officestra-terminal-mode.png" alt="OFFICESTRA 안에서 Claude Code CLI가 실행 중인 실제 터미널 화면" width="100%"></a><br>
       <strong>터미널 모드</strong><br>
-      <sub>같은 직원의 실제 Claude Code CLI 세션을 그대로</sub>
+      <sub>직원의 실제 CLI를 직접 조작</sub>
     </td>
   </tr>
 </table>
 
-대화형 GUI와 실제 CLI 터미널을 오가고, 직원별 진행 상태·사용 한도·대화 기록을 같은
-화면에서 관리합니다. 화면 스타일을 바꿔도 각 AI의 세션과 작업 흐름은 그대로 유지됩니다.
+직원의 세션을 이어서 터미널로 열고, GUI로 돌아와 작업 기록을 확인하세요.<br>
+*두 화면은 실제 사용 원본입니다. 이미지를 누르면 크게 볼 수 있습니다.*
 
-## 이런 분을 위한 앱입니다
+## 각자 일하고, 서로 답하고, 함께 마무리
 
-- Claude Code, Codex, Antigravity를 함께 쓰지만 창과 세션 관리에 지친 사람
-- 하나의 거대한 대화보다 역할별로 분리된 AI 세션을 선호하는 사람
-- 복잡한 시스템을 직접 만들지 않고 멀티 AI 오케스트레이션을 경험하고 싶은 사람
-- 여러 AI가 실제로 무엇을 하고 있는지 한눈에 보고 싶은 사람
+여러 직원에게 일을 나눠 맡기세요. 대표 직원이 업무를 배분하고 결과를 취합하며,
+직원끼리 API로 요청·응답·검토를 주고받을 수 있습니다. **각자의 대화 세션은 독립적으로 유지됩니다.**
 
-## 지원하는 CLI
+<p align="center">
+  <a href="docs/images/officestra-architecture-ko.svg"><img src="docs/images/officestra-architecture-ko.svg" alt="CLI와 모델을 다섯 독립 직원에게 배분하고, API로 협의하며 로컬 기록을 공유하는 구성도" width="100%"></a>
+</p>
 
-- OpenAI Codex CLI
-- Anthropic Claude Code
-- Google Antigravity CLI
+대화·작업 기록은 로컬에 저장하고, 과거 기록은 필요할 때 검색합니다.
+사내 위키에는 사용자가 승인한 지식을 남깁니다.
 
-사용 가능한 모델과 추론 단계, 한도 정보는 각 계정과 설치된 CLI 버전에 따라 달라집니다.
+## 새 모델은 자동으로, 선택은 내 마음대로
+
+<p align="center">
+  <a href="docs/images/officestra-gui-mode.png"><img src="docs/images/officestra-controls-detail.png" alt="직원 다섯 명의 선택 탭과 CLI·모델·추론·권한 설정 바를 원본에서 확대해 보여주는 화면" width="100%"></a>
+</p>
+
+직원마다 CLI·모델·추론 수준·역할을 다르게 선택하세요.
+지원 모델과 추론 옵션은 자동 갱신되고, **표시 모델 관리**에서는 쓰지 않을 모델만 제외합니다.<br>
+*기존 GUI 원본의 직원 선택·퀵설정 영역을 잘라낸 확대 화면입니다.*
+
+## 다음 일을 맡길 AI도 한눈에
+
+<p align="center">
+  <a href="docs/images/officestra-gui-mode.png"><img src="docs/images/officestra-usage-detail.png" alt="세 프로바이더의 한도, 초기화 시각과 API 환산 비용을 보여주는 실제 화이트보드 확대 화면" width="480"></a>
+</p>
+
+프로바이더별 사용 한도와 초기화 시각을 보고 다음 일을 맡기세요.
+대화에서는 작업 내역·답변·비용을 확인하고, 필요한 기록은 다시 찾아볼 수 있습니다.<br>
+*기존 GUI 원본의 화이트보드 확대 화면입니다. 표시 금액은 구독 청구액이 아닌 API 환산 비용입니다.*
+
+## 비용과 작업 평가를 통계로
+
+<p align="center">
+  <a href="docs/images/officestra-statistics.jpg"><img src="docs/images/officestra-statistics.jpg" alt="실제 사용 현황 통계: 비용 요약, 직원·모델별 평가와 일별 비용 그래프" width="100%"></a>
+</p>
+
+비용이 언제 늘었는지, 어떤 직원·모델의 답변이 좋았는지 한 화면에서 비교하세요.<br>
+*Claude Code의 실제 통계 화면입니다. 표시 금액은 구독 청구액이 아닙니다.*
+
+모델·추론 옵션과 한도 정보는 계정 및 CLI 버전에 따라 달라집니다.
+이 README는 현재 `main`의 기능을 소개합니다.
 
 ## 시작하기
+
+배포 DMG **v1.4.0**에는 이후 추가된 일부 기능이 포함되지 않습니다. 최신 기능은 아래 AI 설치 요청으로 소스에서 실행할 수 있습니다.
 
 ### 가장 쉬운 방법: AI에게 맡기기
 
