@@ -19,12 +19,26 @@ test("직원 전체 비용은 페이지·모델과 무관하며 미확인 비용
     assert.match(sql, /GROUP BY character.id/);
     assert.match(sql, /COUNT\(usage.cost_usd\)/);
     assert.match(sql, /SUM\(usage.cost_usd\)/);
+    assert.match(sql, /EXTRACT\(EPOCH FROM/);
+    assert.match(sql, /turn\.ended_at > turn\.started_at/);
     assert.match(sql, /'completed', 'failed', 'interrupted'/);
     assert.doesNotMatch(sql, /LIMIT|external_id|active_cli_sessions|turn.model/);
-    return { rows: [{ characterId: "boss", pricedTurnCount: 4, totalCostUsd: 12 }] };
+    return { rows: [{
+      characterId: "boss",
+      pricedTurnCount: 4,
+      totalCostUsd: 12,
+      timedCostUsd: 10,
+      totalDurationSeconds: 120,
+    }] };
   } });
   const snapshot = await cache.read();
-  assert.deepEqual(snapshot.characters, [{ characterId: "boss", pricedTurnCount: 4, totalCostUsd: 12 }]);
+  assert.deepEqual(snapshot.characters, [{
+    characterId: "boss",
+    pricedTurnCount: 4,
+    totalCostUsd: 12,
+    timedCostUsd: 10,
+    totalDurationSeconds: 120,
+  }]);
 });
 
 test("평균 비용 캐시는 동시 조회·스트리밍 이벤트에서 재집계하지 않고 비용 변경만 반영한다", async () => {

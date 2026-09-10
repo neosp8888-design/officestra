@@ -34,7 +34,9 @@ final class OfficeLocalizationTests: XCTestCase {
             ("작업 계획 %d단계 중 %d단계 완료", [1, 0], "Work plan: 0 of 1 step completed"),
             ("첨부 파일 %@, 경로 %@", ["보고서.pdf", "/tmp/보고서.pdf"], "Attachment 보고서.pdf, path /tmp/보고서.pdf"),
             ("1턴당 평균 비용(추정) %@ · 전체 %d턴", ["$0.1200", 1], "Average cost per turn (est.) $0.1200 · 1 turn total"),
-            ("1턴당 평균 비용(추정) %@ · 전체 %d턴", ["$0.1200", 4], "Average cost per turn (est.) $0.1200 · 4 turns total")
+            ("1턴당 평균 비용(추정) %@ · 전체 %d턴", ["$0.1200", 4], "Average cost per turn (est.) $0.1200 · 4 turns total"),
+            ("1턴당 평균 비용(추정) %@ · 분당 %@ · 전체 %d턴", ["$0.1200", "$0.0300", 1], "Average cost (est.) per turn $0.1200 · per minute $0.0300 · 1 turn total"),
+            ("1턴당 평균 비용(추정) %@ · 분당 %@ · 전체 %d턴", ["$0.1200", "$0.0300", 4], "Average cost (est.) per turn $0.1200 · per minute $0.0300 · 4 turns total")
         ]
         for (key, arguments, expected) in cases {
             XCTAssertEqual(OfficeLocalization.format(key, arguments: arguments, languages: ["en", "ko"]), expected)

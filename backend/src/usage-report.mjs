@@ -27,7 +27,16 @@ export class CharacterTurnCostSummaryCache {
         this.pending = Promise.resolve().then(() => this.pool.query(`
           SELECT character.id AS "characterId",
             COUNT(usage.cost_usd)::integer AS "pricedTurnCount",
-            COALESCE(SUM(usage.cost_usd), 0)::double precision AS "totalCostUsd"
+            COALESCE(SUM(usage.cost_usd), 0)::double precision AS "totalCostUsd",
+            COALESCE(SUM(usage.cost_usd) FILTER (
+              WHERE turn.ended_at > turn.started_at
+            ), 0)::double precision AS "timedCostUsd",
+            COALESCE(SUM(EXTRACT(EPOCH FROM (
+              turn.ended_at - turn.started_at
+            ))) FILTER (
+              WHERE usage.cost_usd IS NOT NULL
+                AND turn.ended_at > turn.started_at
+            ), 0)::double precision AS "totalDurationSeconds"
           FROM characters AS character
           LEFT JOIN cli_sessions AS session ON session.character_id = character.id
           LEFT JOIN turns AS turn ON turn.cli_session_id = session.id

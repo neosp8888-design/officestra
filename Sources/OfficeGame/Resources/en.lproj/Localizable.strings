@@ -119,6 +119,9 @@
 "1턴당 평균 비용(추정) %@ · 전체 %d턴" = "Average cost per turn (est.) %@ · %d turns total";
 "1턴당 평균 비용(추정) —" = "Average cost per turn (est.) —";
 "전체 기간 · 비용이 기록된 종료 턴 기준" = "All time · Finished turns with recorded costs";
+"1턴당 평균 비용(추정) %@ · 분당 %@ · 전체 %d턴" = "Average cost (est.) per turn %@ · per minute %@ · %d turns total";
+"1턴당 평균 비용(추정) — · 분당 —" = "Average cost (est.) per turn — · per minute —";
+"전체 기간 · 비용이 기록된 종료 턴의 소요 시간 합계 기준" = "All time · Total elapsed time of finished turns with recorded costs";
 "컨텍스트 잔량 %@ / %@ (%@%%)" = "Context remaining %@ / %@ (%@%%)";
 "자동 컨텍스트 압축 중" = "Auto-compacting context";
 "컨텍스트 압축 중" = "Compacting context";
@@ -662,6 +665,7 @@
 "%d명 검토 완료.one" = "%d reviewer completed";
 "추가 요청 %d건.one" = "%d follow-up request";
 "1턴당 평균 비용(추정) %@ · 전체 %d턴.one" = "Average cost per turn (est.) %@ · %d turn total";
+"1턴당 평균 비용(추정) %@ · 분당 %@ · 전체 %d턴.one" = "Average cost (est.) per turn %@ · per minute %@ · %d turn total";
 "연결 도구" = "Connected tool";
 "Node 실행 파일을 찾을 수 없습니다." = "Node executable not found.";
 "launchctl 실행에 실패했습니다." = "Failed to run launchctl.";

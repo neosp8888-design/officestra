@@ -5,12 +5,26 @@ struct CharacterTurnCostSummary: Decodable, Equatable, Sendable {
     let characterId: String
     let pricedTurnCount: Int
     let totalCostUsd: Double
+    let timedCostUsd: Double?
+    let totalDurationSeconds: Double?
 
     var averageCostUsd: Double? {
         guard pricedTurnCount > 0, totalCostUsd.isFinite, totalCostUsd >= 0 else {
             return nil
         }
         return totalCostUsd / Double(pricedTurnCount)
+    }
+
+    var averageCostPerMinuteUsd: Double? {
+        guard let timedCostUsd,
+              let totalDurationSeconds,
+              timedCostUsd.isFinite,
+              timedCostUsd >= 0,
+              totalDurationSeconds.isFinite,
+              totalDurationSeconds > 0 else {
+            return nil
+        }
+        return timedCostUsd * 60 / totalDurationSeconds
     }
 }
 
@@ -23,6 +37,7 @@ struct CharacterTurnCostSnapshot: Decodable, Sendable {
 final class CharacterTurnCostStore: ObservableObject {
     struct Average: Equatable {
         let costUsd: Double
+        let costPerMinuteUsd: Double?
         let turnCount: Int
     }
 
@@ -36,7 +51,9 @@ final class CharacterTurnCostStore: ObservableObject {
         for summary in snapshot.characters {
             if let cost = summary.averageCostUsd {
                 next[summary.characterId] = Average(
-                    costUsd: cost, turnCount: summary.pricedTurnCount
+                    costUsd: cost,
+                    costPerMinuteUsd: summary.averageCostPerMinuteUsd,
+                    turnCount: summary.pricedTurnCount
                 )
             }
         }
@@ -56,17 +73,20 @@ struct CharacterTurnCostFooter: View {
         }
         Text(average.map {
             OfficeLocalization.format(
-                "1턴당 평균 비용(추정) %@ · 전체 %d턴",
+                "1턴당 평균 비용(추정) %@ · 분당 %@ · 전체 %d턴",
                 String(format: "$%.4f", $0.costUsd),
+                $0.costPerMinuteUsd.map { String(format: "$%.4f", $0) } ?? "—",
                 $0.turnCount
             )
-        } ?? OfficeLocalization.string("1턴당 평균 비용(추정) —"))
+        } ?? OfficeLocalization.string("1턴당 평균 비용(추정) — · 분당 —"))
         .font(.caption.monospacedDigit())
         .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .minimumScaleFactor(0.75)
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.horizontal, 20)
         .padding(.vertical, 6)
-        .help(OfficeLocalization.string("전체 기간 · 비용이 기록된 종료 턴 기준"))
+        .help(OfficeLocalization.string("전체 기간 · 비용이 기록된 종료 턴의 소요 시간 합계 기준"))
         .accessibilityIdentifier("characterAverageTurnCost")
     }
 }
