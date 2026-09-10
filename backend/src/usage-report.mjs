@@ -3,8 +3,8 @@
 export const USAGE_REPORT_BACKENDS = ["codex", "claude", "antigravity"];
 export const USAGE_REPORT_GRANULARITIES = ["day", "month"];
 
-// 대화 페이지/스트리밍과 무관한 직원별 전체 비용. 최초 조회와 비용 변경
-// 이후에만 집계하고, 나머지 피드 조회는 같은 작은 캐시를 재사용한다.
+// 대화 페이지/스트리밍과 무관한 직원별 전체 비용·평가. 최초 조회와 비용·평가
+// 변경 이후에만 집계하고, 나머지 피드 조회는 같은 작은 캐시를 재사용한다.
 export class CharacterTurnCostSummaryCache {
   constructor(pool) {
     this.pool = pool;
@@ -15,7 +15,10 @@ export class CharacterTurnCostSummaryCache {
   }
 
   observe(event) {
-    if (event.type !== "feed.changed" || event.costChanged !== true) return;
+    if (
+      event.type !== "feed.changed"
+      || (event.costChanged !== true && event.feedbackChanged !== true)
+    ) return;
     this.generation += 1;
     this.cached = null;
   }
@@ -36,13 +39,21 @@ export class CharacterTurnCostSummaryCache {
             ))) FILTER (
               WHERE usage.cost_usd IS NOT NULL
                 AND turn.ended_at > turn.started_at
-            ), 0)::double precision AS "totalDurationSeconds"
+            ), 0)::double precision AS "totalDurationSeconds",
+            COUNT(*) FILTER (
+              WHERE feedback.feedback = 'liked'
+            )::integer AS "likedCount",
+            COUNT(*) FILTER (
+              WHERE feedback.feedback = 'disliked'
+            )::integer AS "dislikedCount"
           FROM characters AS character
           LEFT JOIN cli_sessions AS session ON session.character_id = character.id
           LEFT JOIN turns AS turn ON turn.cli_session_id = session.id
             AND turn.status IN ('completed', 'failed', 'interrupted')
           LEFT JOIN usage_records AS usage ON usage.turn_id = turn.id
             AND usage.cost_usd >= 0
+          LEFT JOIN turn_response_feedback AS feedback
+            ON feedback.turn_id = turn.id
           GROUP BY character.id
           ORDER BY character.id
         `)).then(({ rows }) => {

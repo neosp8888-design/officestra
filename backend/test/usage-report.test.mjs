@@ -21,6 +21,9 @@ test("직원 전체 비용은 페이지·모델과 무관하며 미확인 비용
     assert.match(sql, /SUM\(usage.cost_usd\)/);
     assert.match(sql, /EXTRACT\(EPOCH FROM/);
     assert.match(sql, /turn\.ended_at > turn\.started_at/);
+    assert.match(sql, /feedback\.feedback = 'liked'/);
+    assert.match(sql, /feedback\.feedback = 'disliked'/);
+    assert.match(sql, /LEFT JOIN turn_response_feedback AS feedback/);
     assert.match(sql, /'completed', 'failed', 'interrupted'/);
     assert.doesNotMatch(sql, /LIMIT|external_id|active_cli_sessions|turn.model/);
     return { rows: [{
@@ -29,6 +32,8 @@ test("직원 전체 비용은 페이지·모델과 무관하며 미확인 비용
       totalCostUsd: 12,
       timedCostUsd: 10,
       totalDurationSeconds: 120,
+      likedCount: 3,
+      dislikedCount: 1,
     }] };
   } });
   const snapshot = await cache.read();
@@ -38,10 +43,12 @@ test("직원 전체 비용은 페이지·모델과 무관하며 미확인 비용
     totalCostUsd: 12,
     timedCostUsd: 10,
     totalDurationSeconds: 120,
+    likedCount: 3,
+    dislikedCount: 1,
   }]);
 });
 
-test("평균 비용 캐시는 동시 조회·스트리밍 이벤트에서 재집계하지 않고 비용 변경만 반영한다", async () => {
+test("평균 비용·평가 캐시는 동시 조회·스트리밍 이벤트에서 재집계하지 않고 관련 변경만 반영한다", async () => {
   let calls = 0;
   const cache = new CharacterTurnCostSummaryCache({ async query() {
     calls += 1;
@@ -60,6 +67,10 @@ test("평균 비용 캐시는 동시 조회·스트리밍 이벤트에서 재집
   assert.equal(calls, 2);
   assert.ok(updated.version > snapshots[0].version);
   assert.equal(updated.characters[0].pricedTurnCount, 2);
+  cache.observe({ type: "feed.changed", feedbackChanged: true });
+  const feedbackUpdated = await cache.read();
+  assert.equal(calls, 3);
+  assert.ok(feedbackUpdated.version > updated.version);
 });
 
 test("집계 도중 비용이 변경되면 오래된 결과를 보내지 않고 한번 더 조회한다", async () => {

@@ -126,6 +126,6 @@ test("피드와 평가 API는 같은 turn 평가를 조회하고 갱신한다", 
   assert.match(serverSource, /turn_feedback\.feedback/);
   assert.match(
     serverSource,
-    /broadcast\(\{ type: "feed\.changed", turnId: turnID \}\)/,
+    /feedbackChanged: true/,
   );
 });

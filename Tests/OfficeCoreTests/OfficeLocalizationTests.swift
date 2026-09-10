@@ -36,7 +36,9 @@ final class OfficeLocalizationTests: XCTestCase {
             ("1턴당 평균 비용(추정) %@ · 전체 %d턴", ["$0.1200", 1], "Average cost per turn (est.) $0.1200 · 1 turn total"),
             ("1턴당 평균 비용(추정) %@ · 전체 %d턴", ["$0.1200", 4], "Average cost per turn (est.) $0.1200 · 4 turns total"),
             ("1턴당 평균 비용(추정) %@ · 분당 %@ · 전체 %d턴", ["$0.1200", "$0.0300", 1], "Average cost (est.) per turn $0.1200 · per minute $0.0300 · 1 turn total"),
-            ("1턴당 평균 비용(추정) %@ · 분당 %@ · 전체 %d턴", ["$0.1200", "$0.0300", 4], "Average cost (est.) per turn $0.1200 · per minute $0.0300 · 4 turns total")
+            ("1턴당 평균 비용(추정) %@ · 분당 %@ · 전체 %d턴", ["$0.1200", "$0.0300", 4], "Average cost (est.) per turn $0.1200 · per minute $0.0300 · 4 turns total"),
+            ("종합 평가 %d점", [63], "Overall rating: 63"),
+            ("종합 평가 %d점", [1], "Overall rating: 1")
         ]
         for (key, arguments, expected) in cases {
             XCTAssertEqual(OfficeLocalization.format(key, arguments: arguments, languages: ["en", "ko"]), expected)
@@ -315,6 +317,7 @@ final class OfficeLocalizationTests: XCTestCase {
             ("토큰 %@", "%@ tokens"),
             ("좋아요 %d건", "%d likes"),
             ("싫어요 %d건", "%d dislikes"),
+            ("종합 평가 %d점", "Overall rating: %d"),
             ("제공자", "Provider"),
             ("집계 단위", "Granularity"),
             ("최근 30일 기록이 없습니다", "No records in the last 30 days"),

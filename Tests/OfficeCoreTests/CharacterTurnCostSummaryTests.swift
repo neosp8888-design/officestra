@@ -24,6 +24,8 @@ final class CharacterTurnCostSummaryTests: XCTestCase {
         let response = try JSONDecoder().decode(LiveFeedResponse.self, from: data)
         XCTAssertEqual(response.costSummary?.characters.first?.averageCostUsd, 1.5)
         XCTAssertNil(response.costSummary?.characters.first?.averageCostPerMinuteUsd)
+        XCTAssertNil(response.costSummary?.characters.first?.likedCount)
+        XCTAssertNil(response.costSummary?.characters.first?.dislikedCount)
     }
 
     @MainActor
@@ -42,15 +44,57 @@ final class CharacterTurnCostSummaryTests: XCTestCase {
         XCTAssertEqual(publications, 1)
         XCTAssertEqual(store.averages["boss"]?.costUsd, 5)
         XCTAssertNil(store.averages["boss"]?.costPerMinuteUsd)
+        XCTAssertEqual(store.averages["boss"]?.likedCount, 0)
+        XCTAssertEqual(store.averages["boss"]?.dislikedCount, 0)
+        XCTAssertEqual(store.averages["boss"]?.evaluationScore, 50)
         XCTAssertEqual(store.averages["left-man"]?.costUsd, 1)
         store.apply(CharacterTurnCostSnapshot(version: 4, characters: [
-            summary("boss", count: 3, cost: 12, timedCost: 8, duration: 120)
+            summary(
+                "boss",
+                count: 3,
+                cost: 12,
+                timedCost: 8,
+                duration: 120,
+                liked: 7,
+                disliked: 2
+            )
         ]))
         XCTAssertEqual(publications, 2)
         XCTAssertEqual(store.averages["boss"]?.costUsd, 4)
         XCTAssertEqual(store.averages["boss"]?.costPerMinuteUsd, 4)
+        XCTAssertEqual(store.averages["boss"]?.likedCount, 7)
+        XCTAssertEqual(store.averages["boss"]?.dislikedCount, 2)
+        XCTAssertEqual(store.averages["boss"]?.evaluationScore, 63)
         XCTAssertNil(store.averages["left-man"])
         withExtendedLifetime(subscription) {}
+    }
+
+    @MainActor
+    func testEvaluationRewardsSuccessfulLongTurnsWithoutPenalizingTurnCost() {
+        let store = CharacterTurnCostStore()
+        store.apply(CharacterTurnCostSnapshot(version: 1, characters: [
+            summary(
+                "patient",
+                count: 2,
+                cost: 20,
+                timedCost: 20,
+                duration: 600,
+                liked: 8,
+                disliked: 0
+            ),
+            summary(
+                "brief",
+                count: 2,
+                cost: 2,
+                timedCost: 2,
+                duration: 120,
+                liked: 8,
+                disliked: 0
+            ),
+        ]))
+
+        XCTAssertEqual(store.averages["patient"]?.evaluationScore, 77)
+        XCTAssertEqual(store.averages["brief"]?.evaluationScore, 66)
     }
 
     private func summary(
@@ -58,14 +102,18 @@ final class CharacterTurnCostSummaryTests: XCTestCase {
         count: Int,
         cost: Double,
         timedCost: Double? = nil,
-        duration: Double? = nil
+        duration: Double? = nil,
+        liked: Int? = nil,
+        disliked: Int? = nil
     ) -> CharacterTurnCostSummary {
         CharacterTurnCostSummary(
             characterId: id,
             pricedTurnCount: count,
             totalCostUsd: cost,
             timedCostUsd: timedCost,
-            totalDurationSeconds: duration
+            totalDurationSeconds: duration,
+            likedCount: liked,
+            dislikedCount: disliked
         )
     }
 

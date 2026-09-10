@@ -221,6 +221,7 @@
 "토큰 %@" = "%@ tokens";
 "좋아요 %d건" = "%d likes";
 "싫어요 %d건" = "%d dislikes";
+"종합 평가 %d점" = "Overall rating: %d";
 "제공자" = "Provider";
 "집계 단위" = "Granularity";
 "최근 30일 기록이 없습니다" = "No records in the last 30 days";

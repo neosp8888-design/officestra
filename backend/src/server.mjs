@@ -1107,7 +1107,11 @@ async function updateTurnFeedback(response, turnID, body) {
     });
     return;
   }
-  broadcast({ type: "feed.changed", turnId: turnID });
+  broadcast({
+    type: "feed.changed",
+    turnId: turnID,
+    feedbackChanged: true,
+  });
   send(response, 200, { feedback: stored.feedback });
 }
 
