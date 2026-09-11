@@ -4294,6 +4294,7 @@ private struct LiveTurnCard: View {
                         endedAt: turn.endedAt,
                         status: turn.status,
                         estimatedCostUsd: turn.estimatedCostUsd,
+                        isLocal: turn.providerKind == "local",
                         sessionContext: turn.sessionContext
                     )
                         .frame(maxWidth: .infinity, alignment: .trailing)
@@ -4362,6 +4363,14 @@ private struct LiveTurnCard: View {
                         in: Capsule()
                     )
                     .accessibilityIdentifier("terminalTurnBadge")
+            }
+            if turn.providerKind == "local" {
+                Text(OfficeLocalization.string("로컬 AI"))
+                    .font(.system(size: 9.5, weight: .bold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(DashboardPalette.accent.opacity(0.10), in: Capsule())
+                    .accessibilityIdentifier("localTurnBadge")
             }
 
             Spacer()
@@ -4572,6 +4581,7 @@ private struct LiveTurnElapsedStatusView: View {
     let endedAt: Date?
     let status: LiveTurnStatus
     let estimatedCostUsd: Double?
+    var isLocal: Bool = false
     let sessionContext: SessionContextUsage?
 
     @ViewBuilder
@@ -4608,7 +4618,11 @@ private struct LiveTurnElapsedStatusView: View {
                         )
                     )
 
-                if let estimatedCostUsd {
+                if isLocal {
+                    Text(OfficeLocalization.string("로컬 · API 비용 해당 없음 (전기 비용 미집계)"))
+                        .font(supplementFont)
+                        .foregroundStyle(.secondary)
+                } else if let estimatedCostUsd {
                     Text(estimatedTokenCostText(estimatedCostUsd))
                         .font(supplementFont)
                         .foregroundStyle(

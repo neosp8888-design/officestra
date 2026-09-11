@@ -66,6 +66,7 @@ export function sessionContextUsage({
   ),
   antigravityUsageReader = antigravityContextUsage,
   maxReadBytes = MAX_READ_BYTES,
+  contextWindowOverride = null,
 }) {
   const kind = String(backend ?? "").trim();
   if (!["claude", "codex", "antigravity"].includes(kind)) {
@@ -102,7 +103,7 @@ export function sessionContextUsage({
   if (!entry) {
     return null;
   }
-  const limitTokens = entry.limitTokens ?? claudeContextWindow(model);
+  const limitTokens = contextWindowOverride ?? entry.limitTokens ?? claudeContextWindow(model);
   if (!limitTokens || limitTokens <= 0) {
     return null;
   }

@@ -16,5 +16,6 @@ backend/node_modules/
 backend/.env
 integrations/slack/slack.env
 .office-attachments/
+.office-local-resources/
 artifacts/
 tmp/

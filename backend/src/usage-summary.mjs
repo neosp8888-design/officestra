@@ -610,6 +610,7 @@ export async function readUsageActivity(pool, now = new Date()) {
         JOIN characters AS character
           ON character.id = session.character_id
         WHERE turn_record.started_at >= $2
+          AND turn_record.provider_kind = 'cloud'
       )
       SELECT
         provider,

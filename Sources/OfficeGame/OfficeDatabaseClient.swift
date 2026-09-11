@@ -83,6 +83,27 @@ struct OfficeDatabaseClient: Sendable {
             .sessions
     }
 
+    func fetchLocalProviderStatuses() async throws -> [LocalProviderStatus] {
+        let (data, response) = try await URLSession.shared.data(from: baseURL.appending(path: "api/local-profiles"))
+        try validate(response, data: data)
+        return try JSONDecoder().decode(LocalProviderList.self, from: data).statuses
+    }
+
+    func fetchLocalProviderCatalog() async throws -> LocalProviderList {
+        let (data, response) = try await URLSession.shared.data(from: baseURL.appending(path: "api/local-profiles"))
+        try validate(response, data: data)
+        return try JSONDecoder().decode(LocalProviderList.self, from: data)
+    }
+
+    func selectLocalProfile(_ profileID: String?, for character: OfficeCharacter) async throws {
+        var request = URLRequest(url: baseURL.appending(path: "api/characters/\(character.rawValue)/local-profile"))
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["profileId": profileID as Any? ?? NSNull()])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response, data: data)
+    }
+
     func openTerminalSession(
         character: OfficeCharacter
     ) async throws -> TerminalLaunchSpecification {
@@ -961,6 +982,42 @@ private struct TerminalSessionListResponse: Decodable {
     let sessions: [StoredTerminalSession]
 }
 
+struct LocalProviderList: Decodable {
+    let statuses: [LocalProviderStatus]
+    let profiles: [LocalModelOption]?
+    let assignments: [LocalProfileAssignment]?
+}
+
+struct LocalModelOption: Decodable, Identifiable, Equatable, Sendable {
+    let id: String
+    let enabled: Bool
+    let model: String
+    let title: String?
+    let contextWindow: Int
+    var displayTitle: String { title ?? model }
+}
+
+struct LocalProfileAssignment: Decodable, Sendable {
+    let characterId: String
+    let profileId: String
+}
+
+struct LocalProviderStatus: Decodable, Identifiable, Equatable, Sendable {
+    let id: String
+    let state: String
+    let error: String?
+
+    var displayText: String {
+        switch state {
+        case "waiting": return OfficeLocalization.string("로컬 AI · ComfyUI 또는 다른 작업 종료 대기")
+        case "starting": return OfficeLocalization.string("로컬 AI · 4090 연결 및 모델 준비 중")
+        case "ready": return OfficeLocalization.string("로컬 AI · 준비됨")
+        case "error": return OfficeLocalization.string("로컬 AI · 연결 실패, 다음 요청에서 재연결")
+        default: return OfficeLocalization.string("로컬 AI · 유휴, 다음 요청에서 모델 준비")
+        }
+    }
+}
+
 private struct TerminalSessionOpenRequest: Encodable {
     let characterId: String
 }
@@ -1486,6 +1543,7 @@ struct LiveFeedSource: Decodable, Identifiable, Equatable, Sendable {
 }
 
 struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
+    let providerKind: String?
     let id: String
     let characterId: String
     let characterName: String
@@ -1524,6 +1582,7 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
         effort: String?,
         fastMode: Bool?,
         origin: String? = nil,
+        providerKind: String? = nil,
         externalSessionId: String?,
         conversationWorkdir: String?,
         prompt: String,
@@ -1552,6 +1611,7 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
         self.effort = effort
         self.fastMode = fastMode
         self.origin = origin
+        self.providerKind = providerKind
         self.externalSessionId = externalSessionId
         self.conversationWorkdir = conversationWorkdir
         self.prompt = prompt
@@ -1587,6 +1647,7 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
             effort: effort,
             fastMode: fastMode,
             origin: origin,
+            providerKind: providerKind,
             externalSessionId: externalSessionId,
             conversationWorkdir: conversationWorkdir,
             prompt: prompt,
@@ -1621,6 +1682,7 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
             effort: effort,
             fastMode: fastMode,
             origin: origin,
+            providerKind: providerKind,
             externalSessionId: externalSessionId,
             conversationWorkdir: conversationWorkdir,
             prompt: prompt,

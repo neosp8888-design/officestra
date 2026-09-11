@@ -1,6 +1,7 @@
 // 이 파일은 백엔드에서 CLI 업무를 실행하고 공개 진행 상태를 PostgreSQL과 WebSocket에 전달한다.
 
 import { spawn, spawnSync } from "node:child_process";
+import { resolveLocalCharacter, snapshotLocalTurn, validateLocalResume } from './local-provider-service.mjs';
 import { once } from "node:events";
 import {
   accessSync,
@@ -182,6 +183,7 @@ export class AgentRuntime {
     antigravityReasoningReader = antigravityStepReasonings,
     antigravityReasoningBaselineReader = antigravityLatestStepIndex,
     embeddingService = null,
+    localProviders = null,
   }) {
     this.pool = pool;
     this.withTransaction = withTransaction;
@@ -197,6 +199,7 @@ export class AgentRuntime {
     this.antigravityReasoningReader = antigravityReasoningReader;
     this.antigravityReasoningBaselineReader = antigravityReasoningBaselineReader;
     this.embeddingService = embeddingService;
+    this.localProviders = localProviders;
     this.running = new Map();
     this.claudeWorkers = new Map();
     this.compactingCharacters = new Set();
@@ -1206,6 +1209,8 @@ export class AgentRuntime {
 
       const turnID = randomUUID();
       const character = characterResult.rows[0];
+      await resolveLocalCharacter(client, character);
+      await validateLocalResume(client, sessionID, character, externalSessionID);
       await client.query(
         `
           INSERT INTO turns (
@@ -1244,6 +1249,8 @@ export class AgentRuntime {
         [turnID, prompt],
       );
 
+      await snapshotLocalTurn(client, turnID, character);
+
       return {
         turnID,
         sessionID,
@@ -1262,12 +1269,24 @@ export class AgentRuntime {
   }
 
   async execute(state) {
+    if (state.character.localProfile) {
+      if (!this.localProviders) throw new Error('Local provider service unavailable');
+      if (state.externalSessionID) prepareClaudeSessionResume({sessionID:state.externalSessionID,workdir:state.workdir,previousWorkdir:state.resumeExecutionWorkdir});
+      const spec = await this.localProviders.launch({character:state.character,mode:'gui',prompt:state.executionPrompt ?? state.prompt,previousSessionID:state.externalSessionID,workdir:state.workdir});
+      try { await this.executeSingleProcess(state, spec); }
+      finally { await spec.release(); }
+      return;
+    }
     if (state.character.backend === "claude") {
       await this.executeClaude(state);
       return;
     }
-    const executable = locateExecutable(state.character);
-    const cliArguments = buildArguments({
+    await this.executeSingleProcess(state);
+  }
+
+  async executeSingleProcess(state, localSpec = null) {
+    const executable = localSpec?.executable ?? locateExecutable(state.character);
+    const cliArguments = localSpec?.args ?? buildArguments({
       character: state.character,
       prompt: state.executionPrompt ?? state.prompt,
       previousSessionID: state.externalSessionID,
@@ -1276,7 +1295,7 @@ export class AgentRuntime {
     });
     const child = spawn(executable, cliArguments, {
       cwd: state.workdir,
-      env: executionEnvironment(state.character, process.env, {
+      env: localSpec?.env ?? executionEnvironment(state.character, process.env, {
         workdir: state.workdir,
       }),
       stdio: ["ignore", "pipe", "pipe"],
@@ -1594,8 +1613,10 @@ export class AgentRuntime {
           [id, sessionID],
         );
       }
+      const terminalCharacter = await resolveLocalCharacter(client, characterResult.rows[0]);
+      await validateLocalResume(client, sessionID, terminalCharacter, active?.externalSessionID);
       return {
-        character: characterResult.rows[0],
+        character: terminalCharacter,
         sessionID,
         conversationID,
         externalSessionID: active?.externalSessionID ?? null,
@@ -1740,6 +1761,7 @@ export class AgentRuntime {
         `,
         [turnID, cleanPrompt],
       );
+      await snapshotLocalTurn(client, turnID, settings);
       return settings;
     });
     this.broadcast({ type: "feed.changed", turnId: turnID, characterId: characterID });
@@ -1769,6 +1791,8 @@ export class AgentRuntime {
           turn.model AS "executionModel",
           turn.effort AS "executionEffort",
           turn.fast_mode AS "executionFastMode",
+          turn.provider_kind AS "providerKind",
+          turn.provider_snapshot AS "providerSnapshot",
           turn.started_at AS "startedAt",
           session.conversation_id AS "conversationID",
           session.external_id AS "externalSessionID",
@@ -1825,6 +1849,7 @@ export class AgentRuntime {
         permission: row.permission,
         identityPrompt: row.identityPrompt,
         config: row.config,
+        localProfile: row.providerKind === 'local' ? row.providerSnapshot : null,
       },
       prompt: row.prompt,
       recordPrompt: row.prompt,
@@ -2103,6 +2128,9 @@ export class AgentRuntime {
     });
     try {
       const target = await this.compactionTarget(characterID);
+      if (target.character.config?.localProfileId) {
+        throw new Error('로컬 AI는 CLI 기본 자동 압축을 사용합니다. 수동 압축은 터미널에서 /compact를 사용하세요.');
+      }
       if (
         expectedSessionID &&
         target.externalSessionID !== expectedSessionID
@@ -2176,6 +2204,7 @@ export class AgentRuntime {
   }
 
   async maybeAutoCompactAfterTurn(state) {
+    if (state.character.localProfile) return null;
     // Codex는 CLI 자체의 기본 컨텍스트 창과 네이티브 자동 압축을 사용한다.
     // 직원별 퍼센트 기준은 Claude에만 적용한다.
     if (state.character.backend !== "claude") {
@@ -3050,7 +3079,7 @@ export class AgentRuntime {
       return;
     }
     const usage = state.usage;
-    const costUsd = estimateTokenCost({
+    const costUsd = state.character.localProfile ? null : estimateTokenCost({
       backend: state.character.backend,
       model: state.character.model,
       fastMode: state.character.fastMode,
@@ -3092,6 +3121,10 @@ export class AgentRuntime {
         usage.cacheWrite5mInputTokens,
         usage.cacheWrite1hInputTokens,
       ],
+    );
+    if (state.character.localProfile) await client.query(
+      "UPDATE usage_records SET cost_basis='local-not-applicable', reported_cost_audit=$2::jsonb WHERE turn_id=$1",
+      [state.turnID, JSON.stringify({reportedCostUsd: usage.reportedCostUsd ?? null, reportedSonnet5CostUsd: usage.reportedSonnet5CostUsd ?? null})],
     );
   }
 

@@ -618,6 +618,17 @@ private struct OfficeGameView: View {
                 director: director,
                 conversationMode: conversationMode
             )
+            .task { await director.refreshLocalProviderStatuses() }
+
+            ForEach(director.localProviderStatuses) { status in
+                Text(status.displayText)
+                    .font(.caption)
+                    .foregroundStyle(status.state == "error" ? Color.orange : Color.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 4)
+                    .accessibilityIdentifier("localProviderStatus")
+            }
 
             Divider()
                 .opacity(0.55)
@@ -1302,6 +1313,7 @@ private struct LiveWorkspaceCommandBar: View {
                     .opacity(controlOpacity(.quickSettings))
 
                     if conversationMode == .chat,
+                        director.localProfileID(for: character.id) == nil,
                         ContextCompactionPresentation.supportsManualCompaction(
                         backend: character.backend
                     ) {
@@ -2530,6 +2542,16 @@ private struct AgentQuickSettingsView: View {
     let character: CharacterConfiguration
     var onChanged: (() -> Void)? = nil
     @State private var isShowingModelVisibilitySettings = false
+    @State private var isConfirmingLocalSwitch = false
+    @State private var pendingLocalProfileID: String?
+    @State private var pendingLocalCharacter: OfficeCharacter?
+    @State private var isShowingLocalResult = false
+
+    private var isLocal: Bool { director.localProfileID(for: character.id) != nil }
+
+    private var localModelTitle: String {
+        director.localModelOptions.first { $0.id == director.localProfileID(for: character.id) }?.displayTitle ?? "Local 4090"
+    }
 
     private var settings: CharacterAgentSettings {
         director.agentSettings(for: character.id)
@@ -2578,6 +2600,11 @@ private struct AgentQuickSettingsView: View {
     var body: some View {
         HStack(spacing: 4) {
             Menu {
+                if isLocal {
+                    Button(OfficeLocalization.string("이전 클라우드 설정으로 돌아가기")) {
+                        requestLocalSwitch(nil)
+                    }
+                } else {
                 ForEach(AgentBackend.allCases) { backend in
                     Button {
                         let model = director.defaultModelOption(for: backend)
@@ -2599,15 +2626,34 @@ private struct AgentQuickSettingsView: View {
                         }
                     }
                 }
+                }
+                if !director.localModelOptions.isEmpty {
+                    Divider()
+                    ForEach(director.localModelOptions) { profile in
+                        Button {
+                            requestLocalSwitch(profile.id)
+                        } label: {
+                            Label("\(OfficeLocalization.string("로컬 4090")) · \(profile.displayTitle)", systemImage: director.localProfileID(for: character.id) == profile.id ? "checkmark" : "desktopcomputer")
+                        }
+                        .disabled(director.localProfileID(for: character.id) == profile.id)
+                    }
+                }
             } label: {
                 QuickSettingLabel(
-                    text: settings.backend.title,
+                    text: isLocal ? OfficeLocalization.string("로컬 4090") : settings.backend.title,
                     systemImage: "terminal"
                 )
             }
             .disabled(!availability.canChangeBackend)
             .help(OfficeLocalization.string("직원 CLI 선택"))
+            .accessibilityIdentifier("agentProviderPicker")
 
+            if isLocal {
+                QuickSettingLabel(text: localModelTitle, systemImage: "cpu")
+                QuickSettingLabel(text: "32K", systemImage: "memorychip")
+                QuickSettingLabel(text: OfficeLocalization.string("기본 추론"), systemImage: "brain")
+                QuickSettingLabel(text: OfficeLocalization.string(settings.permission.title), systemImage: "shield")
+            } else {
             Menu {
                 ForEach(selectableModels) { model in
                     Button {
@@ -2725,10 +2771,30 @@ private struct AgentQuickSettingsView: View {
             }
             .disabled(!availability.canChangeCurrentBackendSettings)
 
+            }
         }
         .menuStyle(.borderlessButton)
         // Menu는 남는 가로 폭을 나눠 가지므로 내용 폭으로 고정해 좌측에 붙인다.
         .fixedSize(horizontal: true, vertical: false)
+        .task { await director.refreshLocalProviderStatuses() }
+        .confirmationDialog(OfficeLocalization.string("모델을 전환하고 새 세션을 시작할까요?"), isPresented: $isConfirmingLocalSwitch, titleVisibility: .visible) {
+            Button(OfficeLocalization.string("전환")) {
+                let target = pendingLocalCharacter ?? character.id
+                let profileID = pendingLocalProfileID
+                Task {
+                    _ = await director.selectLocalProfile(profileID, for: target)
+                    isShowingLocalResult = true
+                }
+            }
+            Button(OfficeLocalization.string("취소"), role: .cancel) {}
+        } message: {
+            Text(OfficeLocalization.string("기존 대화 기록은 보존됩니다. 작업을 마치고 터미널을 닫은 뒤 전환하세요."))
+        }
+        .alert(OfficeLocalization.string("로컬 모델 전환"), isPresented: $isShowingLocalResult) {
+            Button(OfficeLocalization.string("확인"), role: .cancel) {}
+        } message: {
+            Text(director.settingsStatus ?? OfficeLocalization.string("잠시 후 다시 시도하세요."))
+        }
         .sheet(isPresented: $isShowingModelVisibilitySettings) {
             AgentModelVisibilitySettingsView(
                 director: director,
@@ -2754,6 +2820,12 @@ private struct AgentQuickSettingsView: View {
                 onChanged?()
             }
         }
+    }
+
+    private func requestLocalSwitch(_ profileID: String?) {
+        pendingLocalProfileID = profileID
+        pendingLocalCharacter = character.id
+        isConfirmingLocalSwitch = true
     }
 
     private func modelTitle(_ model: AgentModelOption) -> String {

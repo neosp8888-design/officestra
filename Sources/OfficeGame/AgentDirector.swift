@@ -786,6 +786,9 @@ final class AgentDirector: ObservableObject {
     @Published private(set) var isRealtimeConnected = false
     @Published private(set) var realtimeConnectionError: String?
     @Published private(set) var terminalSessionRevision = 0
+    @Published private(set) var localProviderStatuses: [LocalProviderStatus] = []
+    @Published private(set) var localModelOptions: [LocalModelOption] = []
+    @Published private(set) var localProfileAssignments: [String: String] = [:]
     @Published private(set) var terminalRestartRequest:
         TerminalRestartRequest?
     /// 터미널 화면이 붙어 있는 동안만 채워진다. 입력·예약·멈춤이 이리로 간다.
@@ -1980,6 +1983,10 @@ final class AgentDirector: ObservableObject {
         for character: OfficeCharacter
     ) async {
         settingsStatus = nil
+        guard localProfileID(for: character) == nil else {
+            settingsStatus = OfficeLocalization.string("로컬 4090 메뉴에서 클라우드로 돌아간 뒤 설정을 변경하세요.")
+            return
+        }
         guard isReadyForSubmissions else {
             settingsStatus =
                 sessionRestoreError ?? OfficeLocalization.string("세션 복구가 끝난 뒤 설정할 수 있습니다.")
@@ -2474,6 +2481,7 @@ final class AgentDirector: ObservableObject {
         switch event.type {
         case "ready":
             Task { [weak self] in
+                await self?.refreshLocalProviderStatuses()
                 try? await self?.refreshModelCatalog()
             }
             let synchronized = Set(
@@ -2554,6 +2562,10 @@ final class AgentDirector: ObservableObject {
             terminalSessionRevision &+= 1
             return true
 
+        case "local.changed":
+            Task { [weak self] in await self?.refreshLocalProviderStatuses() }
+            return true
+
         case "model-catalog.changed":
             Task { [weak self] in
                 try? await self?.refreshModelCatalog()
@@ -2561,6 +2573,34 @@ final class AgentDirector: ObservableObject {
             return true
 
         default:
+            return false
+        }
+    }
+
+    func refreshLocalProviderStatuses() async {
+        if let catalog = try? await database.fetchLocalProviderCatalog() {
+            localProviderStatuses = catalog.statuses
+            localModelOptions = (catalog.profiles ?? []).filter(\.enabled)
+            localProfileAssignments = Dictionary((catalog.assignments ?? []).map { ($0.characterId, $0.profileId) }, uniquingKeysWith: { _, last in last })
+        }
+    }
+
+    func localProfileID(for character: OfficeCharacter) -> String? {
+        localProfileAssignments[character.rawValue]
+    }
+
+    func selectLocalProfile(_ profileID: String?, for character: OfficeCharacter) async -> Bool {
+        guard isReadyForSubmissions, !isUpdatingConfiguration else { return false }
+        isUpdatingConfiguration = true
+        defer { isUpdatingConfiguration = false }
+        do {
+            try await database.selectLocalProfile(profileID, for: character)
+            await restorePersistentState()
+            await refreshLocalProviderStatuses()
+            settingsStatus = OfficeLocalization.string("모델을 전환했습니다. 다음 대화는 새 세션에서 시작합니다.")
+            return true
+        } catch {
+            settingsStatus = error.localizedDescription
             return false
         }
     }

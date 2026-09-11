@@ -117,6 +117,7 @@ export function usageReportQuery(granularity) {
       FROM turns AS turn
       LEFT JOIN cli_sessions AS session ON session.id = turn.cli_session_id
       WHERE turn.backend = $1
+        AND turn.provider_kind = 'cloud'
         AND turn.started_at IS NOT NULL
         AND turn.started_at AT TIME ZONE $2
           >= date_trunc('${granularity}', now() AT TIME ZONE $2)

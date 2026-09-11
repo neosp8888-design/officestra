@@ -44,7 +44,9 @@ export function configurationWithRuntimeWorkdir(
 }
 
 export function characterSettingsRequireNewSession(previous, next) {
-  return previous.backend !== next.backend;
+  return previous.backend !== next.backend
+    || (previous.config?.localProfileId ?? previous.localProfileId ?? null)
+      !== (next.config?.localProfileId ?? next.localProfileId ?? null);
 }
 
 export async function characterConfigurationForSync(

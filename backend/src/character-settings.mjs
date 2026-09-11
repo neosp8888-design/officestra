@@ -217,6 +217,7 @@ export async function updateCharacterSettingsAtomically({
                 effort,
                 fast_mode AS "fastMode",
                 permission,
+                config,
                 identity_prompt AS "identityPrompt"
               FROM characters
               WHERE id = ANY($1::text[])
@@ -243,6 +244,7 @@ export async function updateCharacterSettingsAtomically({
           const sessionEndPlans = [];
           for (const update of updates) {
             const previous = currentByID.get(update.characterID);
+            if(previous.config?.localProfileId)throw new AgentBusyError('로컬 4090 메뉴에서 클라우드로 돌아간 뒤 설정을 변경하세요.');
             if (characterSettingsRequireNewSession(previous, update)) {
               const plan = await runtime.inspectWorkspaceForSessionEnd(
                 update.characterID,

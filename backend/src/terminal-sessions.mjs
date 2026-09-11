@@ -812,11 +812,21 @@ export class TerminalSessionManager {
         conversationId: launch.conversationID,
         backend: character.backend,
       };
+      if (character.localProfile) {
+        if (!this.runtime.localProviders) throw new Error('Local provider service unavailable');
+        const baseEnvironment = env;
+        const local = await this.runtime.localProviders.launch({character,mode:'terminal',previousSessionID:launch.externalSessionID,workdir:launch.workdir,baseEnvironment});
+        state.localRelease = local.release;
+        spec.executable = local.executable;
+        spec.args = local.args;
+        spec.env = local.env;
+      }
       this.broadcast({ type: "terminal.changed", characterId: id });
       return spec;
     } catch (error) {
       if (state) {
         state.closed = true;
+        await state.localRelease?.();
         try { await state.watcher?.stop({ finalSweep: false }); } catch {}
         discardStructuredTurnResult(state.structuredResultPath);
       }
@@ -1065,6 +1075,7 @@ export class TerminalSessionManager {
     if (!state) return false;
     if (state.watcher) await state.watcher.stop({ finalSweep: true });
     state.closed = true;
+    await state.localRelease?.();
     discardStructuredTurnResult(state.structuredResultPath);
     if (state.runningTurnID) {
       await this.runtime.interruptTerminalTurn(id, state.runningTurnID);
