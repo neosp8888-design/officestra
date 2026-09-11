@@ -2550,7 +2550,7 @@ private struct AgentQuickSettingsView: View {
     private var isLocal: Bool { director.localProfileID(for: character.id) != nil }
 
     private var localModelTitle: String {
-        director.localModelOptions.first { $0.id == director.localProfileID(for: character.id) }?.displayTitle ?? "Local 4090"
+        director.localModelOptions.first { $0.id == director.localProfileID(for: character.id) }?.displayTitle ?? "로컬 AI"
     }
 
     private var settings: CharacterAgentSettings {
@@ -2633,14 +2633,14 @@ private struct AgentQuickSettingsView: View {
                         Button {
                             requestLocalSwitch(profile.id)
                         } label: {
-                            Label("\(OfficeLocalization.string("로컬 4090")) · \(profile.displayTitle)", systemImage: director.localProfileID(for: character.id) == profile.id ? "checkmark" : "desktopcomputer")
+                            Label("\(OfficeLocalization.string("로컬 AI")) · \(profile.displayTitle)", systemImage: director.localProfileID(for: character.id) == profile.id ? "checkmark" : "desktopcomputer")
                         }
                         .disabled(director.localProfileID(for: character.id) == profile.id)
                     }
                 }
             } label: {
                 QuickSettingLabel(
-                    text: isLocal ? OfficeLocalization.string("로컬 4090") : settings.backend.title,
+                    text: isLocal ? OfficeLocalization.string("로컬 AI") : settings.backend.title,
                     systemImage: "terminal"
                 )
             }

@@ -1010,7 +1010,7 @@ struct LocalProviderStatus: Decodable, Identifiable, Equatable, Sendable {
     var displayText: String {
         switch state {
         case "waiting": return OfficeLocalization.string("로컬 AI · ComfyUI 또는 다른 작업 종료 대기")
-        case "starting": return OfficeLocalization.string("로컬 AI · 4090 연결 및 모델 준비 중")
+        case "starting": return OfficeLocalization.string("로컬 AI · 연결 및 모델 준비 중")
         case "ready": return OfficeLocalization.string("로컬 AI · 준비됨")
         case "error": return OfficeLocalization.string("로컬 AI · 연결 실패, 다음 요청에서 재연결")
         default: return OfficeLocalization.string("로컬 AI · 유휴, 다음 요청에서 모델 준비")

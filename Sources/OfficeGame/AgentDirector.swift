@@ -1984,7 +1984,7 @@ final class AgentDirector: ObservableObject {
     ) async {
         settingsStatus = nil
         guard localProfileID(for: character) == nil else {
-            settingsStatus = OfficeLocalization.string("로컬 4090 메뉴에서 클라우드로 돌아간 뒤 설정을 변경하세요.")
+            settingsStatus = OfficeLocalization.string("로컬 AI 메뉴에서 클라우드로 돌아간 뒤 설정을 변경하세요.")
             return
         }
         guard isReadyForSubmissions else {
