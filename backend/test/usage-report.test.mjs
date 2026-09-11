@@ -25,6 +25,11 @@ test("직원 전체 비용은 페이지·모델과 무관하며 미확인 비용
     assert.match(sql, /feedback\.feedback = 'disliked'/);
     assert.match(sql, /LEFT JOIN turn_response_feedback AS feedback/);
     assert.match(sql, /'completed', 'failed', 'interrupted'/);
+    assert.match(sql, /COUNT\(DISTINCT turn.id\)::integer AS "finishedTurnCount"/);
+    assert.match(sql, /WHERE turn.status = 'failed'/);
+    assert.match(sql, /WHERE turn.status = 'interrupted'/);
+    // Outages, exhausted quotas, user cancellation and restarts are not silently excluded.
+    assert.doesNotMatch(sql, /error_message|NOT IN/);
     assert.doesNotMatch(sql, /LIMIT|external_id|active_cli_sessions|turn.model/);
     return { rows: [{
       characterId: "boss",

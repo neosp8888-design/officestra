@@ -26,6 +26,7 @@ final class CharacterTurnCostSummaryTests: XCTestCase {
         XCTAssertNil(response.costSummary?.characters.first?.averageCostPerMinuteUsd)
         XCTAssertNil(response.costSummary?.characters.first?.likedCount)
         XCTAssertNil(response.costSummary?.characters.first?.dislikedCount)
+        XCTAssertNil(response.costSummary?.characters.first?.finishedTurnCount)
     }
 
     @MainActor
@@ -46,7 +47,8 @@ final class CharacterTurnCostSummaryTests: XCTestCase {
         XCTAssertNil(store.averages["boss"]?.costPerMinuteUsd)
         XCTAssertEqual(store.averages["boss"]?.likedCount, 0)
         XCTAssertEqual(store.averages["boss"]?.dislikedCount, 0)
-        XCTAssertEqual(store.averages["boss"]?.evaluationScore, 50)
+        XCTAssertEqual(store.averages["boss"]?.evaluationScore, 75)
+        XCTAssertEqual(store.averages["boss"]?.evaluationIsProvisional, true)
         XCTAssertEqual(store.averages["left-man"]?.costUsd, 1)
         store.apply(CharacterTurnCostSnapshot(version: 4, characters: [
             summary(
@@ -64,13 +66,13 @@ final class CharacterTurnCostSummaryTests: XCTestCase {
         XCTAssertEqual(store.averages["boss"]?.costPerMinuteUsd, 4)
         XCTAssertEqual(store.averages["boss"]?.likedCount, 7)
         XCTAssertEqual(store.averages["boss"]?.dislikedCount, 2)
-        XCTAssertEqual(store.averages["boss"]?.evaluationScore, 63)
+        XCTAssertEqual(store.averages["boss"]?.evaluationScore, 81)
         XCTAssertNil(store.averages["left-man"])
         withExtendedLifetime(subscription) {}
     }
 
     @MainActor
-    func testEvaluationRewardsSuccessfulLongTurnsWithoutPenalizingTurnCost() {
+    func testEqualPerMinuteCostDoesNotRewardLongerTurns() {
         let store = CharacterTurnCostStore()
         store.apply(CharacterTurnCostSnapshot(version: 1, characters: [
             summary(
@@ -78,7 +80,7 @@ final class CharacterTurnCostSummaryTests: XCTestCase {
                 count: 2,
                 cost: 20,
                 timedCost: 20,
-                duration: 600,
+                duration: 1200,
                 liked: 8,
                 disliked: 0
             ),
@@ -93,8 +95,59 @@ final class CharacterTurnCostSummaryTests: XCTestCase {
             ),
         ]))
 
-        XCTAssertEqual(store.averages["patient"]?.evaluationScore, 77)
-        XCTAssertEqual(store.averages["brief"]?.evaluationScore, 66)
+        XCTAssertEqual(store.averages["patient"]?.evaluationScore, 85)
+        XCTAssertEqual(store.averages["brief"]?.evaluationScore, 85)
+    }
+
+    @MainActor
+    func testFailureAndInterruptionUseAllFinishedTurnsEvenWithoutCost() {
+        let store = CharacterTurnCostStore()
+        store.apply(CharacterTurnCostSnapshot(version: 1, characters: [
+            summary("healthy", count: 1, cost: 1, timedCost: 1, duration: 60,
+                    liked: 10, finished: 10),
+            summary("failed", count: 1, cost: 1, timedCost: 1, duration: 60,
+                    liked: 10, finished: 10, failed: 5),
+            summary("interrupted", count: 1, cost: 1, timedCost: 1, duration: 60,
+                    liked: 10, finished: 10, interrupted: 5),
+            summary("unpricedFailure", count: 0, cost: 0, finished: 10, failed: 10),
+        ]))
+        XCTAssertEqual(store.averages["healthy"]?.evaluationScore, 86)
+        XCTAssertEqual(store.averages["failed"]?.evaluationScore, 71)
+        XCTAssertEqual(store.averages["interrupted"]?.evaluationScore, 76)
+        XCTAssertEqual(store.averages["unpricedFailure"]?.evaluationScore, 45)
+        XCTAssertEqual(store.averages["unpricedFailure"]?.turnCount, 10)
+        XCTAssertEqual(store.averages["failed"]?.failedRate, 0.5)
+        XCTAssertEqual(store.averages["healthy"]?.evaluationIsProvisional, false)
+    }
+
+    @MainActor
+    func testZeroPriceAndMissingPriceAreDifferentAndNoTurnsHaveNoScore() {
+        let store = CharacterTurnCostStore()
+        store.apply(CharacterTurnCostSnapshot(version: 1, characters: [
+            summary("free", count: 1, cost: 0, timedCost: 0, duration: 60),
+            summary("free2", count: 1, cost: 0, timedCost: 0, duration: 60),
+            summary("paid", count: 1, cost: 1, timedCost: 1, duration: 60),
+            summary("unknown", count: 1, cost: 1),
+            summary("empty", count: 0, cost: 0),
+        ]))
+        XCTAssertEqual(store.averages["free"]?.evaluationScore, 85)
+        XCTAssertEqual(store.averages["paid"]?.evaluationScore, 65)
+        XCTAssertEqual(store.averages["unknown"]?.evaluationScore, 75)
+        XCTAssertNil(store.averages["empty"]?.evaluationScore)
+    }
+
+    @MainActor
+    func testOldBackendAndInvalidStatusCountsDoNotInventScore() throws {
+        let old = try JSONDecoder().decode(CharacterTurnCostSnapshot.self, from: Data(
+            #"{"version":1,"characters":[{"characterId":"old","pricedTurnCount":2,"totalCostUsd":3}]}"#.utf8
+        ))
+        let store = CharacterTurnCostStore()
+        store.apply(old)
+        XCTAssertNil(store.averages["old"]?.evaluationScore)
+        store.apply(CharacterTurnCostSnapshot(version: 2, characters: [
+            summary("bad", count: 1, cost: 1, finished: 2, failed: 2, interrupted: 1)
+        ]))
+        XCTAssertNil(store.averages["bad"]?.evaluationScore)
     }
 
     private func summary(
@@ -104,7 +157,10 @@ final class CharacterTurnCostSummaryTests: XCTestCase {
         timedCost: Double? = nil,
         duration: Double? = nil,
         liked: Int? = nil,
-        disliked: Int? = nil
+        disliked: Int? = nil,
+        finished: Int? = nil,
+        failed: Int = 0,
+        interrupted: Int = 0
     ) -> CharacterTurnCostSummary {
         CharacterTurnCostSummary(
             characterId: id,
@@ -113,7 +169,10 @@ final class CharacterTurnCostSummaryTests: XCTestCase {
             timedCostUsd: timedCost,
             totalDurationSeconds: duration,
             likedCount: liked,
-            dislikedCount: disliked
+            dislikedCount: disliked,
+            finishedTurnCount: finished ?? count,
+            failedTurnCount: failed,
+            interruptedTurnCount: interrupted
         )
     }
 

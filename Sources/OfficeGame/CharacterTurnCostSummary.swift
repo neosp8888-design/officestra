@@ -9,6 +9,9 @@ struct CharacterTurnCostSummary: Decodable, Equatable, Sendable {
     let totalDurationSeconds: Double?
     let likedCount: Int?
     let dislikedCount: Int?
+    var finishedTurnCount: Int? = nil
+    var failedTurnCount: Int? = nil
+    var interruptedTurnCount: Int? = nil
 
     var averageCostUsd: Double? {
         guard pricedTurnCount > 0, totalCostUsd.isFinite, totalCostUsd >= 0 else {
@@ -29,18 +32,6 @@ struct CharacterTurnCostSummary: Decodable, Equatable, Sendable {
         return timedCostUsd * 60 / totalDurationSeconds
     }
 
-    var averageTurnDurationMinutes: Double? {
-        guard let costPerTurn = averageCostUsd,
-              let costPerMinute = averageCostPerMinuteUsd,
-              costPerTurn.isFinite,
-              costPerTurn >= 0,
-              costPerMinute.isFinite,
-              costPerMinute > 0 else {
-            return nil
-        }
-        let duration = costPerTurn / costPerMinute
-        return duration.isFinite && duration >= 0 ? duration : nil
-    }
 }
 
 struct CharacterTurnCostSnapshot: Decodable, Sendable {
@@ -57,6 +48,10 @@ final class CharacterTurnCostStore: ObservableObject {
         let likedCount: Int
         let dislikedCount: Int
         let evaluationScore: Int?
+        let evaluationIsProvisional: Bool
+        let failedRate: Double?
+        let interruptedRate: Double?
+        let report: CharacterEvaluationReport
     }
 
     @Published private(set) var averages: [String: Average] = [:]
@@ -65,25 +60,25 @@ final class CharacterTurnCostStore: ObservableObject {
     func apply(_ snapshot: CharacterTurnCostSnapshot?) {
         guard let snapshot, snapshot.version > version else { return }
         version = snapshot.version
-        let medianDuration = Self.median(
-            snapshot.characters.compactMap(\.averageTurnDurationMinutes)
+        let medianCost = Self.median(
+            snapshot.characters.compactMap(\.averageCostPerMinuteUsd)
         )
         var next: [String: Average] = [:]
         for summary in snapshot.characters {
             let likedCount = max(0, summary.likedCount ?? 0)
             let dislikedCount = max(0, summary.dislikedCount ?? 0)
+            let report = CharacterEvaluationReport(summary: summary, medianCost: medianCost)
             next[summary.characterId] = Average(
                 costUsd: summary.averageCostUsd,
                 costPerMinuteUsd: summary.averageCostPerMinuteUsd,
-                turnCount: summary.pricedTurnCount,
+                turnCount: summary.finishedTurnCount ?? summary.pricedTurnCount,
                 likedCount: likedCount,
                 dislikedCount: dislikedCount,
-                evaluationScore: Self.evaluationScore(
-                    summary: summary,
-                    likedCount: likedCount,
-                    dislikedCount: dislikedCount,
-                    medianDuration: medianDuration
-                )
+                evaluationScore: report.totalScore,
+                evaluationIsProvisional: report.isProvisional,
+                failedRate: report.failedRate,
+                interruptedRate: report.interruptedRate,
+                report: report
             )
         }
         if next != averages { averages = next }
@@ -101,25 +96,6 @@ final class CharacterTurnCostStore: ObservableObject {
         return sorted[middle]
     }
 
-    private static func evaluationScore(
-        summary: CharacterTurnCostSummary,
-        likedCount: Int,
-        dislikedCount: Int,
-        medianDuration: Double?
-    ) -> Int? {
-        guard summary.pricedTurnCount > 0 else { return nil }
-        let satisfaction = Double(likedCount + 2)
-            / Double(likedCount + dislikedCount + 4) * 70
-        let persistence: Double
-        if let duration = summary.averageTurnDurationMinutes,
-           let medianDuration,
-           medianDuration > 0 {
-            persistence = 30 * duration / (duration + medianDuration)
-        } else {
-            persistence = 15
-        }
-        return Int(min(100, max(0, satisfaction + persistence)).rounded())
-    }
 }
 
 // 대화 카드와 독립된 작은 뷰라 비용·평가 갱신이 카드 전체를 다시 그리지 않는다.
@@ -127,12 +103,24 @@ final class CharacterTurnCostStore: ObservableObject {
 struct CharacterTurnCostFooter: View {
     @ObservedObject var store: CharacterTurnCostStore
     @ObservedObject var selection: CharacterSelectionStore
+    let characterName: (OfficeCharacter) -> String
+    @State private var reportTarget: ReportTarget?
+
+    private struct ReportTarget: Identifiable {
+        let id: String
+        let name: String
+    }
 
     var body: some View {
         let average = selection.selectedCharacterID.flatMap {
             store.averages[$0.rawValue]
         }
-        HStack(spacing: 7) {
+        Button {
+            if let id = selection.selectedCharacterID {
+                reportTarget = ReportTarget(id: id.rawValue, name: characterName(id))
+            }
+        } label: {
+          HStack(spacing: 7) {
             Text(average.map {
                 OfficeLocalization.format(
                     "1턴당 평균 비용(추정) %@ · 분당 %@ · 전체 %d턴",
@@ -143,7 +131,7 @@ struct CharacterTurnCostFooter: View {
             } ?? OfficeLocalization.string("1턴당 평균 비용(추정) — · 분당 —"))
             .lineLimit(1)
             .minimumScaleFactor(0.75)
-            .help(OfficeLocalization.string("전체 기간 · 비용이 기록된 종료 턴의 소요 시간 합계 기준"))
+            .help(OfficeLocalization.string("전체 종료 턴 집계 · 비용 평균은 비용이 기록된 턴 기준"))
 
             if let average {
                 Label("\(average.likedCount)", systemImage: "heart.fill")
@@ -158,10 +146,13 @@ struct CharacterTurnCostFooter: View {
                     .accessibilityLabel(OfficeLocalization.format("싫어요 %d건", average.dislikedCount))
 
                 if let score = average.evaluationScore {
-                    Label("\(score)", systemImage: "star.fill")
+                    Label("\(score)\(average.evaluationIsProvisional ? "*" : "")", systemImage: "star.fill")
                         .foregroundStyle(Color.yellow.opacity(0.85))
                         .fixedSize()
-                        .help(OfficeLocalization.format("종합 평가 %d점", score))
+                        .help(OfficeLocalization.format(
+                            "종합 평가 %d점 · 만족 30 / 분당 비용 20 / 실패율 30 / 중단율 20 · 실패 %.1f%% / 중단 %.1f%% · * 평가 10건 미만 또는 비용 미확인",
+                            score, (average.failedRate ?? 0) * 100, (average.interruptedRate ?? 0) * 100
+                        ))
                         .accessibilityLabel(OfficeLocalization.format("종합 평가 %d점", score))
                 }
             }
@@ -171,6 +162,14 @@ struct CharacterTurnCostFooter: View {
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.horizontal, 20)
         .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(selection.selectedCharacterID == nil)
+        .accessibilityLabel(OfficeLocalization.string("직원 평가 상세 열기"))
         .accessibilityIdentifier("characterAverageTurnCost")
+        .sheet(item: $reportTarget) { target in
+            CharacterEvaluationReportSheet(store: store, characterID: target.id, name: target.name)
+        }
     }
 }

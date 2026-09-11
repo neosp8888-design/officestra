@@ -29,6 +29,13 @@ export class CharacterTurnCostSummaryCache {
         const generation = this.generation;
         this.pending = Promise.resolve().then(() => this.pool.query(`
           SELECT character.id AS "characterId",
+            COUNT(DISTINCT turn.id)::integer AS "finishedTurnCount",
+            COUNT(DISTINCT turn.id) FILTER (
+              WHERE turn.status = 'failed'
+            )::integer AS "failedTurnCount",
+            COUNT(DISTINCT turn.id) FILTER (
+              WHERE turn.status = 'interrupted'
+            )::integer AS "interruptedTurnCount",
             COUNT(usage.cost_usd)::integer AS "pricedTurnCount",
             COALESCE(SUM(usage.cost_usd), 0)::double precision AS "totalCostUsd",
             COALESCE(SUM(usage.cost_usd) FILTER (

@@ -644,7 +644,8 @@ private struct OfficeGameView: View {
 
             CharacterTurnCostFooter(
                 store: director.turnCostStore,
-                selection: director.characterSelectionStore
+                selection: director.characterSelectionStore,
+                characterName: { director.displayName(for: $0) }
             )
 
             Divider()
