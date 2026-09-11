@@ -80,6 +80,8 @@ private struct ArchiveRecordTile: View {
                     }
                     .font(.system(size: 8.5, weight: .bold))
 
+                    EmployeeMessageSenderLabel(sender: EmployeeMessageSender.resolve(turn.promptSender, prompt: turn.prompt))
+
                     Text(recordTitle)
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Color.primary.opacity(0.82))
@@ -383,6 +385,8 @@ struct ArchiveOpenBook: View {
                 )
 
                 pageHeading("업무", systemImage: "text.quote")
+
+                EmployeeMessageSenderLabel(sender: EmployeeMessageSender.resolve(turn.promptSender, prompt: turn.prompt))
 
                 if !promptPresentation.text.isEmpty {
                     Text(promptPresentation.text)

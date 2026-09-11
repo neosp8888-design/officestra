@@ -906,7 +906,7 @@ test('유휴 터미널 API는 같은 CLI 훅 접수 후에만 202 turnId를 반�
   const f = await dispatchFixture(t);
   const runtime = new AgentRuntime({ pool: {}, withTransaction: async () => {}, workdir: '/tmp/office', broadcast() {} });
   runtime.setTerminalSessionRegistry(f.manager);
-  const result = runtime.start({ characterID: 'boss', prompt: '답변해줘' });
+  const result = runtime.start({ characterID: 'boss', prompt: '답변해줘', senderCharacterID: 'right-man' });
   let settled = false; result.then(() => { settled = true; });
   await waitUntil(() => f.events.some(e => e.type === 'terminal.dispatch'));
   assert.equal(f.runtime.begun.length, 0);
@@ -915,6 +915,7 @@ test('유휴 터미널 API는 같은 CLI 훅 접수 후에만 202 turnId를 반�
   const started = await f.submit(prompt);
   assert.deepEqual(await result, { turnId: started.turnId, conversationId: 'conversation', status: 'running' });
   assert.equal(f.runtime.begun[0].prompt, '답변해줘');
+  assert.equal(f.runtime.begun[0].senderCharacterID, 'right-man');
   assert.equal(f.manager.sessions.size, 1);
   await f.manager.handleEvent('boss', { source: 'claude', payload: { hook_event_name: 'Stop', last_assistant_message: '회신' } });
   assert.equal(f.runtime.completed[0].turnID, started.turnId);
@@ -948,6 +949,7 @@ test('터미널 소유권·epoch·중복claim·사용자입력 혼입은 전달 
   await f.submit(prompt + ' altered');
   assert.ok(f.state.dispatch);
   assert.equal(f.runtime.begun[0].prompt, prompt + ' altered');
+  assert.equal(f.runtime.begun[0].senderCharacterID, null);
   await f.manager.close('boss'); await failure;
 });
 

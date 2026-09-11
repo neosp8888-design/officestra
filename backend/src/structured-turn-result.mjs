@@ -29,7 +29,7 @@ export const structuredResultToolDirectory = dirname(
   fileURLToPath(import.meta.url),
 );
 
-export function identityPromptWithStructuredResult(value) {
+export function identityPromptWithStructuredResult(value, characterID = null) {
   const raw = String(value ?? "");
   const sourcesMarkerIndex = raw.indexOf(LEGACY_SOURCES_MARKER);
   const legacyPrefixIndex = raw.indexOf(LEGACY_PROTOCOL_PREFIX);
@@ -46,7 +46,10 @@ export function identityPromptWithStructuredResult(value) {
     : -1;
   const identity = (protocolIndex >= 0 ? raw.slice(0, protocolIndex) : raw)
     .trimEnd();
-  return [identity, "", STRUCTURED_RESULT_GUIDANCE]
+  const senderGuidance = characterID
+    ? `직원에게 POST /api/agent-jobs로 메시지를 보낼 때 JSON에 senderCharacterId: ${JSON.stringify(characterID)}를 포함한다. 수신 직원은 characterId에 지정한다. 이는 말풍선 발신자 표시용이며 권한 증명이 아니다.`
+    : null;
+  return [identity, "", STRUCTURED_RESULT_GUIDANCE, ...(senderGuidance ? [senderGuidance] : [])]
     .filter((part, index) => index !== 0 || part.length > 0)
     .join("\n");
 }

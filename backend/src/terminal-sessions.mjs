@@ -108,7 +108,7 @@ export function terminalArguments({
         "--settings", terminalHookSettings(character),
       ];
       if (character.model) args.push("--model", character.model);
-      args.push("--append-system-prompt", identityPromptWithStructuredResult(character.identityPrompt));
+      args.push("--append-system-prompt", identityPromptWithStructuredResult(character.identityPrompt, character.id));
       if (previousSessionID) args.push("--resume", previousSessionID);
       return args;
     }
@@ -121,7 +121,7 @@ export function terminalArguments({
         "-c", `service_tier=${quotedConfig(character.fastMode ? "fast" : "default")}`,
         "-c", 'model_reasoning_summary="detailed"',
         "-c", "show_raw_agent_reasoning=true",
-        "-c", `developer_instructions=${quotedConfig(identityPromptWithStructuredResult(character.identityPrompt))}`,
+        "-c", `developer_instructions=${quotedConfig(identityPromptWithStructuredResult(character.identityPrompt, character.id))}`,
         "-s", character.permission,
         "-c", `notify=${JSON.stringify([nodePath, hookPath])}`,
       );
@@ -715,7 +715,7 @@ export class TerminalSessionManager {
 
   // Not a queue: a busy session rejects immediately. A successful PTY write
   // is not acceptance; only the existing CLI hook/watcher can confirm a turn.
-  async dispatch({ characterID, prompt, conversationID, attachmentPaths = [] }) {
+  async dispatch({ characterID, prompt, conversationID, attachmentPaths = [], senderCharacterID = null }) {
     const state = this.sessions.get(String(characterID));
     if (this.runtime.draining) throw new AgentDrainingError('백엔드가 재시작 준비 중입니다.');
     if (!state || state.closed || state.closing || this.opening.has(String(characterID))) throw new AgentBusyError('터미널이 아직 준비되지 않았습니다.');
@@ -732,7 +732,7 @@ export class TerminalSessionManager {
     const result = new Promise((yes, no) => { resolve = yes; reject = no; });
     result.catch(() => {}); // The timeout may fire while the DB preflight awaits.
     // Install the lock before the first await, including the DB busy check.
-    const pending = { id, text, wire: `[OFFICESTRA_REQUEST:${id}]\n${text}`, claimed: false, resolve, reject, expiresAt: Date.now() + this.dispatchTimeoutMs };
+    const pending = { id, text, senderCharacterID, wire: `[OFFICESTRA_REQUEST:${id}]\n${text}`, claimed: false, resolve, reject, expiresAt: Date.now() + this.dispatchTimeoutMs };
     state.dispatch = pending;
     pending.timer = setTimeout(() => {
       if (state.dispatch !== pending) return;
@@ -782,7 +782,7 @@ export class TerminalSessionManager {
   async beginDispatchedTurn(state, options) {
     const pending = state.dispatch;
     const matches = pending?.claimed && String(options.prompt ?? '').trim() === pending.wire;
-    const turn = await this.runtime.beginTerminalTurn({ ...options, prompt: matches ? pending.text : options.prompt });
+    const turn = await this.runtime.beginTerminalTurn({ ...options, prompt: matches ? pending.text : options.prompt, senderCharacterID: matches ? pending.senderCharacterID : null });
     state.runningTurnID = turn.turnID;
     if (matches) {
       clearTimeout(pending.timer);

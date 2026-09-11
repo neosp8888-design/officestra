@@ -215,6 +215,7 @@ private struct TurnDisclosure: View {
             .padding(.top, 8)
         } label: {
             VStack(alignment: .leading, spacing: 3) {
+                EmployeeMessageSenderLabel(sender: EmployeeMessageSender.resolve(turn.promptSender, prompt: turn.prompt))
                 Text(promptPresentation.text)
                     .font(.system(size: 15, weight: .semibold))
                     .lineLimit(1)
@@ -255,6 +256,7 @@ private struct TurnDisclosure: View {
 
     private var taskPromptBlock: some View {
         VStack(alignment: .leading, spacing: 5) {
+            EmployeeMessageSenderLabel(sender: EmployeeMessageSender.resolve(turn.promptSender, prompt: turn.prompt))
             Text(OfficeLocalization.string("업무"))
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(.secondary)
@@ -518,6 +520,7 @@ private struct ArchiveTurnCard: View {
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(.secondary)
                     }
+                    EmployeeMessageSenderLabel(sender: EmployeeMessageSender.resolve(turn.promptSender, prompt: turn.prompt))
                     Text(promptPresentation.text)
                         .font(.system(size: 14, weight: .medium))
                         .lineLimit(1)
@@ -550,6 +553,7 @@ private struct ArchiveTurnCard: View {
 
     private var taskPromptBlock: some View {
         VStack(alignment: .leading, spacing: 5) {
+            EmployeeMessageSenderLabel(sender: EmployeeMessageSender.resolve(turn.promptSender, prompt: turn.prompt))
             Text(OfficeLocalization.string("업무"))
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(.secondary)

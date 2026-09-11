@@ -5161,7 +5161,12 @@ test("worktree가 없는 활성 CLI 세션은 종료하지 않고 다음 업무�
     prompt: "다음 업무",
     conversationID: "22222222-2222-2222-2222-222222222222",
     isolateGitWorkdir: true,
+    senderCharacterID: "right-man",
   });
+
+  const senderInsert = queries.find(({ text }) => /INSERT INTO turns/.test(text));
+  assert.match(senderInsert.text, /sender_character_id/);
+  assert.equal(senderInsert.values[8], "right-man");
 
   assert.equal(prepared.sessionID, "session-1");
   assert.equal(prepared.externalSessionID, "external-1");

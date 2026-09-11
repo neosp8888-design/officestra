@@ -470,6 +470,7 @@ export class AgentRuntime {
     prompt,
     conversationID,
     attachmentPaths = [],
+    senderCharacterID = null,
   }) {
     const cleanPrompt = String(prompt ?? "").trim();
     if (!cleanPrompt && attachmentPaths.length === 0) {
@@ -492,6 +493,7 @@ export class AgentRuntime {
         prompt: cleanPrompt || "첨부 파일을 확인해줘.",
         conversationID: conversationID || randomUUID(),
         isolateGitWorkdir: false,
+        senderCharacterID,
       });
       const recordPrompt = cleanPrompt || "첨부 파일을 확인해줘.";
       attachments = stageAttachments({
@@ -1019,6 +1021,7 @@ export class AgentRuntime {
     prompt,
     conversationID,
     isolateGitWorkdir = false,
+    senderCharacterID = null,
   }) {
     return this.withTransaction(async (client) => {
       await client.query(
@@ -1222,11 +1225,12 @@ export class AgentRuntime {
             effort,
             fast_mode,
             prompt,
+            sender_character_id,
             status,
             started_at,
             updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', now(), now())
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', now(), now())
         `,
         [
           turnID,
@@ -1237,6 +1241,7 @@ export class AgentRuntime {
           character.effort,
           character.fastMode,
           prompt,
+          senderCharacterID,
         ],
       );
       await client.query(
@@ -1697,6 +1702,7 @@ export class AgentRuntime {
     prompt,
     startedAt = new Date(),
     execution = null,
+    senderCharacterID = null,
   }) {
     const cleanPrompt = String(prompt ?? "").trim();
     if (!cleanPrompt) throw new Error("터미널 프롬프트가 비어 있습니다.");
@@ -1739,9 +1745,9 @@ export class AgentRuntime {
         `
           INSERT INTO turns (
             id, cli_session_id, backend, model, effort, fast_mode,
-            origin, prompt, status, started_at, updated_at
+            origin, prompt, status, started_at, updated_at, sender_character_id
           )
-          VALUES ($1, $2, $3, $4, $5, $6, 'terminal', $7, 'running', $8, now())
+          VALUES ($1, $2, $3, $4, $5, $6, 'terminal', $7, 'running', $8, now(), $9)
         `,
         [
           turnID,
@@ -1752,6 +1758,7 @@ export class AgentRuntime {
           settings.fastMode,
           cleanPrompt,
           startedAt,
+          senderCharacterID,
         ],
       );
       await client.query(
@@ -5530,7 +5537,7 @@ export function claudePersistentWorkerSignature({
 }
 
 function configuredIdentityPrompt(character) {
-  return identityPromptWithStructuredResult(character.identityPrompt);
+  return identityPromptWithStructuredResult(character.identityPrompt, character.id);
 }
 
 export function promptWithAttachments(prompt, attachments) {

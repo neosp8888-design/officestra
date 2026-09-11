@@ -3258,6 +3258,7 @@ struct LiveWorkspaceFeed: View, Equatable {
                                             prompt: turn.prompt
                                         ),
                                         sentAt: turn.startedAt,
+                                        sender: EmployeeMessageSender.resolve(turn.promptSender, prompt: turn.prompt),
                                         selectionID: turn.id
                                     )
 
@@ -4095,6 +4096,7 @@ private struct EquatableLiveTurnCard: View, Equatable {
 struct LiveTurnPromptBlock: View {
     let presentation: TaskPromptPresentation
     var sentAt: Date?
+    var sender: EmployeeMessageSender? = nil
     var selectionID: String? = nil
 
     @State private var didCopy = false
@@ -4123,6 +4125,7 @@ struct LiveTurnPromptBlock: View {
 
     private var bubble: some View {
         VStack(alignment: .leading, spacing: 7) {
+            EmployeeMessageSenderLabel(sender: sender)
             if !presentation.text.isEmpty {
                 // maxWidth를 주면 짧은 질문에도 말풍선이 최대 폭까지
                 // 벌어져 오른쪽이 허전해 보인다. 내용 크기로 둔다.

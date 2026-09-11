@@ -761,6 +761,8 @@ async function characterHistory(response, characterID) {
         t.effort AS "executionEffort",
         t.fast_mode AS "executionFastMode",
         t.origin,
+        (SELECT jsonb_build_object('characterId', sender.id, 'name', sender.name)
+         FROM characters sender WHERE sender.id = t.sender_character_id) AS "promptSender",
         t.provider_kind AS "providerKind",
         (t.provider_snapshot->'profile'->>'contextWindow')::integer AS "providerContextWindow",
         COALESCE(
@@ -846,6 +848,8 @@ async function globalHistory(response, url) {
         t.effort AS "executionEffort",
         t.fast_mode AS "executionFastMode",
         t.origin,
+        (SELECT jsonb_build_object('characterId', sender.id, 'name', sender.name)
+         FROM characters sender WHERE sender.id = t.sender_character_id) AS "promptSender",
         t.provider_kind AS "providerKind",
         (t.provider_snapshot->'profile'->>'contextWindow')::integer AS "providerContextWindow",
         s.external_id AS "externalSessionId",
@@ -1201,6 +1205,8 @@ async function queryTurnFeed({
         t.effort,
         t.fast_mode AS "fastMode",
         t.origin,
+        (SELECT jsonb_build_object('characterId', sender.id, 'name', sender.name)
+         FROM characters sender WHERE sender.id = t.sender_character_id) AS "promptSender",
         t.provider_kind AS "providerKind",
         (t.provider_snapshot->'profile'->>'contextWindow')::integer AS "providerContextWindow",
         s.external_id AS "externalSessionId",
@@ -1530,12 +1536,20 @@ async function startAgentJob(response, body) {
     return;
   }
 
+  if (body.senderCharacterId != null) {
+    const sender = await pool.query('SELECT id FROM characters WHERE id = $1', [String(body.senderCharacterId)]);
+    if (!sender.rowCount) {
+      send(response, 400, { error: "발신 직원을 찾을 수 없습니다." });
+      return;
+    }
+  }
   try {
     const job = await runtime.start({
       characterID: String(body.characterId ?? ""),
       prompt: body.prompt,
       conversationID: body.conversationId,
       attachmentPaths: body.attachmentPaths,
+      senderCharacterID: body.senderCharacterId ?? null,
     });
     send(response, 202, job);
   } catch (error) {

@@ -12,6 +12,7 @@
   {"source":"같은 직원 설정을 두 번 보낼 수 없습니다: {0}","translation":"Cannot submit settings for the same teammate twice: {0}"},
   {"source":"캐릭터를 찾을 수 없습니다: {0}","translation":"Teammate not found: {0}"},
   {"source":"캐릭터를 찾을 수 없습니다.","translation":"Teammate not found."},
+  {"source":"발신 직원을 찾을 수 없습니다.","translation":"Sender teammate not found."},
   {"source":"CLI 실행기가 준비된 뒤 설정을 변경하세요.","translation":"Wait until the CLI runner is ready before changing settings."},
   {"source":"백엔드가 이미 다른 안전 전환을 준비 중입니다.","translation":"The backend is already preparing another safe transition."},
   {"source":"실행 중인 업무와 승인·병합 후속 처리가 끝난 뒤 설정을 변경하세요.","translation":"Wait for active tasks and approval or merge operations to finish before changing settings."},

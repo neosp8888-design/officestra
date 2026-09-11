@@ -1223,6 +1223,7 @@ struct HistorySession: Decodable, Identifiable, Sendable {
 }
 
 struct HistoryTurn: Decodable, Identifiable, Sendable {
+    var promptSender: EmployeeMessageSender? = nil
     let id: String
     let sessionId: String
     let prompt: String
@@ -1245,6 +1246,7 @@ struct HistoryTurn: Decodable, Identifiable, Sendable {
 }
 
 struct GlobalHistoryTurn: Decodable, Identifiable, Sendable {
+    var promptSender: EmployeeMessageSender? = nil
     let id: String
     let characterId: String
     let characterName: String
@@ -1564,6 +1566,7 @@ struct LiveFeedSource: Decodable, Identifiable, Equatable, Sendable {
 }
 
 struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
+    let promptSender: EmployeeMessageSender?
     let providerKind: String?
     let id: String
     let characterId: String
@@ -1604,6 +1607,7 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
         fastMode: Bool?,
         origin: String? = nil,
         providerKind: String? = nil,
+        promptSender: EmployeeMessageSender? = nil,
         externalSessionId: String?,
         conversationWorkdir: String?,
         prompt: String,
@@ -1633,6 +1637,7 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
         self.fastMode = fastMode
         self.origin = origin
         self.providerKind = providerKind
+        self.promptSender = promptSender
         self.externalSessionId = externalSessionId
         self.conversationWorkdir = conversationWorkdir
         self.prompt = prompt
@@ -1669,6 +1674,7 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
             fastMode: fastMode,
             origin: origin,
             providerKind: providerKind,
+            promptSender: promptSender,
             externalSessionId: externalSessionId,
             conversationWorkdir: conversationWorkdir,
             prompt: prompt,
@@ -1704,6 +1710,7 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
             fastMode: fastMode,
             origin: origin,
             providerKind: providerKind,
+            promptSender: promptSender,
             externalSessionId: externalSessionId,
             conversationWorkdir: conversationWorkdir,
             prompt: prompt,

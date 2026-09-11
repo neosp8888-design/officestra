@@ -29,6 +29,13 @@ import {
 const RAG_DOCUMENT_ID = "11111111-1111-4111-8111-111111111111";
 const WORK_RECORD_ID = "22222222-2222-4222-8222-222222222222";
 
+test('직원 API 발신자 안내는 실제 직원 ID를 사용하고 중복되지 않는다', () => {
+  const once = identityPromptWithStructuredResult('업무 지침', 'right-man');
+  assert.match(once, /senderCharacterId: "right-man"/);
+  assert.equal(identityPromptWithStructuredResult(once, 'right-man'), once);
+  assert.doesNotMatch(identityPromptWithStructuredResult('사용자 지침'), /senderCharacterId/);
+});
+
 test("후속 응답용 근거 조회는 파일을 소비하지 않고 새 근거도 보존한다", () => {
   const path = prepareStructuredTurnResult({ workdir: "/followup-test", characterID: "followup-test" });
   try {
