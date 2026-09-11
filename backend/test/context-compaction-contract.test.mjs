@@ -14,14 +14,18 @@ const lowerBoundMigrationSource = readFileSync(
   new URL("../../database/migrations/032_auto_compact_lower_bound.sql", import.meta.url),
   "utf8",
 );
-const agentsInstructions = readFileSync(
-  new URL("../../AGENTS.md", import.meta.url),
-  "utf8",
-);
-const claudeInstructions = readFileSync(
-  new URL("../../CLAUDE.md", import.meta.url),
-  "utf8",
-);
+
+function readInstructionFile(relativePath) {
+  const fileUrl = new URL(relativePath, import.meta.url);
+  const content = readFileSync(fileUrl, "utf8");
+  if (content.trim().startsWith("@")) {
+    return readFileSync(new URL(content.trim().slice(1), fileUrl), "utf8");
+  }
+  return content;
+}
+
+const agentsInstructions = readInstructionFile("../../AGENTS.md");
+const claudeInstructions = readInstructionFile("../../CLAUDE.md");
 const directorSource = readFileSync(
   new URL("../../Sources/OfficeGame/AgentDirector.swift", import.meta.url),
   "utf8",
