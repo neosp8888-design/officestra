@@ -92,7 +92,7 @@ test("터미널은 동적으로 발견된 모델 이름과 추론 레벨을 그�
   assert.equal(antigravity[antigravity.indexOf("--effort") + 1], "low");
 });
 
-test("열린 터미널은 같은 직원의 두 번째 터미널과 GUI 업무를 막는다", async () => {
+test("열린 터미널은 두 번째 프로세스를 막고 진행 중 API 업무는 409다", async () => {
   const events = [];
   const runtime = fakeRuntime();
   const manager = new TerminalSessionManager({
@@ -111,9 +111,10 @@ test("열린 터미널은 같은 직원의 두 번째 터미널과 GUI 업무를
     broadcast() {},
   });
   agentRuntime.setTerminalSessionRegistry(manager);
+  manager.sessions.get('boss').runningTurnID = 'busy-turn';
   await assert.rejects(
     () => agentRuntime.start({ characterID: "boss", prompt: "GUI 업무" }),
-    (error) => error instanceof AgentBusyError && error.message === "터미널 모드에서 사용 중입니다.",
+    (error) => error instanceof AgentBusyError,
   );
   assert.equal(manager.list()[0].characterId, "boss");
   assert.equal(events.at(-1).type, "terminal.changed");
@@ -842,6 +843,7 @@ function fakeRuntime({
   permission = baseCharacter.permission,
 } = {}) {
   return {
+    pool: { query: async () => ({ rows: [] }) },
     begun: [],
     completed: [],
     interrupted: [],
@@ -884,6 +886,171 @@ async function waitUntil(predicate, timeoutMs = 1_000) {
   }
   assert.fail("조건이 제한 시간 안에 충족되지 않았습니다.");
 }
+
+async function dispatchFixture(t, timeout = 1_000) {
+  const runtime = fakeRuntime();
+  const events = [];
+  const manager = new TerminalSessionManager({ runtime, broadcast: e => events.push(e), dispatchTimeoutMs: timeout });
+  const spec = await manager.open('boss');
+  t.after(() => manager.close('boss'));
+  const state = manager.sessions.get('boss');
+  const control = (action, extra = {}) => manager.dispatchControl('boss', {
+    action, dispatchId: state.dispatch?.id, terminalSessionId: spec.terminalSessionId,
+    ownerToken: spec.ownerToken, ...extra,
+  });
+  const submit = prompt => manager.handleEvent('boss', { source: 'claude', payload: { hook_event_name: 'UserPromptSubmit', prompt } });
+  return { manager, runtime, state, spec, control, submit, events };
+}
+
+test('유휴 터미널 API는 같은 CLI 훅 접수 후에만 202 turnId를 반환한다', async t => {
+  const f = await dispatchFixture(t);
+  const runtime = new AgentRuntime({ pool: {}, withTransaction: async () => {}, workdir: '/tmp/office', broadcast() {} });
+  runtime.setTerminalSessionRegistry(f.manager);
+  const result = runtime.start({ characterID: 'boss', prompt: '답변해줘' });
+  let settled = false; result.then(() => { settled = true; });
+  await waitUntil(() => f.events.some(e => e.type === 'terminal.dispatch'));
+  assert.equal(f.runtime.begun.length, 0);
+  const { prompt } = f.control('claim');
+  await delay(5); assert.equal(settled, false);
+  const started = await f.submit(prompt);
+  assert.deepEqual(await result, { turnId: started.turnId, conversationId: 'conversation', status: 'running' });
+  assert.equal(f.runtime.begun[0].prompt, '답변해줘');
+  assert.equal(f.manager.sessions.size, 1);
+  await f.manager.handleEvent('boss', { source: 'claude', payload: { hook_event_name: 'Stop', last_assistant_message: '회신' } });
+  assert.equal(f.runtime.completed[0].turnID, started.turnId);
+});
+
+test('터미널 dispatch 중복·DB running·압축은 즉시409이며 예약하지 않는다', async t => {
+  const f = await dispatchFixture(t);
+  f.runtime.pool.query = async () => ({ rows: [{ id: 'running' }] });
+  await assert.rejects(f.manager.dispatch({ characterID: 'boss', prompt: 'a' }), AgentBusyError);
+  assert.equal(f.state.dispatch, null);
+  f.runtime.pool.query = async () => ({ rows: [] });
+  f.runtime.compactingCharacters = new Set(['boss']);
+  await assert.rejects(f.manager.dispatch({ characterID: 'boss', prompt: 'a' }), AgentBusyError);
+  f.runtime.compactingCharacters.clear();
+  const result = f.manager.dispatch({ characterID: 'boss', prompt: 'a' });
+  const failure = assert.rejects(result, AgentBusyError);
+  await assert.rejects(f.manager.dispatch({ characterID: 'boss', prompt: 'b' }), AgentBusyError);
+  await f.manager.close('boss'); await failure;
+  assert.equal(f.runtime.begun.length, 0);
+});
+
+test('터미널 소유권·epoch·중복claim·사용자입력 혼입은 전달 확정하지 않는다', async t => {
+  const f = await dispatchFixture(t);
+  const result = f.manager.dispatch({ characterID: 'boss', prompt: 'API 요청' });
+  const failure = assert.rejects(result, AgentBusyError);
+  await waitUntil(() => f.events.some(e => e.type === 'terminal.dispatch'));
+  assert.throws(() => f.control('claim', { ownerToken: 'wrong' }), AgentBusyError);
+  assert.throws(() => f.control('claim', { terminalSessionId: 'old-session' }), AgentBusyError);
+  const { prompt } = f.control('claim');
+  assert.throws(() => f.control('claim'), AgentBusyError);
+  await f.submit(prompt + ' altered');
+  assert.ok(f.state.dispatch);
+  assert.equal(f.runtime.begun[0].prompt, prompt + ' altered');
+  await f.manager.close('boss'); await failure;
+});
+
+test('앱이 입력충돌을 거부하면 턴 생성 없이409로 종료한다', async t => {
+  const f = await dispatchFixture(t);
+  const result = f.manager.dispatch({ characterID: 'boss', prompt: 'a' });
+  const failure = assert.rejects(result, AgentBusyError);
+  await waitUntil(() => f.events.some(e => e.type === 'terminal.dispatch'));
+  f.control('claim'); f.control('reject'); await failure;
+  assert.equal(f.state.dispatch, null); assert.equal(f.runtime.begun.length, 0);
+});
+
+test('잘못된 control 본문은409이고 늦은 미전송 확인은 잠금을 해제한다', async t => {
+  const f = await dispatchFixture(t, 35);
+  for (const body of [null, undefined, [], 'claim']) {
+    assert.throws(() => f.manager.dispatchControl('boss', body), AgentBusyError);
+  }
+  const result = f.manager.dispatch({ characterID: 'boss', prompt: '전송 안 됨' });
+  const failure = assert.rejects(result, AgentBusyError);
+  await waitUntil(() => f.events.some(e => e.type === 'terminal.dispatch'));
+  f.control('claim');
+  await failure;
+  assert.ok(f.state.dispatch.expired);
+  assert.throws(() => f.control('claim'), AgentBusyError);
+  f.control('reject');
+  assert.equal(f.state.dispatch, null);
+  assert.equal(f.runtime.begun.length, 0);
+});
+
+test('미수신 timeout은 해제, claim 이후 불확실 timeout은 재전송 차단 후 늦은 훅 수용', async t => {
+  const f = await dispatchFixture(t, 35);
+  await assert.rejects(f.manager.dispatch({ characterID: 'boss', prompt: '미수신' }), AgentBusyError);
+  assert.equal(f.state.dispatch, null);
+  const result = f.manager.dispatch({ characterID: 'boss', prompt: '늦은 접수' });
+  const failure = assert.rejects(result, AgentBusyError);
+  const { prompt } = f.control('claim');
+  await failure;
+  assert.ok(f.state.dispatch.expired);
+  await assert.rejects(f.manager.dispatch({ characterID: 'boss', prompt: '재시도' }), AgentBusyError);
+  await f.submit(prompt);
+  assert.equal(f.state.dispatch, null);
+  assert.equal(f.runtime.begun[0].prompt, '늦은 접수');
+});
+
+test('종료·명시적중단은 불확실 전달을 정리하고 제어문자·다른대화는 거부한다', async t => {
+  const f = await dispatchFixture(t);
+  for (const prompt of ['', 'a\u001bb', 'a\rb', 'a\0b']) {
+    await assert.rejects(f.manager.dispatch({ characterID: 'boss', prompt }));
+  }
+  await assert.rejects(f.manager.dispatch({ characterID: 'boss', prompt: 'x', conversationID: 'other' }), AgentBusyError);
+  const result = f.manager.dispatch({ characterID: 'boss', prompt: 'x', attachmentPaths: ['/tmp/example.png'] });
+  const failure = assert.rejects(result, AgentBusyError);
+  const { prompt } = f.control('claim'); assert.ok(prompt.endsWith('/tmp/example.png'));
+  await f.manager.interrupt('boss'); await failure;
+  assert.equal(f.state.dispatch, null);
+});
+
+test('공통 턴 시작 어댑터는 세 backend의 실제 본문과 turnId를 보존한다', async t => {
+  for (const backend of ['claude', 'codex', 'antigravity']) {
+    const f = await dispatchFixture(t);
+    const result = f.manager.dispatch({ characterID: 'boss', prompt: '같은 대화' });
+    const { prompt } = f.control('claim');
+    const turn = await f.state.beginTurn({ characterID: 'boss', sessionID: 'db-session', prompt, execution: { backend } });
+    assert.equal((await result).turnId, turn.turnID);
+    assert.equal(f.runtime.begun[0].execution.backend, backend);
+    assert.equal(f.runtime.begun[0].prompt, '같은 대화');
+  }
+});
+
+test('Antigravity SQLite 실제 감시 경로가 API 표식 턴을 연결하고 한 번만 완료한다', async t => {
+  const h = await antigravityWatcherHarness(t);
+  const result = h.manager.dispatch({ characterID: 'boss', prompt: '안티 회신' });
+  const { prompt } = h.manager.dispatchControl('boss', { action: 'claim', dispatchId: h.state.dispatch.id, terminalSessionId: h.state.terminalSessionID, ownerToken: h.state.ownerToken });
+  h.insert({ idx: 1, kind: 'user', text: prompt });
+  await h.watcher.sweep();
+  assert.equal((await result).turnId, h.state.runningTurnID);
+  assert.equal(h.runtime.begun[0].prompt, '안티 회신');
+  h.insert({ idx: 2, kind: 'assistant', text: '확인했습니다' });
+  await h.watcher.sweep(); await h.watcher.sweep();
+  assert.equal(h.runtime.begun.length, 1);
+  assert.equal(h.runtime.completed.length, 1);
+});
+
+test('Codex rollout 감시와 notify는 API 요청을 같은 턴으로 접수·완료한다', async t => {
+  const { sessionsRoot, workdir, rollout } = await codexFixture();
+  const runtime = fakeRuntime({ backend: 'codex', externalSessionID: codexThreadID, workdir, executablePath: '/usr/bin/true' });
+  const manager = new TerminalSessionManager({ runtime, broadcast() {}, codexSessionsRoot: sessionsRoot });
+  const spec = await manager.open('boss'); t.after(() => manager.close('boss'));
+  const state = manager.sessions.get('boss'); await state.watcher.sweep();
+  const result = manager.dispatch({ characterID: 'boss', prompt: '코덱스 회신' });
+  const { prompt } = manager.dispatchControl('boss', { action: 'claim', dispatchId: state.dispatch.id, terminalSessionId: spec.terminalSessionId, ownerToken: spec.ownerToken });
+  await appendFile(rollout, [
+    { type: 'turn_context', payload: { turn_id: codexTurnID, cwd: workdir } },
+    { type: 'event_msg', payload: { type: 'task_started', turn_id: codexTurnID, started_at: 1_788_347_510 } },
+    { type: 'event_msg', payload: { type: 'item_completed', turn_id: codexTurnID, item: { type: 'UserMessage', content: [{ type: 'text', text: prompt }] } } },
+  ].map(rolloutLine).join(''));
+  await state.watcher.sweep();
+  assert.equal((await result).turnId, state.runningTurnID);
+  assert.equal(runtime.begun[0].prompt, '코덱스 회신');
+  await appendFile(rollout, rolloutLine({ type: 'event_msg', payload: { type: 'task_complete', turn_id: codexTurnID, last_agent_message: '회신 완료', started_at: 1_788_347_510, completed_at: 1_788_347_513 } }));
+  await manager.handleEvent('boss', codexNotify(workdir, '회신 완료'));
+  assert.equal(runtime.begun.length, 1); assert.equal(runtime.completed.length, 1);
+});
 
 function encodeVarint(input) {
   let value = BigInt(input);

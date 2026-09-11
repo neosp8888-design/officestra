@@ -441,7 +441,7 @@ export class AgentRuntime {
 
     const characterID = String(options?.characterID ?? "");
     if (this.terminalSessionRegistry?.has(characterID)) {
-      throw new AgentBusyError("터미널 모드에서 사용 중입니다.");
+      return await this.terminalSessionRegistry.dispatch({ ...options, characterID });
     }
     if (
       this.compactingCharacters.has(characterID) ||

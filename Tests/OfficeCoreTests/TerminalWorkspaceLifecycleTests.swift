@@ -4,6 +4,53 @@ import AppKit
 
 final class TerminalWorkspaceLifecycleTests: XCTestCase {
     @MainActor
+    func testActualTerminalBufferAPIReadiness() {
+        let terminal = APIProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
+        terminal.feed(text: "\u{1b}[?2004h❯ ")
+        let cursor = terminal.getTerminal().getCursorLocation()
+        XCTAssertTrue(terminal.hasEmptyInput, "cursor=\(cursor), line=\(terminal.getTerminal().getLine(row: cursor.y)?.translateToString().debugDescription ?? "nil"), paste=\(terminal.getTerminal().bracketedPasteMode), marked=\(terminal.hasMarkedText()), scroll=\(terminal.scrollPosition), canScroll=\(terminal.canScroll)")
+        terminal.feed(text: "unfinished")
+        XCTAssertFalse(terminal.hasEmptyInput)
+        terminal.feed(text: "\r\u{1b}[2K❯ Allow command?")
+        XCTAssertFalse(terminal.hasEmptyInput)
+        terminal.feed(text: "\r\u{1b}[2K❯ ")
+        XCTAssertTrue(terminal.hasEmptyInput)
+        terminal.feed(text: "\u{1b}[?2004l")
+        XCTAssertFalse(terminal.hasEmptyInput)
+        for placeholder in ["Try \"fix typecheck errors\"", "Ask Codex to do anything"] {
+            terminal.feed(text: "\u{1b}[?2004h\r\u{1b}[2K❯ \u{1b}[2m\(placeholder)\u{1b}[22m\r\u{1b}[2C")
+            XCTAssertTrue(terminal.hasEmptyInput)
+            terminal.feed(text: "\r\u{1b}[2K❯ \(placeholder)\r\u{1b}[2C")
+            XCTAssertFalse(terminal.hasEmptyInput, "User text at cursor zero must not be treated as a suggestion")
+        }
+        terminal.feed(text: "\r\u{1b}[2K❯ ")
+        XCTAssertTrue(terminal.hasEmptyInput)
+        terminal.recordInput()
+        XCTAssertFalse(terminal.hasEmptyInput, "Wait for manual input's hook/watch status without queuing API input")
+    }
+    func testAPIInputRequiresAnEmptyPromptNotDraftOrMenu() {
+        for prefix in ["> ", "❯ ", "› "] {
+            XCTAssertTrue(TerminalAPIInputPolicy.isEmptyPrompt(prefix: prefix, suffix: "", bracketedPaste: true, atBottom: true))
+        }
+        XCTAssertTrue(TerminalAPIInputPolicy.isEmptyPrompt(prefix: "› ", suffix: "Ask Codex to do anything", bracketedPaste: true, atBottom: true, dimPlaceholder: true))
+        XCTAssertFalse(TerminalAPIInputPolicy.isEmptyPrompt(prefix: "› ", suffix: "Ask Codex to do anything", bracketedPaste: true, atBottom: true))
+        for (prefix, suffix) in [("❯ draft", ""), ("❯ ", "draft"), ("", ""), ("1. ", "Allow"), ("❯ ", "Allow command?")] {
+            XCTAssertFalse(TerminalAPIInputPolicy.isEmptyPrompt(prefix: prefix, suffix: suffix, bracketedPaste: true, atBottom: true))
+        }
+        XCTAssertFalse(TerminalAPIInputPolicy.isEmptyPrompt(prefix: "❯ ", suffix: "", bracketedPaste: false, atBottom: true))
+        XCTAssertFalse(TerminalAPIInputPolicy.isEmptyPrompt(prefix: "❯ ", suffix: "", bracketedPaste: true, atBottom: false))
+    }
+
+    func testTerminalDispatchRealtimeEnvelopeKeepsSessionEpoch() throws {
+        let json = Data(#"{"type":"terminal.dispatch","characterId":"boss","dispatchId":"request","terminalSessionId":"epoch"}"#.utf8)
+        let event = try JSONDecoder().decode(RealtimeFeedEvent.self, from: json)
+        XCTAssertEqual(event.dispatchId, "request")
+        XCTAssertEqual(event.terminalSessionId, "epoch")
+        XCTAssertEqual(event.officeCharacter, .boss)
+        let old = try JSONDecoder().decode(RealtimeFeedEvent.self, from: Data(#"{"type":"terminal.changed"}"#.utf8))
+        XCTAssertNil(old.dispatchId)
+    }
+    @MainActor
     func testMountedTerminalReleasesSelectionGateForRepeatedSwitching() async {
         let selectionStore = CharacterSelectionStore()
         let view = CachedTerminalWorkspacesNSView()

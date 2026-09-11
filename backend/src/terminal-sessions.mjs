@@ -1,6 +1,6 @@
 // 앱이 소유한 PTY의 실행 명세, 직원 잠금, CLI 턴 기록을 관리한다.
 
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes, timingSafeEqual } from "node:crypto";
 import { createRequire } from "node:module";
 import {
   closeSync,
@@ -436,7 +436,7 @@ class AntigravityTerminalWatcher {
           this.state.runningTurnID = null;
         }
         if (this.currentTurn) resetTerminalArtifacts(this.state);
-        const turn = await this.runtime.beginTerminalTurn({
+        const turn = await (this.state.beginTurn ?? this.runtime.beginTerminalTurn.bind(this.runtime))({
           characterID: this.state.characterID,
           sessionID: this.state.sessionID,
           prompt: event.text,
@@ -657,7 +657,7 @@ class CodexTerminalWatcher {
       // 한 턴을 못 만들어도 같은 묶음의 뒷줄은 계속 읽는다. 이미 읽은
       // 바이트는 다시 오지 않는다.
       try {
-        const turn = await this.runtime.beginTerminalTurn({
+        const turn = await (this.state.beginTurn ?? this.runtime.beginTerminalTurn.bind(this.runtime))({
           characterID: this.state.characterID,
           sessionID: this.state.sessionID,
           prompt: prompt.text,
@@ -698,6 +698,7 @@ export class TerminalSessionManager {
     baseEnvironment = process.env,
     antigravityPollIntervalMs = 1_000,
     antigravityDebounceMs = 500,
+    dispatchTimeoutMs = 20_000,
   }) {
     this.runtime = runtime;
     this.broadcast = broadcast;
@@ -709,6 +710,94 @@ export class TerminalSessionManager {
     this.antigravityDebounceMs = antigravityDebounceMs;
     this.sessions = new Map();
     this.opening = new Set();
+    this.dispatchTimeoutMs = dispatchTimeoutMs;
+  }
+
+  // Not a queue: a busy session rejects immediately. A successful PTY write
+  // is not acceptance; only the existing CLI hook/watcher can confirm a turn.
+  async dispatch({ characterID, prompt, conversationID, attachmentPaths = [] }) {
+    const state = this.sessions.get(String(characterID));
+    if (this.runtime.draining) throw new AgentDrainingError('백엔드가 재시작 준비 중입니다.');
+    if (!state || state.closed || state.closing || this.opening.has(String(characterID))) throw new AgentBusyError('터미널이 아직 준비되지 않았습니다.');
+    if (state.runningTurnID || state.dispatch || this.runtime.running?.has(characterID) ||
+        this.runtime.compactingCharacters?.has(characterID) || this.runtime.preparingCharacters?.has(characterID)) {
+      throw new AgentBusyError('이 직원의 현재 업무가 끝난 뒤 새 업무를 시작하세요.');
+    }
+    if (conversationID && conversationID !== state.conversationID) throw new AgentBusyError('터미널의 현재 대화와 일치하지 않습니다.');
+    if (!Array.isArray(attachmentPaths) || attachmentPaths.some(p => typeof p !== 'string' || !p.startsWith('/') || /[\r\n]/.test(p))) throw new Error('Invalid terminal attachments');
+    const text = [String(prompt ?? '').trim(), ...attachmentPaths].filter(Boolean).join('\n');
+    if (!text || Buffer.byteLength(text) > 256_000 || /[\x00-\x08\x0b-\x1f\x7f]/.test(text)) throw new Error('Invalid terminal prompt');
+    const id = randomUUID();
+    let resolve, reject;
+    const result = new Promise((yes, no) => { resolve = yes; reject = no; });
+    result.catch(() => {}); // The timeout may fire while the DB preflight awaits.
+    // Install the lock before the first await, including the DB busy check.
+    const pending = { id, text, wire: `[OFFICESTRA_REQUEST:${id}]\n${text}`, claimed: false, resolve, reject, expiresAt: Date.now() + this.dispatchTimeoutMs };
+    state.dispatch = pending;
+    pending.timer = setTimeout(() => {
+      if (state.dispatch !== pending) return;
+      pending.expired = true;
+      // Once claimed the app might already have written to the PTY. Preserve
+      // the lock until a matching hook, explicit interrupt, or session close.
+      if (!pending.claimed) state.dispatch = null;
+      reject(new AgentBusyError('터미널의 접수를 확인하지 못했습니다. 자동 재전송하지 않았습니다. 터미널을 확인하세요.'));
+    }, this.dispatchTimeoutMs);
+    void (async () => { try {
+      const busy = await this.runtime.pool.query("SELECT t.id FROM turns t JOIN cli_sessions s ON s.id=t.cli_session_id WHERE s.character_id=$1 AND t.status IN ('pending','running') LIMIT 1", [characterID]);
+      if (busy.rows.length || state.closed || state.closing || state.runningTurnID || pending.expired || state.dispatch !== pending) throw new AgentBusyError('터미널의 현재 업무가 끝난 뒤 시작하세요.');
+      this.broadcast({ type: 'terminal.dispatch', characterId: characterID, dispatchId: id, terminalSessionId: state.terminalSessionID });
+    } catch (error) {
+      clearTimeout(pending.timer);
+      if (state.dispatch === pending) state.dispatch = null;
+      reject(error);
+    } })();
+    return await result;
+  }
+
+  dispatchControl(characterID, body) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new AgentBusyError('잘못된 터미널 전달 확인입니다.');
+    const state = this.sessions.get(String(characterID));
+    const token = Buffer.from(String(body?.ownerToken ?? ''));
+    const expected = Buffer.from(state?.ownerToken ?? '');
+    if (!state || state.closed || state.closing || body.terminalSessionId !== state.terminalSessionID ||
+        !token.length || token.length !== expected.length || !timingSafeEqual(token, expected)) throw new AgentBusyError('터미널 소유 세션이 일치하지 않습니다.');
+    const pending = state.dispatch;
+    if (!pending || pending.id !== body.dispatchId) throw new AgentBusyError('만료되었거나 이미 처리한 터미널 요청입니다.');
+    if (body.action === 'claim') {
+      if (pending.expired || pending.claimed || state.runningTurnID || this.runtime.compactingCharacters?.has(characterID)) throw new AgentBusyError('터미널이 사용 중입니다.');
+      pending.claimed = true;
+      return { prompt: pending.wire, expiresAt: pending.expiresAt };
+    }
+    if (body.action === 'reject' && pending.claimed) {
+      // Only the owning app can certify that it did not write to the PTY.
+      // Accept this negative acknowledgement even after the HTTP deadline.
+      clearTimeout(pending.timer);
+      state.dispatch = null;
+      pending.reject(new AgentBusyError('터미널 입력 중이거나 입력창이 준비되지 않았습니다.'));
+      return { accepted: false };
+    }
+    throw new AgentBusyError('잘못된 터미널 전달 확인입니다.');
+  }
+
+  async beginDispatchedTurn(state, options) {
+    const pending = state.dispatch;
+    const matches = pending?.claimed && String(options.prompt ?? '').trim() === pending.wire;
+    const turn = await this.runtime.beginTerminalTurn({ ...options, prompt: matches ? pending.text : options.prompt });
+    state.runningTurnID = turn.turnID;
+    if (matches) {
+      clearTimeout(pending.timer);
+      state.dispatch = null;
+      pending.resolve({ turnId: turn.turnID, conversationId: state.conversationID, status: 'running' });
+    }
+    return turn;
+  }
+
+  cancelDispatch(state) {
+    const pending = state.dispatch;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    state.dispatch = null;
+    pending.reject(new AgentBusyError('터미널 전달이 취소되었습니다.'));
   }
 
   get size() { return this.sessions.size + this.opening.size; }
@@ -741,6 +830,7 @@ export class TerminalSessionManager {
       const terminalSessionID = randomUUID();
       state = {
         terminalSessionID,
+        ownerToken: randomBytes(32).toString('hex'),
         characterID: id,
         character,
         backend: character.backend,
@@ -774,6 +864,7 @@ export class TerminalSessionManager {
         }),
       };
       this.sessions.set(id, state);
+      state.beginTurn = options => this.beginDispatchedTurn(state, options);
       if (character.backend === "antigravity") {
         state.watcher = new AntigravityTerminalWatcher({
           state,
@@ -800,6 +891,7 @@ export class TerminalSessionManager {
       });
       const spec = {
         terminalSessionId: terminalSessionID,
+        ownerToken: state.ownerToken,
         executable: locateExecutable(character),
         args: terminalArguments({
           character,
@@ -892,7 +984,7 @@ export class TerminalSessionManager {
       let offset = 0;
       try { if (path) offset = statSync(path).size; } catch {}
       state.claudeTranscript = { path, offset };
-      const turn = await this.runtime.beginTerminalTurn({
+      const turn = await this.beginDispatchedTurn(state, {
         characterID: state.characterID,
         sessionID: state.sessionID,
         prompt: payload.prompt,
@@ -1012,7 +1104,7 @@ export class TerminalSessionManager {
         );
         state.runningTurnID = null;
       }
-      const started = await this.runtime.beginTerminalTurn({
+      const started = await this.beginDispatchedTurn(state, {
         characterID: state.characterID,
         sessionID: state.sessionID,
         prompt: turn.prompt,
@@ -1058,6 +1150,7 @@ export class TerminalSessionManager {
     if (!state || state.closed) {
       throw new Error("열린 터미널 세션을 찾을 수 없습니다.");
     }
+    this.cancelDispatch(state);
     const turnID = state.runningTurnID;
     if (!turnID) return { interrupted: false, turnId: null };
     await this.runtime.interruptTerminalTurn(id, turnID);
@@ -1073,6 +1166,8 @@ export class TerminalSessionManager {
     const id = String(characterID ?? "");
     const state = this.sessions.get(id);
     if (!state) return false;
+    state.closing = true;
+    this.cancelDispatch(state);
     if (state.watcher) await state.watcher.stop({ finalSweep: true });
     state.closed = true;
     await state.localRelease?.();

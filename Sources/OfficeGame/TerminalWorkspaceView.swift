@@ -3,6 +3,60 @@ import OfficeCore
 import SwiftTerm
 import SwiftUI
 
+struct TerminalAPIDispatch: Equatable, Sendable {
+    let id: String
+    let sessionID: String
+}
+
+enum TerminalAPIInputPolicy {
+    // Fail closed on drafts, multiline continuations, menus and unknown CLI
+    // layouts. This is checked again after the network claim, on the main actor.
+    static func isEmptyPrompt(prefix: String, suffix: String, bracketedPaste: Bool, atBottom: Bool, dimPlaceholder: Bool = false) -> Bool {
+        guard bracketedPaste, atBottom,
+              [">", "❯", "›"].contains(prefix.trimmingCharacters(in: .whitespaces)) else { return false }
+        let tail = suffix.trimmingCharacters(in: .whitespacesAndNewlines)
+        if tail.isEmpty { return true }
+        // Both installed CLIs render empty-field suggestions with SGR 2.
+        // Identical words typed by the user are not a placeholder.
+        return dimPlaceholder && (tail == "Ask Codex to do anything" ||
+            (tail.hasPrefix("Try \"") && tail.hasSuffix("\"")))
+    }
+}
+
+@MainActor
+final class APIProcessTerminalView: LocalProcessTerminalView {
+    var inputRevision = 0
+    private(set) var lastInputAt = -TimeInterval.infinity
+    func recordInput() {
+        inputRevision &+= 1
+        lastInputAt = ProcessInfo.processInfo.systemUptime
+    }
+    override func send(source: TerminalView, data: ArraySlice<UInt8>) {
+        recordInput()
+        super.send(source: source, data: data)
+    }
+    var hasEmptyInput: Bool {
+        // A just-submitted manual turn can precede the hook/watcher's running
+        // event. Reject during that short gap; never queue behind it.
+        guard !hasMarkedText(), ProcessInfo.processInfo.systemUptime - lastInputAt >= 2 else { return false }
+        let model = getTerminal()
+        let cursor = model.getCursorLocation()
+        guard let line = model.getLine(row: cursor.y) else { return false }
+        let suffix = line.translateToString(trimRight: true, startCol: cursor.x)
+        let endColumn = min(model.cols, cursor.x + suffix.utf16.count)
+        let dimPlaceholder = cursor.x < endColumn && (cursor.x..<endColumn).allSatisfy { column in
+            guard let cell = model.getCharData(col: column, row: cursor.y) else { return false }
+            return cell.attribute.style.contains(.dim)
+        }
+        return TerminalAPIInputPolicy.isEmptyPrompt(
+            prefix: line.translateToString(startCol: 0, endCol: cursor.x),
+            suffix: suffix,
+            bracketedPaste: model.bracketedPasteMode, atBottom: !canScroll || scrollPosition >= 0.999,
+            dimPlaceholder: dimPlaceholder
+        )
+    }
+}
+
 enum TerminalWorkspaceAppearance {
     static let foregroundColor = NSColor.white
     static let backgroundColor = NSColor.black
@@ -258,6 +312,10 @@ final class CachedTerminalWorkspacesNSView: NSView {
 }
 
 extension CachedTerminalWorkspacesNSView: TerminalInputSink {
+    func dispatch(_ request: TerminalAPIDispatch, to character: OfficeCharacter,
+                  canSend: @escaping @MainActor () -> Bool) {
+        entries[character]?.dispatch(request, canSend: canSend)
+    }
     func sendText(_ text: String, to character: OfficeCharacter) -> Bool {
         entries[character]?.sendText(text) ?? false
     }
@@ -274,7 +332,8 @@ private final class TerminalProcessHostView:
 {
     private let character: OfficeCharacter
     private let database: OfficeDatabaseClient
-    private var terminal: LocalProcessTerminalView?
+    private var terminal: APIProcessTerminalView?
+    private var launchSpecification: TerminalLaunchSpecification?
     private var launchTask: Task<Void, Never>?
     private var generation = 0
     private var isTerminating = false
@@ -418,7 +477,8 @@ private final class TerminalProcessHostView:
     ) {
         terminal?.processDelegate = nil
         terminal?.removeFromSuperview()
-        let terminal = LocalProcessTerminalView(frame: bounds)
+        launchSpecification = specification
+        let terminal = APIProcessTerminalView(frame: bounds)
         terminal.processDelegate = self
         terminal.translatesAutoresizingMaskIntoConstraints = false
         terminal.font = TerminalWorkspaceAppearance.font
@@ -472,6 +532,39 @@ private final class TerminalProcessHostView:
         )
         terminal.send(data: bytes[...])
         return true
+    }
+
+    func dispatch(_ request: TerminalAPIDispatch, canSend: @escaping @MainActor () -> Bool) {
+        guard let spec = launchSpecification, spec.terminalSessionId == request.sessionID,
+              let ownerToken = spec.ownerToken, let originalTerminal = terminal,
+              !isTerminating else { return }
+        let revision = originalTerminal.inputRevision
+        let originalGeneration = generation
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let claim = try await database.terminalDispatchControl(
+                    character: character, dispatchID: request.id, sessionID: request.sessionID,
+                    ownerToken: ownerToken, action: "claim"
+                )
+                guard let claim, Date().timeIntervalSince1970 * 1_000 < claim.expiresAt,
+                      generation == originalGeneration,
+                      terminal === originalTerminal, !isTerminating,
+                      originalTerminal.inputRevision == revision,
+                      canSend(), originalTerminal.hasEmptyInput else {
+                    _ = try? await database.terminalDispatchControl(
+                        character: character, dispatchID: request.id, sessionID: request.sessionID,
+                        ownerToken: ownerToken, action: "reject"
+                    )
+                    return
+                }
+                // No await between the last input check and the PTY write.
+                // The backend waits for the real CLI hook; never resend here.
+                _ = sendText(claim.prompt)
+            } catch {
+                // Lost claims/closed sessions must not cause a second write.
+            }
+        }
     }
 
     func sendInterrupt() -> Bool {

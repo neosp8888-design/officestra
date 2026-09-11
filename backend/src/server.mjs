@@ -286,13 +286,14 @@ function routeAgentJob(pathname) {
 
 function routeTerminalSession(pathname) {
   const match = pathname.match(
-    /^\/api\/terminal-sessions\/([^/]+)(?:\/(events|interrupt))?$/,
+    /^\/api\/terminal-sessions\/([^/]+)(?:\/(events|interrupt|dispatch))?$/,
   );
   return match
     ? {
       characterID: decodeURIComponent(match[1]),
       events: match[2] === "events",
       interrupt: match[2] === "interrupt",
+      dispatch: match[2] === "dispatch",
     }
     : null;
 }
@@ -2399,6 +2400,17 @@ const server = createServer(async (request, response) => {
       await openTerminalSession(response, await readJSON(request));
     } else if (
       request.method === "POST" &&
+      terminalSessionRoute?.dispatch
+    ) {
+      if (!trustedJSONMutation(request, response)) return;
+      try {
+        send(response, 200, terminalSessions.dispatchControl(terminalSessionRoute.characterID, await readJSON(request)));
+      } catch (error) {
+        if (error instanceof AgentBusyError) send(response, 409, { error: error.message });
+        else throw error;
+      }
+    } else if (
+      request.method === "POST" &&
       terminalSessionRoute?.events
     ) {
       if (!trustedJSONMutation(request, response)) return;
@@ -2421,6 +2433,7 @@ const server = createServer(async (request, response) => {
       request.method === "DELETE" &&
       terminalSessionRoute &&
       !terminalSessionRoute.events &&
+      !terminalSessionRoute.dispatch &&
       !terminalSessionRoute.interrupt
     ) {
       if (!trustedJSONMutation(request, response)) return;

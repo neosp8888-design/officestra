@@ -83,6 +83,21 @@ struct OfficeDatabaseClient: Sendable {
             .sessions
     }
 
+    func terminalDispatchControl(character: OfficeCharacter, dispatchID: String,
+                                 sessionID: String, ownerToken: String, action: String) async throws -> TerminalDispatchClaim? {
+        var request = URLRequest(url: baseURL.appending(path: "api/terminal-sessions/\(character.rawValue)/dispatch"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 10
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "dispatchId": dispatchID, "terminalSessionId": sessionID,
+            "ownerToken": ownerToken, "action": action,
+        ])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response, data: data)
+        return action == "claim" ? try JSONDecoder().decode(TerminalDispatchClaim.self, from: data) : nil
+    }
+
     func fetchLocalProviderStatuses() async throws -> [LocalProviderStatus] {
         let (data, response) = try await URLSession.shared.data(from: baseURL.appending(path: "api/local-profiles"))
         try validate(response, data: data)
@@ -1131,6 +1146,11 @@ struct TerminalInterruptResult: Decodable, Equatable, Sendable {
     let turnId: String?
 }
 
+struct TerminalDispatchClaim: Decodable, Sendable {
+    let prompt: String
+    let expiresAt: Double
+}
+
 struct StoredTerminalSession: Decodable, Identifiable, Equatable, Sendable {
     let terminalSessionId: String
     let characterId: String
@@ -1152,6 +1172,7 @@ struct TerminalLaunchSpecification: Decodable, Equatable, Sendable {
     let externalSessionId: String?
     let conversationId: String
     let backend: AgentBackend
+    let ownerToken: String?
 }
 
 struct CharacterSettingsBulkUpdate: Encodable, Equatable, Sendable {

@@ -150,6 +150,8 @@ struct RealtimeFeedEvent: Decodable, Equatable {
     let limitTokens: Int?
     let errorMessage: String?
     let compactingCharacterIds: [String]?
+    let dispatchId: String?
+    let terminalSessionId: String?
 
     init(
         type: String,
@@ -160,7 +162,9 @@ struct RealtimeFeedEvent: Decodable, Equatable {
         postTokens: Int? = nil,
         limitTokens: Int? = nil,
         errorMessage: String? = nil,
-        compactingCharacterIds: [String]? = nil
+        compactingCharacterIds: [String]? = nil,
+        dispatchId: String? = nil,
+        terminalSessionId: String? = nil
     ) {
         self.type = type
         self.turnId = turnId
@@ -171,6 +175,8 @@ struct RealtimeFeedEvent: Decodable, Equatable {
         self.limitTokens = limitTokens
         self.errorMessage = errorMessage
         self.compactingCharacterIds = compactingCharacterIds
+        self.dispatchId = dispatchId
+        self.terminalSessionId = terminalSessionId
     }
 }
 
@@ -186,6 +192,8 @@ struct TerminalRestartRequest: Equatable, Sendable {
 protocol TerminalInputSink: AnyObject {
     func sendText(_ text: String, to character: OfficeCharacter) -> Bool
     func interrupt(_ character: OfficeCharacter) -> Bool
+    func dispatch(_ request: TerminalAPIDispatch, to character: OfficeCharacter,
+                  canSend: @escaping @MainActor () -> Bool)
 }
 
 extension RealtimeFeedEvent {
@@ -2555,6 +2563,20 @@ final class AgentDirector: ObservableObject {
                 lines.joined(separator: "\n"),
                 for: character,
                 autoDismiss: false
+            )
+            return true
+
+        case "terminal.dispatch":
+            guard let character = event.officeCharacter,
+                  let id = event.dispatchId, let session = event.terminalSessionId else { return false }
+            terminalInputSink?.dispatch(
+                TerminalAPIDispatch(id: id, sessionID: session), to: character,
+                canSend: { [weak self] in
+                    guard let self else { return false }
+                    return self.isReadyForSubmissions && !self.isUpdatingConfiguration
+                        && !self.runningCharacters.contains(character)
+                        && !self.compactingCharacters.contains(character)
+                }
             )
             return true
 
