@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { PassThrough } from "node:stream";
 import test from "node:test";
@@ -13,6 +13,7 @@ import {
   parseClaudeRateLimits,
   parseCodexRateLimits,
   parseCodexSubscriptionExpiration,
+  probeAntigravityQuota,
   readClaudeRateLimits,
   readCodexRateLimits,
   readAntigravityRateLimits,
@@ -354,6 +355,56 @@ test("Antigravity 이미지 생성 쿨다운이 있으면 리셋 시각을 반�
 
   assert.equal(result.fiveHour.remaining, 95);
   assert.equal(result.imageResetAt, "2026-08-30T16:54:02.000Z");
+});
+
+test("Antigravity 직접 한도 조회는 CSRF 토큰을 agy 플래그와 HTTP 헤더에 일치시켜 전달한다", async () => {
+  let spawnArgs = null;
+  let fetchOptions = null;
+  const child = new EventEmitter();
+  child.kill = () => {};
+
+  const payload = {
+    response: {
+      groups: [{
+        displayName: "Gemini Models",
+        buckets: [{
+          bucketId: "gemini-weekly",
+          remainingFraction: 0.8,
+          resetTime: "2026-09-18T02:00:00.000Z",
+        }],
+      }],
+    },
+  };
+
+  const result = await probeAntigravityQuota({
+    executable: "agy",
+    timeoutMs: 1_000,
+    spawnProcess: (executable, args) => {
+      spawnArgs = args;
+      const logFileIndex = args.indexOf("--log-file");
+      const logPath = args[logFileIndex + 1];
+      writeFileSync(logPath, "Language server listening on random port at 49152 for HTTP\n");
+      return child;
+    },
+    fetchImplementation: async (url, options) => {
+      fetchOptions = { url, ...options };
+      return {
+        ok: true,
+        json: async () => payload,
+      };
+    },
+  });
+
+  assert.deepEqual(result, payload);
+  const tokenIndex = spawnArgs.indexOf("--csrf_token");
+  assert.ok(tokenIndex >= 0, "--csrf_token 플래그가 있어야 합니다");
+  const token = spawnArgs[tokenIndex + 1];
+  assert.ok(token, "CSRF 토큰 값이 있어야 합니다");
+  assert.equal(fetchOptions.headers?.["x-codeium-csrf-token"], token);
+  assert.equal(
+    fetchOptions.url,
+    "http://127.0.0.1:49152/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary",
+  );
 });
 
 test("DB 통계는 공급자별 오늘과 30일 값을 숫자로 정규화한다", async () => {

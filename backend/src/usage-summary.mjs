@@ -1,6 +1,7 @@
 // 이 파일은 공급자 계정 한도와 로컬 DB 사용 통계를 직접 합친다.
 
 import { execFile, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -497,10 +498,11 @@ export async function probeAntigravityQuota({
   let processError = null;
   let processClosed = false;
   let stderr = "";
+  const csrfToken = randomUUID();
   try {
     child = spawnProcess(
       executable,
-      ["--log-file", logPath, "models"],
+      ["--csrf_token", csrfToken, "--log-file", logPath, "models"],
       {
         cwd: homedir(),
         env: antigravityPlaywrightEnvironment(process.env),
@@ -537,7 +539,10 @@ export async function probeAntigravityQuota({
               "RetrieveUserQuotaSummary",
             {
               method: "POST",
-              headers: { "content-type": "application/json" },
+              headers: {
+                "content-type": "application/json",
+                "x-codeium-csrf-token": csrfToken,
+              },
               body: "{}",
             },
           );
