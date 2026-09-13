@@ -3,7 +3,68 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { estimateTokenCost } from "../src/token-cost-estimator.mjs";
+import { estimateTokenCost, estimateTurnTokenCost } from "../src/token-cost-estimator.mjs";
+
+function requestTurn(requests) {
+  const result = { requestUsages: requests };
+  for (const field of ["inputTokens", "outputTokens", "cachedInputTokens", "cacheWriteInputTokens"]) {
+    result[field] = requests.reduce((sum, request) => sum + (request.usage[field] ?? 0), 0);
+  }
+  return result;
+}
+
+test("Astra 턴 누적 30만이어도 각 요청 15만이면 장문 할증하지 않는다", () => {
+  const request = { usage: { inputTokens: 150_000, outputTokens: 100 } };
+  const options = { backend: "codex", model: "gpt-6-astra", fastMode: false };
+  const usage = requestTurn([request, request]);
+  assert.equal(estimateTokenCost({ ...options, usage }), 6.015);
+  assert.equal(estimateTurnTokenCost({ ...options, usage }), 3.01);
+});
+
+test("실제 장문 요청은 캐시 포함 입력 272001부터 개별 할증한다", () => {
+  const options = { backend: "codex", model: "gpt-6-astra", fastMode: false };
+  const requests = [272_000, 272_001].map(inputTokens => ({
+    usage: { inputTokens, cachedInputTokens: 200_000, outputTokens: 100 },
+  }));
+  assert.equal(estimateTokenCost({ ...options, usage: requests[0].usage }), 0.925);
+  assert.equal(estimateTokenCost({ ...options, usage: requests[1].usage }), 1.84752);
+  assert.equal(estimateTurnTokenCost({ ...options, usage: requestTurn(requests) }), 2.77252);
+});
+
+test("요청별 모델과 Fast 설정을 적용하고 Claude는 보고 금액만 보존한다", () => {
+  const options = { backend: "codex", model: "gpt-6-astra", fastMode: false };
+  const requests = [
+    { model: "gpt-6-astra", fastMode: true, usage: { inputTokens: 1000, outputTokens: 100 } },
+    { model: "gpt-5.6-sol", fastMode: false, usage: { inputTokens: 1000, outputTokens: 100 } },
+  ];
+  const expected = requests.reduce((sum, request) => sum + estimateTokenCost({ ...options, ...request }), 0);
+  assert.equal(estimateTurnTokenCost({ ...options, usage: requestTurn(requests) }), expected);
+  assert.equal(estimateTurnTokenCost({ backend: "claude", usage: {
+    ...requestTurn(requests), reportedCostUsd: 12.345678,
+  } }), 12.345678);
+  assert.equal(estimateTurnTokenCost({ backend: "claude", usage: requestTurn(requests) }), null);
+});
+
+test("누락되거나 합계와 불일치하는 요청 원본으로 장문 비용을 추측하지 않는다", () => {
+  const options = { backend: "codex", model: "gpt-6-astra", fastMode: false };
+  const usage = { inputTokens: 300_000, outputTokens: 200 };
+  assert.equal(estimateTurnTokenCost({ ...options, usage }), null);
+  assert.equal(estimateTurnTokenCost({ ...options, usage: { ...usage,
+    requestUsages: [{ usage: { inputTokens: 150_000, outputTokens: 100 } }],
+  } }), null);
+  assert.equal(estimateTurnTokenCost({ ...options, usage: { ...usage, requestUsages: [null] } }), null);
+  assert.equal(estimateTurnTokenCost({ ...options, usage: { inputTokens: 150_000, outputTokens: 100 } }), 1.505);
+});
+
+test("Antigravity Pro도 요청별 캐시 포함 길이를 사용하고 Flash 단일 단가는 유지한다", () => {
+  const pricedAt = new Date("2026-09-13T00:00:00Z");
+  const request = { usage: { inputTokens: 100_000, cachedInputTokens: 50_000, outputTokens: 100 } };
+  for (const model of ["gemini-3.1-pro", "gemini-3.8-flash"]) {
+    const options = { backend: "antigravity", model, pricedAt };
+    const expected = estimateTokenCost({ ...options, usage: request.usage }) * 2;
+    assert.equal(estimateTurnTokenCost({ ...options, usage: requestTurn([request, request]) }), expected);
+  }
+});
 
 const usage = {
   inputTokens: 1_000,

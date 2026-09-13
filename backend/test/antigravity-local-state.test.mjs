@@ -10,11 +10,35 @@ import test from "node:test";
 import {
   antigravityContextUsage,
   antigravitySessionUsage,
+  antigravityTurnRequestUsages,
   parseAntigravityGeneratorMetadata,
   parseAntigravityStepMetadata,
 } from "../src/antigravity-local-state.mjs";
 
 const sessionID = "11111111-2222-4333-8444-555555555555";
+
+test("Antigravity 턴 요청 원장을 SQLite 인덱스 또는 시각으로 분리한다", () => {
+  const root = mkdtempSync(join(tmpdir(), "officestra-agy-requests-"));
+  const database = new DatabaseSync(join(root, `${sessionID}.db`));
+  try {
+    database.exec("CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, metadata BLOB)");
+    for (const idx of [1, 2, 3]) {
+      database.prepare("INSERT INTO steps VALUES (?, 15, ?)").run(idx, stepMetadata({
+        executionID: `request-${idx}`, seconds: idx * 1000,
+        inputTokens: 100000, outputTokens: 100, cachedInputTokens: 50000,
+        reasoningOutputTokens: 10,
+      }));
+    }
+    const byIndex = antigravityTurnRequestUsages(sessionID, { root, afterIndex: 1, endedAt: new Date(3000000) });
+    const byTime = antigravityTurnRequestUsages(sessionID, { root,
+      startedAt: new Date(2000000), endedAt: new Date(3000000),
+    });
+    assert.deepEqual(byIndex, byTime);
+    assert.equal(byIndex.length, 2);
+    assert.equal(byIndex[0].usage.inputTokens, 100000);
+    assert.equal(antigravityTurnRequestUsages(sessionID, { root }), null);
+  } finally { database.close(); rmSync(root, { recursive: true, force: true }); }
+});
 
 test("Antigravity protobuf 메타데이터에서 실제 컨텍스트 값을 읽는다", () => {
   assert.deepEqual(

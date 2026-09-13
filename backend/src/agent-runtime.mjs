@@ -49,6 +49,7 @@ import {
 } from "./antigravity-playwright.mjs";
 import {
   antigravitySessionUsage,
+  antigravityTurnRequestUsages,
 } from "./antigravity-local-state.mjs";
 import {
   antigravityLatestStepIndex,
@@ -69,7 +70,7 @@ import {
   listGeneratedImages,
 } from "./local-artifacts.mjs";
 import { GitWorkspaceError } from "./git-workspace.mjs";
-import { estimateTokenCost } from "./token-cost-estimator.mjs";
+import { estimateTurnTokenCost } from "./token-cost-estimator.mjs";
 import { sessionContextUsage } from "./session-context-usage.mjs";
 import {
   STRUCTURED_RESULT_ENV,
@@ -552,6 +553,10 @@ export class AgentRuntime {
       : null;
     const state = {
       ...prepared,
+      usageStartedAt: new Date(),
+      // Read only bytes appended by this job, not months of prior conversation.
+      usageRolloutOffset: resumedCodexSession
+        ? codexRolloutSize(prepared.externalSessionID) : 0,
       process: null,
       attachments,
       cancelRequested: false,
@@ -1875,6 +1880,7 @@ export class AgentRuntime {
       partialText: decoded.text,
       usage,
       endedAt,
+      usageStartedAt: row.startedAt,
       cancelRequested: false,
       structuredResultPath: null,
       refreshTerminalResult: refreshCompleted === true,
@@ -3085,12 +3091,35 @@ export class AgentRuntime {
     if (!state.usage) {
       return;
     }
-    const usage = state.usage;
-    const costUsd = state.character.localProfile ? null : estimateTokenCost({
+    const usage = { ...state.usage };
+    if (!state.character.localProfile && !usage.requestUsages && state.usageStartedAt) {
+      try {
+        if (state.character.backend === "codex") {
+          const recorded = await codexRolloutTurnUsage(findRolloutPath(state.externalSessionID), {
+            startedAt: state.usageStartedAt,
+            endedAt: state.endedAt ?? new Date(),
+            scope: "window",
+            startOffset: state.usageRolloutOffset ?? 0,
+          });
+          if (recorded) usage.requestUsages = recorded.requestUsages;
+        } else if (state.character.backend === "antigravity") {
+          usage.requestUsages = antigravityTurnRequestUsages(state.externalSessionID, {
+            afterIndex: state.antigravityReasoningBaseline,
+            startedAt: state.usageStartedAt,
+            endedAt: state.endedAt ?? new Date(),
+          });
+        }
+      } catch {
+        // An unreadable source must not fail the user's turn. The estimator
+        // refuses ambiguous context-tier prices when request records are absent.
+      }
+    }
+    const costUsd = state.character.localProfile ? null : estimateTurnTokenCost({
       backend: state.character.backend,
       model: state.character.model,
       fastMode: state.character.fastMode,
       usage,
+      pricedAt: state.usageStartedAt ?? new Date(),
     });
     await client.query(
       `
@@ -4680,6 +4709,10 @@ function usageForTurn(state, usage) {
     return null;
   }
   return codexUsageDelta(usage, state.usageBaseline) ?? usage;
+}
+
+function codexRolloutSize(sessionID) {
+  try { return statSync(findRolloutPath(sessionID)).size; } catch { return 0; }
 }
 
 function codexRolloutUsage(line) {

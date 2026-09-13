@@ -14,6 +14,35 @@ import {
 const startedAt = "2026-09-02T14:00:00.000Z";
 const endedAt = "2026-09-02T14:01:00.000Z";
 
+test("Codex 반복 token_count를 제거하되 동일 크기의 별도 요청은 보존한다", async () => {
+  const root = mkdtempSync(join(tmpdir(), "officestra-request-usage-"));
+  const path = join(root, "session.jsonl");
+  const prefix = "이전 기록\n";
+  const last = { input_tokens: 150000, output_tokens: 100 };
+  const first = codexLine("2026-09-02T14:00:10.000Z", { last, total: last });
+  const context = JSON.stringify({ type: "turn_context", payload: {
+    turn_id: "turn-1", model: "gpt-6-astra", service_tier: "fast",
+  } });
+  try {
+    writeFileSync(path, prefix + [context, first, first,
+      codexLine("2026-09-02T14:00:20.000Z", {
+        last, total: { input_tokens: 300000, output_tokens: 200 },
+      }),
+      codexLine("2026-09-02T14:02:20.000Z", {
+        last, total: { input_tokens: 450000, output_tokens: 300 },
+      }),
+    ].join("\n"));
+    const usage = await codexRolloutTurnUsage(path, {
+      startedAt, endedAt, scope: "window", startOffset: Buffer.byteLength(prefix),
+    });
+    assert.equal(usage.inputTokens, 300000);
+    assert.equal(usage.outputTokens, 200);
+    assert.equal(usage.requestUsages.length, 2);
+    assert.equal(usage.requestUsages[0].model, "gpt-6-astra");
+    assert.equal(usage.requestUsages[0].fastMode, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("Claude 기록은 턴 구간의 응답만 더하고 같은 응답을 두 번 세지 않는다", async () => {
   const root = mkdtempSync(join(tmpdir(), "officestra-terminal-usage-"));
   const path = join(root, "session.jsonl");

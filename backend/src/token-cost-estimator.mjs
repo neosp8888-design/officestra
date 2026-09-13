@@ -3,6 +3,44 @@
 
 import { pricingRateFor } from "./pricing-catalog.mjs";
 
+// A turn contains multiple model requests. Never use its cumulative input as
+// the context length of a single request. Claude remains CLI-reported only.
+export function estimateTurnTokenCost(options) {
+  const { backend, usage, model, fastMode, pricedAt = new Date() } = options;
+  if (!usage || backend === "claude") return estimateTokenCost(options);
+  const requests = usage.requestUsages;
+  if (Array.isArray(requests) && requests.length > 0) {
+    if (requests.some((request) => !request?.usage)) return null;
+    for (const field of ["inputTokens", "outputTokens", "cachedInputTokens", "cacheWriteInputTokens"]) {
+      if (nonnegativeNumber(usage[field] ?? 0) === null ||
+          requests.some((request) => nonnegativeNumber(request.usage[field] ?? 0) === null)) return null;
+      const total = requests.reduce((sum, request) => sum + (request.usage?.[field] ?? 0), 0);
+      if (total !== (usage[field] ?? 0)) return null;
+    }
+    let total = 0;
+    for (const request of requests) {
+      const amount = estimateTokenCost({
+        backend,
+        model: request.model ?? model,
+        fastMode: request.fastMode ?? fastMode,
+        pricedAt: request.pricedAt ?? pricedAt,
+        usage: request.usage,
+      });
+      if (amount === null) return null;
+      total += amount;
+    }
+    return roundedCost(total);
+  }
+  // Missing request records: only a context-independent price is unambiguous.
+  // Comparing all possible sizes prevents silently under/overpricing a turn.
+  const max = (usage.inputTokens ?? 0) +
+    (backend === "antigravity" ? (usage.cachedInputTokens ?? 0) : 0);
+  const low = pricingRateFor({ backend, model, fastMode, pricedAt, promptTokens: 0 });
+  const high = pricingRateFor({ backend, model, fastMode, pricedAt, promptTokens: max });
+  if (JSON.stringify(low) !== JSON.stringify(high)) return null;
+  return estimateTokenCost(options);
+}
+
 export function estimateTokenCost({
   backend,
   model,

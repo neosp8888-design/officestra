@@ -492,6 +492,7 @@ class AntigravityTerminalWatcher {
       endedAt: turn.response.metadata?.at ? new Date(turn.response.metadata.at) : new Date(),
       usage: turn.usageByIndex.size ? {
         ...totals, cacheWriteInputTokens: null, cacheWrite5mInputTokens: null, cacheWrite1hInputTokens: null,
+        requestUsages: [...turn.usageByIndex.values()].map(usage => ({ usage })),
       } : null,
       initialGeneratedImages: this.state.initialGeneratedImages,
       structured: readStructuredTurnResult(this.state.structuredResultPath),

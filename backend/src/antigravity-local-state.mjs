@@ -45,6 +45,42 @@ export function antigravitySessionUsage(sessionID, { root } = {}) {
   return readAntigravityState(path)?.usage ?? null;
 }
 
+// Each completed model step carries its own input/cache usage. Keep those
+// boundaries for context-tier pricing instead of pricing the session delta.
+export function antigravityTurnRequestUsages(sessionID, {
+  root, afterIndex, startedAt, endedAt = new Date(),
+} = {}) {
+  const path = antigravityConversationPath(sessionID, root);
+  if (!path || !existsSync(path)) return null;
+  const from = new Date(startedAt ?? Number.NaN).getTime();
+  const to = new Date(endedAt).getTime();
+  if (!Number.isFinite(to)) return null;
+  if (!Number.isInteger(afterIndex) && !Number.isFinite(from)) return null;
+  let database;
+  try {
+    const { DatabaseSync } = require("node:sqlite");
+    database = new DatabaseSync(path, { readOnly: true });
+    const rows = database.prepare(`
+      SELECT idx, metadata FROM steps
+      WHERE step_type = 15 AND idx > ? AND metadata IS NOT NULL
+        AND length(metadata) <= ? ORDER BY idx
+    `).all(Number.isInteger(afterIndex) ? afterIndex : -1, MAX_METADATA_BYTES);
+    const requests = [];
+    for (const row of rows) {
+      const parsed = parseAntigravityStepMetadata(row.metadata);
+      if (!parsed) return null;
+      if (!Number.isInteger(afterIndex) && parsed.at < from) continue;
+      if (parsed.at > to) continue;
+      requests.push({ usage: parsed.usage, pricedAt: new Date(parsed.at) });
+    }
+    return requests;
+  } catch {
+    return null;
+  } finally {
+    database?.close();
+  }
+}
+
 function readAntigravityState(path) {
   if (!path || !existsSync(path)) return null;
   const signature = fileSignature(path);

@@ -3819,6 +3819,24 @@ test("완료 사용량과 추정 비용을 같은 턴의 사용량 기록으로 
   ]);
 });
 
+test("GUI·터미널 공통 저장은 요청별 금액을 쓰고 사용량 상태를 변경하지 않는다", async () => {
+  const queries = [];
+  const runtime = new AgentRuntime({
+    pool: { query: async (text, values) => { queries.push({ text, values }); return { rowCount: 1 }; } },
+    withTransaction: async () => {}, workdir: "/tmp", broadcast: () => {},
+  });
+  const request = { usage: { inputTokens: 150000, outputTokens: 100 } };
+  const state = {
+    turnID: "request-priced-turn",
+    character: { backend: "codex", model: "gpt-6-astra", fastMode: false },
+    usage: { inputTokens: 300000, outputTokens: 200, requestUsages: [request, request] },
+  };
+  const before = structuredClone(state);
+  await runtime.persistUsageRecord(runtime.pool, state);
+  assert.equal(queries[0].values[5], 3.01);
+  assert.deepEqual(state, before);
+});
+
 function workspaceDatabaseRow(overrides = {}) {
   return {
     id: "workspace-1",

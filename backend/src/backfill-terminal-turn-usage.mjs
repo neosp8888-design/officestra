@@ -4,7 +4,7 @@
 import { pool, withTransaction } from "./db.mjs";
 import { findClaudeSessionPath } from "./agent-runtime.mjs";
 import { findCodexRolloutPath } from "./codex-rollout-turns.mjs";
-import { estimateTokenCost } from "./token-cost-estimator.mjs";
+import { estimateTurnTokenCost } from "./token-cost-estimator.mjs";
 import {
   claudeTranscriptTurnUsage,
   codexRolloutTurnUsage,
@@ -41,11 +41,12 @@ export async function terminalTurnUsageBackfill({ apply = false } = {}) {
       usage,
       skipReason: skipReason(row, usage),
       costUsd: usage
-        ? estimateTokenCost({
+        ? estimateTurnTokenCost({
           backend: row.backend,
           model: row.model,
           fastMode: row.fastMode,
           usage,
+          pricedAt: row.startedAt,
         })
         : null,
     });
