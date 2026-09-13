@@ -21,6 +21,7 @@ import {
   CharacterNotFoundError,
   executionEnvironment,
   locateExecutable,
+  findClaudeSessionPath,
 } from "./agent-runtime.mjs";
 import {
   nestedFields,
@@ -45,7 +46,7 @@ import {
   identityPromptWithStructuredResult,
 } from "./structured-turn-result.mjs";
 import { antigravityStepPayloadReasoning } from "./antigravity-reasoning.mjs";
-import { TerminalActivityCollector, readClaudeTerminalActivities } from "./terminal-turn-activities.mjs";
+import { TerminalActivityCollector, waitForClaudeTerminalTurn } from "./terminal-turn-activities.mjs";
 
 const require = createRequire(import.meta.url);
 const SESSION_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -981,10 +982,10 @@ export class TerminalSessionManager {
         state.runningTurnID = null;
         this.resetTurnArtifacts(state);
       }
-      const path = payload.transcript_path;
-      let offset = 0;
-      try { if (path) offset = statSync(path).size; } catch {}
-      state.claudeTranscript = { path, offset };
+      const path = payload.transcript_path || (state.externalSessionID ? findClaudeSessionPath(state.externalSessionID) : null);
+      let offset = null, inode;
+      try { if (path) {const stat=statSync(path);offset=stat.size;inode=stat.ino;} } catch {}
+      state.claudeTranscript = { path, offset, inode, startedAt:new Date().toISOString() };
       const turn = await this.beginDispatchedTurn(state, {
         characterID: state.characterID,
         sessionID: state.sessionID,
@@ -1002,14 +1003,20 @@ export class TerminalSessionManager {
     const response = String(payload.last_assistant_message ?? "").trim() ||
       lastClaudeAssistantMessage(payload.transcript_path);
     // 시작 훅이 지목한 같은 원본만 읽는다. 경로가 다르면 과거 세션을 섞지 않는다.
-    const activities = state.claudeTranscript?.path &&
-        state.claudeTranscript.path === payload.transcript_path
-      ? await readClaudeTerminalActivities(payload.transcript_path, {
+    const endedAt=new Date();
+    const transcriptPath=payload.transcript_path || state.claudeTranscript?.path;
+    const transcript = state.claudeTranscript && transcriptPath &&
+        (!state.claudeTranscript.path || state.claudeTranscript.path === transcriptPath)
+      ? await waitForClaudeTerminalTurn(transcriptPath, {
         offset: state.claudeTranscript.offset,
+        inode: state.claudeTranscript.inode,
+        startedAt:state.claudeTranscript.startedAt,
+        endedAt:endedAt.toISOString(),
         sessionID: state.externalSessionID,
         workdir: state.workdir,
         finalResponse: response,
-      }) : [];
+      }) : {activities:[],usage:null,finalFound:false};
+    if(transcriptPath&&!transcript.finalFound)console.warn('터미널 원본 최종 기록 확인 지연: 사용량/활동이 일부 누락될 수 있습니다.');
     const structured = consumeStructuredTurnResult(
       state.structuredResultPath,
     );
@@ -1021,10 +1028,12 @@ export class TerminalSessionManager {
         characterID: state.characterID,
         turnID,
         response,
+        endedAt,
+        usage:transcript.usage,
         structured,
         initialGeneratedImages: state.initialGeneratedImages,
         reportedCostUsd: this.settleClaudeTurnCost(state),
-        activities,
+        activities:transcript.activities,
       });
       state.runningTurnID = null;
       state.lastCompletedTurnID = turnID;

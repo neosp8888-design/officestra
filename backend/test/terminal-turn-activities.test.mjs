@@ -3,7 +3,41 @@ import { mkdtemp, writeFile, appendFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { TerminalActivityCollector, readClaudeTerminalActivities } from "../src/terminal-turn-activities.mjs";
+import { TerminalActivityCollector, readClaudeTerminalActivities, readClaudeTerminalTurn, waitForClaudeTerminalTurn } from "../src/terminal-turn-activities.mjs";
+
+test('Claude flush retry reads delayed thinking/text and latest usage once per response',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'claude-flush-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const path=join(root,'session.jsonl');await writeFile(path,'');
+  const base={type:'assistant',sessionId:'session',timestamp:'2026-09-14T00:00:01Z'};
+  const record=(id,content,output)=>JSON.stringify({...base,message:{id,content,usage:{input_tokens:15731,output_tokens:output,cache_read_input_tokens:0}}})+'\n';
+  const writing=new Promise((resolve,reject)=>setTimeout(()=>appendFile(path,
+    record('same',[{type:'thinking',thinking:'공개 사고'}],20)+
+    record('same',[{type:'text',text:'최종'}],175)).then(resolve,reject),40));
+  const result=await waitForClaudeTerminalTurn(path,{sessionID:'session',finalResponse:'최종'},{timeoutMs:500,pollMs:20});await writing;
+  assert.equal(result.finalFound,true);assert.equal(result.usage.inputTokens,15731);assert.equal(result.usage.outputTokens,175);
+  assert.deepEqual(result.activities.map(a=>a.kind),['thinking']);
+});
+
+test('Claude missing/rotated offset recovery filters time, session and sidechains',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'claude-scope-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const path=join(root,'session.jsonl');
+  const row=(text,changes={})=>JSON.stringify({type:'assistant',sessionId:'session',timestamp:'2026-09-14T00:00:01Z',message:{id:text,content:[{type:'text',text}],usage:{input_tokens:10,output_tokens:2}},...changes})+'\n';
+  await writeFile(path,row('old',{timestamp:'2026-09-13T00:00:00Z'})+row('other',{sessionId:'other'})+row('side',{isSidechain:true})+row('no-time',{timestamp:null})+row('final'));
+  for(const offset of [null,999999]) {
+    const result=await readClaudeTerminalTurn(path,{offset,sessionID:'session',startedAt:'2026-09-14T00:00:00Z',endedAt:'2026-09-14T00:00:02Z',finalResponse:'final'});
+    assert.equal(result.finalFound,true);assert.equal(result.usage.inputTokens,10);assert.deepEqual(result.activities,[]);
+  }
+  assert.equal((await readClaudeTerminalTurn(path,{offset:null,sessionID:'session'})).usage,null);
+});
+
+test('bounded fallback never reports a partial oversized turn as complete',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'claude-large-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const path=join(root,'session.jsonl');
+  const row=text=>JSON.stringify({type:'assistant',sessionId:'session',timestamp:'2026-09-14T00:00:01Z',message:{id:text.slice(0,8),content:[{type:'text',text}],usage:{input_tokens:10,output_tokens:2}}})+'\n';
+  await writeFile(path,row('x'.repeat(4*1024*1024))+row('final'));
+  const result=await readClaudeTerminalTurn(path,{offset:null,sessionID:'session',startedAt:'2026-09-14T00:00:00Z',endedAt:'2026-09-14T00:00:02Z',finalResponse:'final'});
+  assert.equal(result.usage,null);assert.equal(result.finalFound,false);assert.deepEqual(result.activities,[]);
+});
 
 test("Codex 공개 요약·진행·도구 결과만 기존 활동 형식으로 변환한다", () => {
   const collector = new TerminalActivityCollector("/repo");

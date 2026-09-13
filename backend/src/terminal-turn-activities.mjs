@@ -1,8 +1,9 @@
 // 터미널 원본에서 기존 GUI가 표시할 수 있는 공개 활동만 추출한다.
 // 원시 추론/암호화 내용, 도구 응답 전문, 시스템 지침은 저장하지 않는다.
-import { createReadStream } from "node:fs";
+import { createReadStream, statSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { decodeAgentResponse, parseAgentEvent } from "./agent-event-parser.mjs";
+import { decodeAgentResponse, parseAgentEvent, claudeMessageUsage, claudeSessionUsageKey } from "./agent-event-parser.mjs";
+import { addUsage } from "./terminal-usage.mjs";
 
 const MAX_ACTIVITIES = 500;
 const MAX_TEXT = 6_000;
@@ -123,23 +124,60 @@ export class TerminalActivityCollector {
 
 // UserPromptSubmit 시점의 바이트 위치부터 읽어 같은 세션의 과거 턴을 섞지 않는다.
 export async function readClaudeTerminalActivities(path, { offset = 0, sessionID, workdir, finalResponse } = {}) {
+  return (await readClaudeTerminalTurn(path,{offset,sessionID,workdir,finalResponse})).activities;
+}
+
+export async function readClaudeTerminalTurn(path, {offset=0,sessionID,workdir,finalResponse,startedAt,endedAt,requireTimestamps=false,inode}={}) {
   const collector = new TerminalActivityCollector(workdir);
-  if (!path) return [];
+  const requests=new Map();let finalFound=false, needsEarlierBoundary=false, earlierBoundary=false;
+  if (!path) return {activities:[],usage:null,finalFound:false};
   let stream;
   try {
+    const stat=statSync(path);
+    if(offset===null||offset>stat.size||(inode!==undefined&&inode!==stat.ino)) {
+      // Missing start path or compaction replaced the file. Bound the recovery
+      // scan and require matching session plus timestamps; never import history.
+      if(!startedAt||!endedAt||!sessionID)return {activities:[],usage:null,finalFound:false};
+      offset=Math.max(0,stat.size-4*1024*1024);requireTimestamps=true;
+      needsEarlierBoundary=offset>0;
+    }
     stream = createReadStream(path, { start: offset, encoding: "utf8" });
     for await (const line of createInterface({ input: stream, crlfDelay: Infinity })) {
       let record;
       try { record = JSON.parse(line); } catch { continue; }
       if (record.isSidechain || (record.sessionId && record.sessionId !== sessionID)) continue;
+      const at=Date.parse(record.timestamp);
+      if(record.sessionId===sessionID&&Number.isFinite(at)&&startedAt&&at<Date.parse(startedAt))earlierBoundary=true;
+      if(requireTimestamps&&(!Number.isFinite(at)||record.sessionId!==sessionID))continue;
+      if(Number.isFinite(at)&&((startedAt&&at<Date.parse(startedAt))||(endedAt&&at>Date.parse(endedAt))))continue;
       if (!["assistant", "user"].includes(record.type)) continue;
       collector.parsed(parseAgentEvent(line, "claude", workdir));
+      if(record.type==='assistant') {
+        if(contentText(record.message?.content)===String(finalResponse??'').trim()&&String(finalResponse??'').trim())finalFound=true;
+        const usage=claudeMessageUsage(record),key=claudeSessionUsageKey(record);
+        // Streaming snapshots for one response share message.id. Keep the latest,
+        // not the first partial count, and never sum thought/text duplicates.
+        if(usage&&key)requests.set(key,{...(requests.get(key)??{}),...Object.fromEntries(Object.entries(usage).filter(([,value])=>value!==null&&value!==undefined))});
+      }
     }
   } catch (error) {
     // 부가 기록을 읽지 못해도 원래 최종 답변 저장은 중단하지 않는다.
-    console.warn(`터미널 작업 내역 읽기 실패: ${error.code ?? "read-error"}`);
+    // The caller emits one warning after its bounded flush retry, not per poll.
   } finally {
     stream?.destroy();
   }
-  return collector.finish(finalResponse);
+  let usage=null;for(const value of requests.values())usage=addUsage(usage,value);
+  if(needsEarlierBoundary&&!earlierBoundary)return {activities:[],usage:null,finalFound:false};
+  return {activities:collector.finish(finalResponse),usage,finalFound};
+}
+
+export async function waitForClaudeTerminalTurn(path,options,{timeoutMs=1200,pollMs=100}={}) {
+  const deadline=Date.now()+timeoutMs;let result;
+  do {
+    result=await readClaudeTerminalTurn(path,options);
+    if(result.finalFound&&result.usage)return result;
+    if(Date.now()>=deadline||!path)break;
+    await new Promise(resolve=>setTimeout(resolve,Math.min(pollMs,Math.max(0,deadline-Date.now()))));
+  }while(true);
+  return result;
 }

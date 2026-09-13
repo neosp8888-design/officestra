@@ -15,7 +15,7 @@ function boundary(value) {
   return Number.isFinite(time) ? time : null;
 }
 
-function addUsage(total, usage) {
+export function addUsage(total, usage) {
   if (!usage) {
     return total;
   }
