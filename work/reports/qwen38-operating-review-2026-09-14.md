@@ -30,10 +30,13 @@ Scope: analysis only. No model/employee setting changes, restart, build, commit 
 3. Confirmed terminal persistence gap, turn9a40a347-5adc-4344-90f4-289b5a04ecea:
    transcript contains thinking and text; usage input15731/output175.
    The same usage is repeated across message blocks; must not sum duplicates.
-   DB has zero usage_records and zero activities for this completed terminal turn.
-   terminal-sessions.mjs Stop path passes no usage to completeTerminalTurn,
-   whose default is usage=null. This explains missing usage; zero activities still
-   requires offset/path/session matching investigation, not a confirmed cause yet.
+   Correction from the subsequent repair: DB had one usage_records row with null
+   token fields (and an existing cost audit), plus zero activities, not zero usage rows.
+   Stop did not explicitly pass usage, but completeTerminalTurn already had a
+   transcript/time-window fallback. That fallback now reads input15731/output175
+   correctly. Therefore absence of an explicit usage argument is not a proven root
+   cause; historical flush timing/path/start-offset conditions remain unconfirmed.
+   See terminal-record-repair-2026-09-14.md for the bounded retry and scoped repair.
 4. Ordinary GUI turns have thinking/tool activities and token usage. This review's
    API request also exercises the actual configured local CLI, not an external model.
 5. Potential risks, not demonstrated failures: other GPU apps can exceed98% between
