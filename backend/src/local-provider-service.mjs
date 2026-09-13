@@ -16,6 +16,7 @@ export async function resolveLocalCharacter(client,character) {
   const result=await client.query('SELECT definition FROM local_agent_profiles WHERE id=$1 AND enabled=true',[id]);
   if(!result.rows[0])throw new Error('Local profile is disabled or missing');
   const definition=normalizeLocalDefinition(result.rows[0].definition);
+  if(character.config?.localReasoning)definition.profile=normalizeLocalAgentProfile({...definition.profile,reasoning:character.config.localReasoning});
   if(character.backend!=='claude'||character.model!==definition.profile.model||character.effort!=='default'||character.fastMode)throw new Error('Local employee settings do not match the profile');
   character.localProfile=definition;
   return character;
@@ -24,6 +25,9 @@ export async function snapshotLocalTurn(client,turnID,character) {
   if(character.localProfile)await client.query("UPDATE turns SET provider_kind='local',provider_snapshot=$2::jsonb WHERE id=$1",[turnID,JSON.stringify(character.localProfile)]);
 }
 export function localResumeCompatible(previous,next) {
+  // Thinking selection changes inference, not model/session identity.
+  const strip=d=>d?{...d,profile:Object.fromEntries(Object.entries(d.profile??{}).filter(([k])=>k!=='reasoning'))}:d;
+  previous=strip(previous);next=strip(next);
   if(isDeepStrictEqual(previous,next))return true;
   // A measured window increase does not change model/account/session identity.
   // Do not reuse this for live entries: their already-loaded model stays pinned.
@@ -45,16 +49,19 @@ export class LocalProviderService {
     Object.assign(this,{pool,stateDirectory,broadcast,hostFactory,bridgeFactory,waitMs,retryMs,idleMs,cleanupWaitMs});
     this.entries=new Map();this.closed=false;
   }
-  status(){return [...this.entries.values()].map(e=>({id:e.definition.profile.id,state:e.state,error:e.error??null,users:e.users,resources:e.resources??null}));}
+  status(){return [...this.entries.values()].map(e=>({id:e.key,profileId:e.definition.profile.id,state:e.state,error:e.error??null,users:e.users,resources:e.resources??null}));}
   change(e,state,error=null){e.state=state;e.error=error;this.broadcast({type:'local.changed',profileId:e.definition.profile.id,state,error});}
   async launch({character,...options}) {
     if(this.closed)throw new Error('Local service is shutting down');
     const definition=normalizeLocalDefinition(character.localProfile);
-    const id=definition.profile.id;
+    const id=`${definition.profile.id}:${definition.profile.reasoning??'default'}`;
+    for(const previous of this.entries.values()) {
+      if(previous.definition.profile.id===definition.profile.id&&previous.key!==id&&!previous.users&&!previous.active)await this.close(previous);
+    }
     let e=this.entries.get(id);
     if(e&&!isDeepStrictEqual(e.definition,definition))throw new Error('Close existing local sessions before changing their profile');
     if(!e){
-      e={definition,users:0,state:'idle',token:randomBytes(32).toString('hex'),bridge:null,closed:false,active:null};
+      e={key:id,definition,users:0,state:'idle',token:randomBytes(32).toString('hex'),bridge:null,closed:false,active:null};
       this.entries.set(id,e);
       e.pending=new Set();
       e.server=createServer((req,res)=>{const task=this.handle(e,req,res).catch(()=>res.destroy());e.pending.add(task);task.finally(()=>e.pending.delete(task));});
@@ -105,7 +112,7 @@ export class LocalProviderService {
         this.change(e,'starting');
         const resource=await host.start({signal});
         e.resource=resource;
-        e.bridge=this.bridgeFactory({upstream:resource.upstream,token:e.token,model:e.definition.profile.model,usageProfile:INCLUSIVE_INPUT_PROFILE,...LOCAL_HOST_MEMORY_BUDGET,
+        e.bridge=this.bridgeFactory({upstream:resource.upstream,token:e.token,model:e.definition.profile.model,reasoning:e.definition.profile.reasoning??'default',usageProfile:INCLUSIVE_INPUT_PROFILE,...LOCAL_HOST_MEMORY_BUDGET,
           readResources:async()=>{if(!resource.alive())throw new Error('SSH tunnel disconnected');const sample=await resource.sample();e.resources=sample;return sample;},
           audit:()=>{},release:async()=>{await resource.release();if(e.state!=='error')this.change(e,'idle');},idleMs:this.idleMs,sampleTimeoutMs:12000,sampleMaxAgeMs:15000,pollMs:3000});
         const address=await e.bridge.start();
@@ -156,7 +163,7 @@ export class LocalProviderService {
     if(e.closing)return e.closing;
     clearTimeout(e.retire);
     e.closed=true;e.active?.abort.abort();
-    e.closing=(async()=>{await e.ready.catch(()=>{});e.server.closeAllConnections();await new Promise(r=>e.server.close(r));await Promise.all([...e.pending]);await e.bridge?.stop();this.entries.delete(e.definition.profile.id);this.broadcast({type:'local.changed',profileId:e.definition.profile.id,state:'closed'});})();
+    e.closing=(async()=>{await e.ready.catch(()=>{});e.server.closeAllConnections();await new Promise(r=>e.server.close(r));await Promise.all([...e.pending]);await e.bridge?.stop();this.entries.delete(e.key);this.broadcast({type:'local.changed',profileId:e.definition.profile.id,state:'closed'});})();
     return e.closing;
   }
   async shutdown(){this.closed=true;await Promise.all([...this.entries.values()].map(e=>this.close(e)));}

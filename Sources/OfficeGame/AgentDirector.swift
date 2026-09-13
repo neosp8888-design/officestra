@@ -797,6 +797,7 @@ final class AgentDirector: ObservableObject {
     @Published private(set) var localProviderStatuses: [LocalProviderStatus] = []
     @Published private(set) var localModelOptions: [LocalModelOption] = []
     @Published private(set) var localProfileAssignments: [String: String] = [:]
+    @Published private(set) var localReasoningSelections: [String: String] = [:]
     @Published private(set) var terminalRestartRequest:
         TerminalRestartRequest?
     /// 터미널 화면이 붙어 있는 동안만 채워진다. 입력·예약·멈춤이 이리로 간다.
@@ -2604,11 +2605,26 @@ final class AgentDirector: ObservableObject {
             localProviderStatuses = catalog.statuses
             localModelOptions = (catalog.profiles ?? []).filter(\.enabled)
             localProfileAssignments = Dictionary((catalog.assignments ?? []).map { ($0.characterId, $0.profileId) }, uniquingKeysWith: { _, last in last })
+            localReasoningSelections = Dictionary((catalog.assignments ?? []).map { ($0.characterId, $0.reasoning ?? "default") }, uniquingKeysWith: { _, last in last })
         }
     }
 
     func localProfileID(for character: OfficeCharacter) -> String? {
         localProfileAssignments[character.rawValue]
+    }
+
+    func setLocalReasoning(_ reasoning: String, for character: OfficeCharacter) async -> Bool {
+        guard isReadyForSubmissions, !isUpdatingConfiguration else { return false }
+        isUpdatingConfiguration = true
+        defer { isUpdatingConfiguration = false }
+        do {
+            try await database.setLocalReasoning(reasoning, for: character)
+            await refreshLocalProviderStatuses()
+            return true
+        } catch {
+            settingsStatus = error.localizedDescription
+            return false
+        }
     }
 
     func selectLocalProfile(_ profileID: String?, for character: OfficeCharacter) async -> Bool {

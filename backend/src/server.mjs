@@ -3,7 +3,7 @@
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { LocalProviderService, normalizeLocalDefinition } from './local-provider-service.mjs';
-import { selectLocalProfile } from './local-profile-selection.mjs';
+import { selectLocalProfile, setLocalReasoning } from './local-profile-selection.mjs';
 import { WebSocket, WebSocketServer } from "ws";
 
 import {
@@ -2253,8 +2253,13 @@ const server = createServer(async (request, response) => {
       url.pathname === "/api/local-profiles"
     ) {
       const profiles = await pool.query('SELECT id, enabled, definition FROM local_agent_profiles ORDER BY id');
-      const assignments = await pool.query("SELECT id AS \"characterId\", config->>'localProfileId' AS \"profileId\" FROM characters WHERE config ? 'localProfileId'");
-      send(response,200,{profiles:profiles.rows.map(row=>({id:row.id,enabled:row.enabled,model:row.definition.profile.model,title:row.definition.host.modelKey.split('/').at(-1),contextWindow:row.definition.profile.contextWindow})),assignments:assignments.rows,statuses:localProviders?.status()??[]});
+      const assignments = await pool.query("SELECT id AS \"characterId\", config->>'localProfileId' AS \"profileId\", config->>'localReasoning' AS reasoning FROM characters WHERE config ? 'localProfileId'");
+      send(response,200,{profiles:profiles.rows.map(row=>({id:row.id,enabled:row.enabled,model:row.definition.profile.model,title:row.definition.host.modelKey.split('/').at(-1),contextWindow:row.definition.profile.contextWindow,reasoningOptions:row.definition.host.modelKey==='qwen3.8-27b'?['default','on','off']:[]})),assignments:assignments.rows,statuses:localProviders?.status()??[]});
+    } else if (request.method === 'PUT' && /^\/api\/characters\/[^/]+\/local-reasoning$/.test(url.pathname)) {
+      if(!trustedJSONMutation(request,response))return;
+      const body=await readJSON(request);
+      if(!['default','on','off'].includes(body.reasoning)){send(response,400,{error:'Unsupported local reasoning option'});return;}
+      send(response,200,await setLocalReasoning({pool,runtime,characterID:decodeURIComponent(url.pathname.split('/')[3]),reasoning:body.reasoning,broadcast}));
     } else if (request.method === 'PUT' && /^\/api\/characters\/[^/]+\/local-profile$/.test(url.pathname)) {
       if(!trustedJSONMutation(request,response))return;
       const body=await readJSON(request);
@@ -2265,7 +2270,7 @@ const server = createServer(async (request, response) => {
       if (!trustedJSONMutation(request,response)) return;
       const body = await readJSON(request);
       const definition = normalizeLocalDefinition(body.definition);
-      if (localProviders?.status().some(s=>s.id===definition.profile.id)) {send(response,409,{error:'Close local sessions before changing a profile'});return;}
+      if (localProviders?.status().some(s=>(s.profileId??s.id)===definition.profile.id)) {send(response,409,{error:'Close local sessions before changing a profile'});return;}
       await pool.query('INSERT INTO local_agent_profiles(id,definition,enabled) VALUES($1,$2::jsonb,$3) ON CONFLICT(id) DO UPDATE SET definition=EXCLUDED.definition,enabled=EXCLUDED.enabled,updated_at=now()', [definition.profile.id,JSON.stringify(definition),body.enabled===true]);
       send(response,200,{id:definition.profile.id});
     } else if (

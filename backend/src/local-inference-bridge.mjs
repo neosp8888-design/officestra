@@ -6,6 +6,15 @@ import { pipeline } from 'node:stream';
 import { createUsageNormalizer, createUsageSSETransform } from './local-usage-normalizer.mjs';
 
 const error=(status,message)=>Object.assign(new Error(message),{status});
+export function applyLocalReasoning(value,reasoning='default') {
+  if(!['default','on','off'].includes(reasoning))throw new TypeError('Unsupported local reasoning option');
+  if(reasoning==='default')return value;
+  const {output_config,reasoning_effort,chat_template_kwargs,...rest}=value;
+  // Measured LM Studio Anthropic adapter: effort levels do not alter Qwen's
+  // prompt, but thinking enabled/disabled does. Never advertise ignored levels.
+  return {...rest,...(output_config?{output_config:Object.fromEntries(Object.entries(output_config).filter(([k])=>k!=='effort'))}:{}),
+    thinking:reasoning==='on'?{type:'enabled',budget_tokens:1024}:{type:'disabled'}};
+}
 // Claude ToolSearch persists tool_reference blocks in tool results. LM Studio's
 // measured Anthropic dialect accepts text there instead. Keep the tool schema,
 // result ID and all other blocks intact; only adapt the reference on the wire.
@@ -48,7 +57,7 @@ function readBody(req,limit,signal){return new Promise((resolve,reject)=>{
 export class LocalInferenceBridge {
   #server;#starting;#stopping;#monitor;#idle;#release;#token;#upstream;#audit;#sample;#options;
   #active=null;#state='idle';#failure=null;#address=null;#sampling=false;#cleanupComplete=false;
-  constructor({upstream,token,model,usageProfile,readResources,audit,release=async()=>{},port=0,
+  constructor({upstream,token,model,usageProfile,reasoning='default',readResources,audit,release=async()=>{},port=0,
     guardPercent=77,vramGuardPercent=guardPercent,ramGuardPercent=guardPercent,sampleMaxAgeMs=5000,sampleTimeoutMs=3000,pollMs=1000,idleMs=180000,
     requestTimeoutMs=240000,maxBodyBytes=8*1024*1024}) {
     const url=new URL(upstream);
@@ -56,11 +65,14 @@ export class LocalInferenceBridge {
     if(typeof token!=='string'||Buffer.byteLength(token)<24||/[\r\n\0]/.test(token))throw new TypeError('Dedicated bridge token of at least 24 bytes required');
     if(typeof model!=='string'||!model||/[\r\n\0]/.test(model))throw new TypeError('Pinned local model is required');
     if(typeof readResources!=='function'||typeof audit!=='function'||typeof release!=='function')throw new TypeError('Sampler, synchronous audit and release hooks required');
-    if(!Number.isInteger(port)||port<0||port>65535||![guardPercent,vramGuardPercent,ramGuardPercent].every(n=>Number.isFinite(n)&&n>0&&n<=95))throw new TypeError('Invalid port or memory guard');
+    if(!Number.isInteger(port)||port<0||port>65535||
+      ![guardPercent,ramGuardPercent].every(n=>Number.isFinite(n)&&n>0&&n<=95)||
+      !Number.isFinite(vramGuardPercent)||vramGuardPercent<=0||vramGuardPercent>98)throw new TypeError('Invalid port or memory guard');
     for(const n of [sampleMaxAgeMs,sampleTimeoutMs,pollMs,idleMs,requestTimeoutMs,maxBodyBytes])if(!Number.isSafeInteger(n)||n<=0)throw new TypeError('Invalid limits');
     createUsageNormalizer({profile:usageProfile});
+    applyLocalReasoning({},reasoning);
     this.#upstream=url;this.#token=token;this.#sample=readResources;this.#audit=audit;this.#release=release;
-    this.#options={port,model,guardPercent,vramGuardPercent,ramGuardPercent,sampleMaxAgeMs,sampleTimeoutMs,pollMs,idleMs,requestTimeoutMs,maxBodyBytes,usageProfile};
+    this.#options={port,model,reasoning,guardPercent,vramGuardPercent,ramGuardPercent,sampleMaxAgeMs,sampleTimeoutMs,pollMs,idleMs,requestTimeoutMs,maxBodyBytes,usageProfile};
   }
   get status(){return {state:this.#state,active:this.#active!==null,address:this.#address,failure:this.#failure,cleanupComplete:this.#cleanupComplete};}
   async #resources(){
@@ -108,7 +120,7 @@ export class LocalInferenceBridge {
       if(parsed.model!==this.#options.model)throw error(400,'Model does not match local profile');
       if(parsed.max_tokens!==undefined&&(!Number.isSafeInteger(parsed.max_tokens)||parsed.max_tokens<=0||parsed.max_tokens>4096))throw error(400,'Unverified output budget');
       if(active.abort.signal.aborted)throw error(503,'Request cancelled');
-      const normalized=normalizeLocalMessageRequest(parsed);
+      const normalized=applyLocalReasoning(normalizeLocalMessageRequest(parsed),this.#options.reasoning);
       const outgoing=normalized===parsed?body:Buffer.from(JSON.stringify(normalized));
       const headers={'content-type':'application/json','accept-encoding':'identity','content-length':outgoing.length};
       for(const key of ['anthropic-version','anthropic-beta','accept'])if(typeof req.headers[key]==='string')headers[key]=req.headers[key];

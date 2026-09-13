@@ -1,0 +1,23 @@
+{
+  "host": {
+    "user": "pleas",
+    "address": "14.40.24.35",
+    "keyPath": "/Users/neo/.ssh/id_ed25519_officestra_4090",
+    "sshPort": 2222,
+    "modelKey": "qwen/qwen3.6-27b",
+    "comfyPort": 8188,
+    "hostKeyAlias": "[222.109.147.31]:2222"
+  },
+  "profile": {
+    "id": "local-4090",
+    "model": "officestra-local-smoke",
+    "backend": "claude",
+    "endpoint": "http://127.0.0.1:41235",
+    "providerKind": "local",
+    "contextWindow": 65536,
+    "credentialEnv": "OFFICESTRA_LOCAL_4090_TOKEN",
+    "usageProtocol": "anthropic-normalized-v1",
+    "maxOutputTokens": 4096,
+    "credentialVersion": "managed-v1"
+  }
+}

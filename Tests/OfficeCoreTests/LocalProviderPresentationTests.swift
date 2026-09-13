@@ -2,6 +2,20 @@ import XCTest
 @testable import OfficeGame
 
 final class LocalProviderPresentationTests: XCTestCase {
+    func testVerifiedReasoningOptionsAndSelectionDecode() throws {
+        let json = #"{"profiles":[{"id":"qwen38","enabled":true,"model":"qwen","contextWindow":65536,"reasoningOptions":["default","on","off"]}],"assignments":[{"characterId":"right-woman","profileId":"qwen38","reasoning":"on"}],"statuses":[]}"#
+        let catalog = try JSONDecoder().decode(LocalProviderList.self, from: Data(json.utf8))
+        XCTAssertEqual(catalog.profiles?.first?.reasoningOptions, ["default", "on", "off"])
+        XCTAssertEqual(catalog.assignments?.first?.reasoning, "on")
+    }
+    func testContextLabelUsesActualProfileWindow() throws {
+        for (tokens, expected) in [(32768, "32K"), (65536, "64K"), (262144, "256K")] {
+            let json = "{\"id\":\"local-test\",\"enabled\":true,\"model\":\"qwen\",\"contextWindow\":\(tokens)}"
+            let profile = try JSONDecoder().decode(LocalModelOption.self, from: Data(json.utf8))
+            XCTAssertEqual(profile.contextWindowTitle, expected)
+        }
+    }
+
     func testSelectableLocalCatalogAndEmployeeAssignmentDecode() throws {
         let json = #"{"profiles":[{"id":"local-4090","enabled":true,"model":"officestra-local-smoke","title":"qwen3.6-27b","contextWindow":32768}],"assignments":[{"characterId":"left-man","profileId":"local-4090"}],"statuses":[]}"#
         let catalog = try JSONDecoder().decode(LocalProviderList.self, from: Data(json.utf8))

@@ -2554,6 +2554,14 @@ private struct AgentQuickSettingsView: View {
         director.localModelOptions.first { $0.id == director.localProfileID(for: character.id) }?.displayTitle ?? "로컬 AI"
     }
 
+    private var localContextTitle: String {
+        director.localModelOptions.first { $0.id == director.localProfileID(for: character.id) }?.contextWindowTitle ?? "—"
+    }
+
+    private func localReasoningTitle(_ value: String) -> String {
+        OfficeLocalization.string(value == "on" ? "추론 켜기" : value == "off" ? "추론 끄기" : "기본 추론")
+    }
+
     private var settings: CharacterAgentSettings {
         director.agentSettings(for: character.id)
     }
@@ -2651,8 +2659,31 @@ private struct AgentQuickSettingsView: View {
 
             if isLocal {
                 QuickSettingLabel(text: localModelTitle, systemImage: "cpu")
-                QuickSettingLabel(text: "32K", systemImage: "memorychip")
-                QuickSettingLabel(text: OfficeLocalization.string("기본 추론"), systemImage: "brain")
+                QuickSettingLabel(text: localContextTitle, systemImage: "memorychip")
+                let reasoning = director.localReasoningSelections[character.id.rawValue] ?? "default"
+                let reasoningOptions = director.localModelOptions.first { $0.id == director.localProfileID(for: character.id) }?.reasoningOptions ?? []
+                if reasoningOptions.isEmpty {
+                    QuickSettingLabel(text: localReasoningTitle(reasoning), systemImage: "brain")
+                } else {
+                    Menu {
+                        ForEach(reasoningOptions, id: \.self) { option in
+                            Button {
+                                let target = character.id
+                                Task { @MainActor in
+                                    if !(await director.setLocalReasoning(option, for: target)) { isShowingLocalResult = true }
+                                }
+                            } label: {
+                                if option == reasoning { Label(localReasoningTitle(option), systemImage: "checkmark") }
+                                else { Text(localReasoningTitle(option)) }
+                            }
+                        }
+                    } label: {
+                        QuickSettingLabel(text: localReasoningTitle(reasoning), systemImage: "brain")
+                    }
+                    .disabled(!availability.canChangeBackend)
+                    .help(OfficeLocalization.string("다음 요청부터 적용됩니다. 강도 단계는 현재 엔진에서 지원되지 않습니다."))
+                    .accessibilityIdentifier("localReasoningPicker")
+                }
                 QuickSettingLabel(text: OfficeLocalization.string(settings.permission.title), systemImage: "shield")
             } else {
             Menu {

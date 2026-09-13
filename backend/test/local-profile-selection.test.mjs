@@ -1,12 +1,32 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { localSelectionSettings, selectLocalProfile } from '../src/local-profile-selection.mjs';
+import { localSelectionSettings, selectLocalProfile, setLocalReasoning } from '../src/local-profile-selection.mjs';
 import { AgentRuntime } from '../src/agent-runtime.mjs';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 
 const definition={profile:{id:'local-test',providerKind:'local',backend:'claude',model:'qwen-test',endpoint:'http://127.0.0.1:41235',credentialEnv:'OFFICESTRA_LOCAL_TEST_TOKEN',credentialVersion:'v1',contextWindow:32768,maxOutputTokens:4096,usageProtocol:'anthropic-normalized-v1'},host:{address:'127.0.0.1',user:'test',sshPort:2222,keyPath:'/tmp/key',hostKeyAlias:'test',modelKey:'qwen/test',comfyPort:8188}};
 const original={id:'test',backend:'codex',model:'gpt-test',effort:'high',fastMode:true,permission:'workspace-write',config:{executablePath:'/custom/codex',keep:'unchanged'}};
+test('reasoning change is session-locked, idle-only and preserves existing settings/history',async()=>{
+  const s=fixture();const writes=[];
+  const client={query:async(sql,values)=>{
+    if(sql.startsWith('SELECT config'))return {rows:[{config:{localProfileId:'local-test',keep:'unchanged'}}]};
+    if(sql.startsWith('SELECT definition'))return {rows:[{definition:{...definition,host:{...definition.host,modelKey:'qwen3.8-27b'}}}]};
+    writes.push({sql,values});return {rows:[]};
+  },release:()=>{}};
+  const args={...s,pool:{connect:async()=>client},characterID:'test',reasoning:'on'};
+  assert.equal((await setLocalReasoning(args)).reasoning,'on');
+  const update=writes.find(x=>x.sql.startsWith('UPDATE characters'));
+  assert.deepEqual(JSON.parse(update.values[1]),{localProfileId:'local-test',keep:'unchanged',localReasoning:'on'});
+  assert.deepEqual(s.counts(),{ended:0,finalized:0,closed:1});
+  assert.ok(!writes.some(x=>/DELETE|UPDATE turns|UPDATE cli_sessions/.test(x.sql)));
+  assert.equal(s.runtime.preparingCharacters.size,0);
+  s.runtime.running.set('test',{});
+  await assert.rejects(setLocalReasoning(args),/작업/);
+  s.runtime.running.clear();s.runtime.terminalSessionRegistry.has=()=>true;
+  await assert.rejects(setLocalReasoning(args),/터미널/);
+  await assert.rejects(setLocalReasoning({...args,reasoning:'xhigh'}),/Unsupported/);
+});
 
 test('local selection pins measured model and restores exact previous cloud settings/config',()=>{
   const before=structuredClone(original);

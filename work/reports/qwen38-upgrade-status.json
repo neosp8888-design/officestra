@@ -1,0 +1,10 @@
+{
+  "startedAt": "2026-09-13T15:51:58.839Z",
+  "updatedAt": "2026-09-13T15:55:18.681Z",
+  "pid": 20918,
+  "phase": "validated-awaiting-backend-restart",
+  "validationDirectory": "/var/folders/hq/p1hq4jyj4x9dh0f6xlwsh7x80000gn/T/officestra-compact64-2Q5pfd",
+  "model": "qwen3.8-27b",
+  "peakVram": 97.31721218042664,
+  "operatingProfileUnchanged": true
+}

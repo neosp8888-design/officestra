@@ -14,6 +14,15 @@ const base={PATH:'/usr/bin',OFFICESTRA_LOCAL_4090_TOKEN:'test-local-secret',
   CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:'40',CLAUDE_CODE_MAX_CONTEXT_TOKENS:'200000',
   DISABLE_AUTO_COMPACT:'1',DISABLE_COMPACT:'1',OPENAI_API_KEY:'openai-secret'};
 const build=(overrides={})=>createLocalAgentLaunch({profile,character,workdir:'/tmp/local-validation',baseEnvironment:base,executable:'/usr/local/bin/claude',...overrides});
+test('GUI and terminal reasoning selections are pinned in profile and worker identity',()=>{
+  for(const mode of ['gui','terminal','persistent']) {
+    const on=build({mode,profile:{...profile,reasoning:'on'}});
+    const off=build({mode,profile:{...profile,reasoning:'off'}});
+    assert.equal(on.profile.reasoning,'on');assert.equal(off.profile.reasoning,'off');
+    assert.notEqual(on.signature,off.signature);
+    assert.throws(()=>build({mode,profile:{...profile,reasoning:'high'}}));
+  }
+});
 
 test('64K launch uses the measured window for GUI and terminal without disabling compaction or tools',()=>{
   for(const mode of ['gui','terminal']){

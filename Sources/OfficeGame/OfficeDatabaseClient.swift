@@ -119,6 +119,15 @@ struct OfficeDatabaseClient: Sendable {
         try validate(response, data: data)
     }
 
+    func setLocalReasoning(_ reasoning: String, for character: OfficeCharacter) async throws {
+        var request = URLRequest(url: baseURL.appending(path: "api/characters/\(character.rawValue)/local-reasoning"))
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["reasoning": reasoning])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response, data: data)
+    }
+
     func openTerminalSession(
         character: OfficeCharacter
     ) async throws -> TerminalLaunchSpecification {
@@ -1009,12 +1018,18 @@ struct LocalModelOption: Decodable, Identifiable, Equatable, Sendable {
     let model: String
     let title: String?
     let contextWindow: Int
+    var reasoningOptions: [String]? = nil
     var displayTitle: String { title ?? model }
+    var contextWindowTitle: String {
+        contextWindow > 0 && contextWindow.isMultiple(of: 1024)
+            ? "\(contextWindow / 1024)K" : "\(contextWindow)"
+    }
 }
 
 struct LocalProfileAssignment: Decodable, Sendable {
     let characterId: String
     let profileId: String
+    var reasoning: String? = nil
 }
 
 struct LocalProviderStatus: Decodable, Identifiable, Equatable, Sendable {

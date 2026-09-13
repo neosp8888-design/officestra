@@ -7,7 +7,7 @@ import { buildArguments, claudePersistentArguments, executionEnvironment, locate
 import { terminalArguments } from './terminal-sessions.mjs';
 
 const KEYS = new Set(['id','providerKind','backend','model','endpoint','credentialEnv',
-  'credentialVersion','contextWindow','maxOutputTokens','usageProtocol']);
+  'credentialVersion','contextWindow','maxOutputTokens','usageProtocol','reasoning']);
 const text = (value, name) => {
   if (typeof value !== 'string' || !value.trim() || /[\r\n\0]/.test(value)) {
     throw new TypeError(`Invalid local profile ${name}`);
@@ -32,9 +32,11 @@ export function normalizeLocalAgentProfile(value) {
   const credentialVersion=text(value.credentialVersion,'credentialVersion');
   if (![32768,65536].includes(value.contextWindow) || value.maxOutputTokens!==4096) throw new TypeError('Only measured 32K/64K contexts with 4096 output are enabled');
   if (value.usageProtocol!=='anthropic-normalized-v1') throw new TypeError('A usage-normalizing compatibility bridge is required');
+  if(value.reasoning!==undefined&&!['default','on','off'].includes(value.reasoning))throw new TypeError('Unsupported local reasoning option');
   return Object.freeze({id,providerKind:'local',backend:'claude',model,
     endpoint:url.origin,credentialEnv,credentialVersion,contextWindow:value.contextWindow,
-    maxOutputTokens:4096,usageProtocol:value.usageProtocol});
+    maxOutputTokens:4096,usageProtocol:value.usageProtocol,
+    ...(value.reasoning!==undefined?{reasoning:value.reasoning}:{})});
 }
 
 function localOptions(args, mode) {

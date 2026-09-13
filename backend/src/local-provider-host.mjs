@@ -8,7 +8,9 @@ import { LMStudioClient } from '@lmstudio/sdk';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 export class LocalHostBusyError extends Error {}
 // GPU memory budget only: CPU RAM retains its existing safety threshold.
-export const LOCAL_HOST_MEMORY_BUDGET=Object.freeze({vramGuardPercent:95,ramGuardPercent:77});
+// User-approved tolerance above 95%; this remains a sampled stop threshold,
+// not a driver-enforced allocation cap. Preserve CPU RAM protection.
+export const LOCAL_HOST_MEMORY_BUDGET=Object.freeze({vramGuardPercent:98,ramGuardPercent:77});
 export const LOCAL_HOST_LOAD_CONFIG=Object.freeze({gpu:Object.freeze({ratio:1}),gpuStrictVramCap:false,contextLength:32768,tryMmap:false,keepModelInMemory:false,evalBatchSize:128,flashAttention:true});
 export function localHostLoadConfig(profile) {
   if(profile?.contextWindow===32768)return LOCAL_HOST_LOAD_CONFIG;

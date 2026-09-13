@@ -1,0 +1,24 @@
+[
+  {
+    "field": "thinking",
+    "effort": "disabled",
+    "status": 200,
+    "value": "{\"id\":\"msg_gxitr8d4lkjg1i0r32c2c\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"5\"}],\"model\":\"officestra-qwen38-27b\",\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":23,\"output_tokens\":2,\"cache_read_input_tokens\":0}}"
+  },
+  {
+    "field": "thinking",
+    "effort": "enabled",
+    "status": 200,
+    "value": "{\"id\":\"msg_j9jf9nwv6vnebientu9pzq\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"We need answer user's simple question: \\\"What is 2 + 3? Answer briefly.\\\" Final should be brief: 5. Ensure no extra.\\n\"},{\"type\":\"text\",\"text\":\"5\"}],\"model\":\"officestra-qwen38-27b\",\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":63,\"output_tokens\":37,\"cache_read_input_tokens\":0}}"
+  },
+  {
+    "cli": true,
+    "code": 0,
+    "error": false,
+    "tools": [
+      "Bash"
+    ],
+    "final": "Done — `printf THINKING_TOOL_OK` executed successfully and printed `THINKING_TOOL_OK`.",
+    "stderr": "[claude-code:unrecognized_model] {\"model\":\"officestra-qwen38-27b\",\"query_source\":\"sdk\"}\n"
+  }
+]

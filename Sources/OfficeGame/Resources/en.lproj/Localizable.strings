@@ -724,6 +724,9 @@
 "로컬 4090" = "Local AI";
 "이전 클라우드 설정으로 돌아가기" = "Return to previous cloud settings";
 "기본 추론" = "Default reasoning";
+"추론 켜기" = "Thinking on";
+"추론 끄기" = "Thinking off";
+"다음 요청부터 적용됩니다. 강도 단계는 현재 엔진에서 지원되지 않습니다." = "Applies to the next request. Effort levels are not supported by the current engine.";
 "모델을 전환하고 새 세션을 시작할까요?" = "Switch model and start a new session?";
 "기존 대화 기록은 보존됩니다. 작업을 마치고 터미널을 닫은 뒤 전환하세요." = "Existing conversation history is preserved. Finish the task and close the terminal before switching.";
 "로컬 모델 전환" = "Switch local model";

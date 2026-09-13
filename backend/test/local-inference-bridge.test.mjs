@@ -1,9 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { LocalInferenceBridge, normalizeLocalMessageRequest } from '../src/local-inference-bridge.mjs';
+import { LocalInferenceBridge, normalizeLocalMessageRequest, applyLocalReasoning } from '../src/local-inference-bridge.mjs';
 import { INCLUSIVE_INPUT_PROFILE } from '../src/local-usage-normalizer.mjs';
 const token='isolated-bridge-test-token-32bytes';
+test('local thinking override preserves tools/messages and is not an ignored effort option',()=>{
+  const value={model:'test-model',max_tokens:4096,messages:[{role:'user',content:'hello'}],tools:[{name:'Read'}],thinking:{type:'disabled'},output_config:{effort:'high',format:{type:'json_schema'}}};
+  const on=applyLocalReasoning(value,'on');
+  assert.deepEqual(on.thinking,{type:'enabled',budget_tokens:1024});
+  assert.equal(on.output_config.effort,undefined);assert.deepEqual(on.output_config.format,value.output_config.format);
+  assert.equal(on.messages,value.messages);assert.equal(on.tools,value.tools);
+  assert.deepEqual(applyLocalReasoning(value,'off').thinking,{type:'disabled'});
+  assert.equal(applyLocalReasoning(value),value);
+  assert.throws(()=>applyLocalReasoning(value,'xhigh'));
+});
+test('authenticated bridge delivers thinking override on actual message requests',async t=>{
+  const s=await setup(t,jsonReply,{reasoning:'on'});
+  assert.equal((await s.post()).status,200);
+  assert.deepEqual(JSON.parse(s.seen.at(-1).body).thinking,{type:'enabled',budget_tokens:1024});
+});
 test('ToolSearch reference survives resume as compatible text without changing the session or tools',()=>{
   const value={model:'test-model',tools:[{name:'SendMessage',defer_loading:true,input_schema:{type:'object'}}],messages:[{role:'user',content:[{type:'tool_result',tool_use_id:'search-result',content:[{type:'tool_reference',tool_name:'SendMessage'},{type:'text',text:'Keep this text'},{type:'image',source:{type:'base64',data:'image-data'}}]},{type:'text',text:'Tool loaded.'}]}]};
   const before=JSON.stringify(value),result=normalizeLocalMessageRequest(value);
@@ -109,9 +124,16 @@ test('raising VRAM budget does not raise system RAM budget',async t=>{
   const s=await setup(t,jsonReply,{vramGuardPercent:95,ramGuardPercent:77,readResources:()=>({...current,sampledAt:Date.now()})});
   current={...current,ramPct:77};await until(()=>s.bridge.status.state==='fault');assert.equal(s.released(),1);
 });
-test('memory budgets above 95 or non-numeric values are rejected',()=>{
+test('GPU tolerance accepts 96 percent but still stops at 98',async t=>{
+  let current={...sample(),vramPct:96.12};
+  const s=await setup(t,jsonReply,{vramGuardPercent:98,ramGuardPercent:77,readResources:()=>({...current,sampledAt:Date.now()})});
+  assert.equal((await s.post()).status,200);
+  current={...current,vramPct:98};await until(()=>s.bridge.status.state==='fault');assert.equal(s.released(),1);
+});
+test('VRAM budgets above 98, RAM above 95 or non-numeric values are rejected',()=>{
   const options={upstream:'http://127.0.0.1:1234',token,model:'test-model',usageProfile:INCLUSIVE_INPUT_PROFILE,readResources:sample,audit:()=>{}};
-  for(const vramGuardPercent of [96,100,NaN,'95'])assert.throws(()=>new LocalInferenceBridge({...options,vramGuardPercent}));
+  for(const vramGuardPercent of [98.1,100,NaN,'95'])assert.throws(()=>new LocalInferenceBridge({...options,vramGuardPercent}));
+  assert.throws(()=>new LocalInferenceBridge({...options,ramGuardPercent:96}));
 });
 test('stale or missing startup sample fails closed',async()=>{
   for(const value of [null,{...sample(),sampledAt:Date.now()-10000},{...sample(),ramPct:80}]){

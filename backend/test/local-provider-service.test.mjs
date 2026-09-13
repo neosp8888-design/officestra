@@ -87,16 +87,23 @@ test('lazy startup, authenticated front door, raw usage normalizes and final rel
   const body=await(await s.post()).json();assert.equal(body.usage.input_tokens,80);assert.equal(body.usage.cache_read_input_tokens,20);
   await s.spec.release();assert.deepEqual(s.counts(),{starts:1,releases:1,requests:1});assert.deepEqual(s.service.status(),[]);
 });
-test('production service passes the GPU 95 budget through to its bridge',async t=>{
-  const s=await setup(t,{vramPct:94});assert.equal((await s.post()).status,200);
+test('production service passes the user-approved GPU 98 budget through to its bridge',async t=>{
+  const s=await setup(t,{vramPct:96.12});assert.equal((await s.post()).status,200);
+});
+test('reasoning changes preserve session identity; other model/profile changes do not',()=>{
+  const original={profile:{id:'test',contextWindow:65536,model:'qwen'},host:{modelKey:'qwen3.8-27b'}};
+  assert.equal(localResumeCompatible(original,{...original,profile:{...original.profile,reasoning:'on'}}),true);
+  assert.equal(localResumeCompatible(original,{...original,profile:{...original.profile,model:'other',reasoning:'on'}}),false);
 });
 test('host requests full GPU at 32K with no silent partial offload policy',()=>{
   assert.equal(LOCAL_HOST_LOAD_CONFIG.gpu.ratio,1);
   assert.equal(LOCAL_HOST_LOAD_CONFIG.gpuStrictVramCap,false);
   assert.equal(LOCAL_HOST_LOAD_CONFIG.contextLength,32768);
-  assert.deepEqual(LOCAL_HOST_MEMORY_BUDGET,{vramGuardPercent:95,ramGuardPercent:77});
+  assert.deepEqual(LOCAL_HOST_MEMORY_BUDGET,{vramGuardPercent:98,ramGuardPercent:77});
   assert.equal(localHostMemoryExceeded({vramPct:94.9,ramPct:76.9}),false);
-  assert.equal(localHostMemoryExceeded({vramPct:95,ramPct:55}),true);
+  assert.equal(localHostMemoryExceeded({vramPct:96.12,ramPct:55}),false);
+  assert.equal(localHostMemoryExceeded({vramPct:97.99,ramPct:55}),false);
+  assert.equal(localHostMemoryExceeded({vramPct:98,ramPct:55}),true);
   assert.equal(localHostMemoryExceeded({vramPct:90,ramPct:77}),true);
 });
 test('ComfyUI/lease busy waits, resumes once available without duplicate inference',async t=>{
