@@ -1,6 +1,46 @@
 import { AgentBusyError } from './agent-runtime.mjs';
 import { withCharacterSessionLocks } from './character-settings.mjs';
 import { normalizeLocalDefinition } from './local-provider-service.mjs';
+import { isIP } from 'node:net';
+import { WindowsLMStudioHost } from './local-provider-host.mjs';
+
+export function normalizeLocalHostAddress(value) {
+  const address=typeof value==='string'?value.trim():'';
+  if(isIP(address)!==4)throw new Error('올바른 IPv4 주소를 입력하세요. 포트나 http://는 넣지 마세요.');
+  return address;
+}
+
+export async function setLocalHostAddress({pool,runtime,localProviders,characterID,address,verifyHost=async definition=>{
+  const host=new WindowsLMStudioHost({...definition,stateDirectory:'/tmp/officestra-address-check'});
+  try{await host.remote('Write-Output OFFICESTRA_ADDRESS_OK',{timeout:10000});}
+  catch{throw new Error('해당 IP의 기존 PC에 SSH 연결할 수 없습니다. 주소와 PC 상태를 확인하세요.');}
+},broadcast=()=>{}}) {
+  address=normalizeLocalHostAddress(address);
+  const busy=()=>!runtime||runtime.draining||runtime.running.has(characterID)||runtime.preparingCharacters.has(characterID)||runtime.compactingCharacters.has(characterID)||runtime.terminalSessionRegistry?.has(characterID);
+  if(busy())throw new AgentBusyError('이 직원의 작업을 마치고 터미널을 닫은 뒤 전환하세요.');
+  runtime.preparingCharacters.add(characterID);
+  try {
+    await withCharacterSessionLocks(pool,[characterID],async client=>{
+      await client.query('BEGIN');
+      try {
+        const current=(await client.query('SELECT config FROM characters WHERE id=$1 FOR UPDATE',[characterID])).rows[0];
+        const profileID=current?.config?.localProfileId;
+        if(!profileID)throw new Error('Local profile required');
+        const found=(await client.query('SELECT definition FROM local_agent_profiles WHERE id=$1 AND enabled=true FOR SHARE',[profileID])).rows[0];
+        const definition=normalizeLocalDefinition(found?.definition);
+        definition.host.address=address;
+        await verifyHost(definition);
+        if(runtime.draining||runtime.running.has(characterID)||runtime.compactingCharacters.has(characterID)||runtime.terminalSessionRegistry?.has(characterID))throw new AgentBusyError('이 직원의 작업을 마치고 터미널을 닫은 뒤 전환하세요.');
+        await localProviders?.closeIdleProfile(profileID,address);
+        await client.query('UPDATE characters SET config=$2::jsonb,updated_at=now() WHERE id=$1',[characterID,JSON.stringify({...current.config,localHostAddress:address})]);
+        await client.query('COMMIT');
+      }catch(error){await client.query('ROLLBACK');throw error;}
+    });
+    runtime.closeClaudeWorker(characterID);
+    broadcast({type:'local.changed',characterId:characterID});
+    return {ok:true,characterId:characterID,address};
+  }finally{runtime.preparingCharacters.delete(characterID);}
+}
 
 export function localSelectionSettings(previous, definition) {
   const config={...(previous.config??{})};
@@ -8,7 +48,7 @@ export function localSelectionSettings(previous, definition) {
     if(!config.localProfileId)return null;
     const saved=config.localPreviousSettings;
     if(!saved)throw new Error('Previous cloud settings are unavailable');
-    delete config.localProfileId;delete config.localPreviousSettings;delete config.localReasoning;
+    delete config.localProfileId;delete config.localPreviousSettings;delete config.localReasoning;delete config.localHostAddress;
     delete config.executablePath;
     if(saved.executablePath)config.executablePath=saved.executablePath;
     return {...saved,config};
@@ -18,6 +58,7 @@ export function localSelectionSettings(previous, definition) {
   delete config.executablePath;
   config.localProfileId=definition.profile.id;
   delete config.localReasoning;
+  delete config.localHostAddress;
   const permission=['danger-full-access','dangerously-skip-permissions','bypassPermissions'].includes(previous.permission)?'bypassPermissions'
     :['workspace-write','accept-edits','acceptEdits','auto'].includes(previous.permission)?'auto':'plan';
   return {backend:'claude',model:definition.profile.model,effort:'default',fastMode:false,permission,config};

@@ -106,7 +106,10 @@ export class WindowsLMStudioHost {
         if(controller.signal.aborted||localHostMemoryExceeded(loaded)||loaded.busy)throw new Error('Local model exceeds memory budget after loading');
       }
       finally{clearTimeout(timer);clearInterval(guard);signal?.removeEventListener('abort',abort);}
-      return {upstream:`http://127.0.0.1:${port}`,sample:()=>this.sample(),release:()=>this.release(),alive:()=>!exited};
+      return {upstream:`http://127.0.0.1:${port}`,sample:()=>this.sample(),release:()=>this.release(),alive:()=>!exited,
+        // Called only after idle-state and pinned-host verification by settings.
+        // Retain the old ownership record/lease while cleaning up at the new route.
+        reconnectAddress:address=>{this.host=validateHost({...this.host,address});this.sshArgs[this.sshArgs.length-1]=`${this.host.user}@${this.host.address}`;}};
     }catch(e){await this.release();throw e;}
   }
   async release() {

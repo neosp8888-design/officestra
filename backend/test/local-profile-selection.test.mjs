@@ -1,12 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { localSelectionSettings, selectLocalProfile, setLocalReasoning } from '../src/local-profile-selection.mjs';
+import { localSelectionSettings, selectLocalProfile, setLocalReasoning, setLocalHostAddress, normalizeLocalHostAddress } from '../src/local-profile-selection.mjs';
 import { AgentRuntime } from '../src/agent-runtime.mjs';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 
 const definition={profile:{id:'local-test',providerKind:'local',backend:'claude',model:'qwen-test',endpoint:'http://127.0.0.1:41235',credentialEnv:'OFFICESTRA_LOCAL_TEST_TOKEN',credentialVersion:'v1',contextWindow:32768,maxOutputTokens:4096,usageProtocol:'anthropic-normalized-v1'},host:{address:'127.0.0.1',user:'test',sshPort:2222,keyPath:'/tmp/key',hostKeyAlias:'test',modelKey:'qwen/test',comfyPort:8188}};
 const original={id:'test',backend:'codex',model:'gpt-test',effort:'high',fastMode:true,permission:'workspace-write',config:{executablePath:'/custom/codex',keep:'unchanged'}};
+test('IPv4 input rejects commands, ports, URLs, invalid octets and empty values',()=>{
+  assert.equal(normalizeLocalHostAddress(' 222.109.147.73 '),'222.109.147.73');
+  for(const value of ['',null,123,'host','127.0.0.1:22','http://127.0.0.1','1.2.3.256','01.2.3.4','1.2.3.4;whoami','::1'])assert.throws(()=>normalizeLocalHostAddress(value));
+});
+test('address save verifies pinned host, preserves session/history and rolls back failures',async()=>{
+  const s=fixture();const writes=[];let verified=0,closed=0;let rejectProbe=false;
+  const client={query:async(sql,values)=>{
+    if(sql.startsWith('SELECT config'))return {rows:[{config:{localProfileId:'local-test',localReasoning:'on',keep:'same'}}]};
+    if(sql.startsWith('SELECT definition'))return {rows:[{definition}]};
+    writes.push({sql,values});return {rows:[]};
+  },release:()=>{}};
+  const args={...s,pool:{connect:async()=>client},characterID:'test',address:'222.109.147.73',localProviders:{closeIdleProfile:async()=>{closed++;}},verifyHost:async d=>{
+    verified++;assert.equal(d.host.hostKeyAlias,definition.host.hostKeyAlias);assert.equal(d.host.address,'222.109.147.73');
+    if(rejectProbe)throw new Error('SSH mismatch');
+  }};
+  await setLocalHostAddress(args);
+  assert.equal(verified,1);assert.equal(closed,1);
+  assert.deepEqual(JSON.parse(writes.find(w=>w.sql.startsWith('UPDATE characters')).values[1]),{localProfileId:'local-test',localReasoning:'on',keep:'same',localHostAddress:'222.109.147.73'});
+  assert.ok(!writes.some(w=>/DELETE|UPDATE turns|UPDATE cli_sessions|UPDATE local_agent_profiles/.test(w.sql)));
+  assert.deepEqual(s.counts(),{ended:0,finalized:0,closed:1});
+  writes.length=0;rejectProbe=true;
+  await assert.rejects(setLocalHostAddress(args),/SSH mismatch/);
+  assert.ok(writes.some(w=>w.sql==='ROLLBACK'));assert.ok(!writes.some(w=>w.sql.startsWith('UPDATE')));
+  assert.equal(s.runtime.preparingCharacters.size,0);
+  s.runtime.running.set('test',{});await assert.rejects(setLocalHostAddress(args),/작업/);
+  s.runtime.running.clear();s.runtime.terminalSessionRegistry.has=()=>true;await assert.rejects(setLocalHostAddress(args),/터미널/);
+});
 test('reasoning change is session-locked, idle-only and preserves existing settings/history',async()=>{
   const s=fixture();const writes=[];
   const client={query:async(sql,values)=>{

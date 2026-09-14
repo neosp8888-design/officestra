@@ -16,6 +16,7 @@ export async function resolveLocalCharacter(client,character) {
   const result=await client.query('SELECT definition FROM local_agent_profiles WHERE id=$1 AND enabled=true',[id]);
   if(!result.rows[0])throw new Error('Local profile is disabled or missing');
   const definition=normalizeLocalDefinition(result.rows[0].definition);
+  if(character.config?.localHostAddress)definition.host=validateHost({...definition.host,address:character.config.localHostAddress});
   if(character.config?.localReasoning)definition.profile=normalizeLocalAgentProfile({...definition.profile,reasoning:character.config.localReasoning});
   if(character.backend!=='claude'||character.model!==definition.profile.model||character.effort!=='default'||character.fastMode)throw new Error('Local employee settings do not match the profile');
   character.localProfile=definition;
@@ -25,8 +26,10 @@ export async function snapshotLocalTurn(client,turnID,character) {
   if(character.localProfile)await client.query("UPDATE turns SET provider_kind='local',provider_snapshot=$2::jsonb WHERE id=$1",[turnID,JSON.stringify(character.localProfile)]);
 }
 export function localResumeCompatible(previous,next) {
-  // Thinking selection changes inference, not model/session identity.
-  const strip=d=>d?{...d,profile:Object.fromEntries(Object.entries(d.profile??{}).filter(([k])=>k!=='reasoning'))}:d;
+  // Address is a route, not session identity. Every connection still verifies
+  // the pinned SSH host key; user/key/model/hostKeyAlias changes remain blocked.
+  const samePinnedHost=typeof previous?.host?.hostKeyAlias==='string' && previous.host.hostKeyAlias.length>0 && previous.host.hostKeyAlias===next?.host?.hostKeyAlias;
+  const strip=d=>d?{...d,host:samePinnedHost?Object.fromEntries(Object.entries(d.host??{}).filter(([k])=>k!=='address')):d.host,profile:Object.fromEntries(Object.entries(d.profile??{}).filter(([k])=>k!=='reasoning'))}:d;
   previous=strip(previous);next=strip(next);
   if(isDeepStrictEqual(previous,next))return true;
   // A measured window increase does not change model/account/session identity.
@@ -165,6 +168,14 @@ export class LocalProviderService {
     e.closed=true;e.active?.abort.abort();
     e.closing=(async()=>{await e.ready.catch(()=>{});e.server.closeAllConnections();await new Promise(r=>e.server.close(r));await Promise.all([...e.pending]);await e.bridge?.stop();this.entries.delete(e.key);this.broadcast({type:'local.changed',profileId:e.definition.profile.id,state:'closed'});})();
     return e.closing;
+  }
+  async closeIdleProfile(profileID, verifiedAddress) {
+    const entries=[...this.entries.values()].filter(e=>e.definition.profile.id===profileID);
+    if(entries.some(e=>e.users||e.active))throw new LocalHostBusyError('로컬 연결을 사용 중입니다. 작업을 마치고 터미널을 닫아주세요.');
+    for(const e of entries){
+      if(verifiedAddress)e.resource?.reconnectAddress?.(verifiedAddress);
+      await this.close(e);
+    }
   }
   async shutdown(){this.closed=true;await Promise.all([...this.entries.values()].map(e=>this.close(e)));}
 }

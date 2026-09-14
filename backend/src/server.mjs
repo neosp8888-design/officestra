@@ -3,7 +3,8 @@
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { LocalProviderService, normalizeLocalDefinition } from './local-provider-service.mjs';
-import { selectLocalProfile, setLocalReasoning } from './local-profile-selection.mjs';
+import { selectLocalProfile, setLocalReasoning, setLocalHostAddress } from './local-profile-selection.mjs';
+import { LocalHostBusyError } from './local-provider-host.mjs';
 import { WebSocket, WebSocketServer } from "ws";
 
 import {
@@ -2253,8 +2254,13 @@ const server = createServer(async (request, response) => {
       url.pathname === "/api/local-profiles"
     ) {
       const profiles = await pool.query('SELECT id, enabled, definition FROM local_agent_profiles ORDER BY id');
-      const assignments = await pool.query("SELECT id AS \"characterId\", config->>'localProfileId' AS \"profileId\", config->>'localReasoning' AS reasoning FROM characters WHERE config ? 'localProfileId'");
+      const assignments = await pool.query("SELECT c.id AS \"characterId\", c.config->>'localProfileId' AS \"profileId\", c.config->>'localReasoning' AS reasoning, COALESCE(c.config->>'localHostAddress', p.definition->'host'->>'address') AS address FROM characters c LEFT JOIN local_agent_profiles p ON p.id=c.config->>'localProfileId' WHERE c.config ? 'localProfileId'");
       send(response,200,{profiles:profiles.rows.map(row=>({id:row.id,enabled:row.enabled,model:row.definition.profile.model,title:row.definition.host.modelKey.split('/').at(-1),contextWindow:row.definition.profile.contextWindow,reasoningOptions:row.definition.host.modelKey==='qwen3.8-27b'?['default','on','off']:[]})),assignments:assignments.rows,statuses:localProviders?.status()??[]});
+    } else if (request.method === 'PUT' && /^\/api\/characters\/[^/]+\/local-address$/.test(url.pathname)) {
+      if(!trustedJSONMutation(request,response))return;
+      const body=await readJSON(request);
+      try{send(response,200,await setLocalHostAddress({pool,runtime,localProviders,characterID:decodeURIComponent(url.pathname.split('/')[3]),address:body.address,broadcast}));}
+      catch(error){send(response,error instanceof AgentBusyError||error instanceof LocalHostBusyError?409:400,{error:error.message});}
     } else if (request.method === 'PUT' && /^\/api\/characters\/[^/]+\/local-reasoning$/.test(url.pathname)) {
       if(!trustedJSONMutation(request,response))return;
       const body=await readJSON(request);

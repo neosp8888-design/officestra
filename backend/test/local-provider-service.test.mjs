@@ -18,16 +18,34 @@ test('64K uses quantized KV only; original 32K load policy stays unchanged',()=>
   assert.equal(config.flashAttention,true);assert.equal(config.gpuStrictVramCap,false);
   assert.throws(()=>localHostLoadConfig({...definition.profile,contextWindow:49152}));
 });
-test('only measured context increase preserves session; credentials/model/host changes remain blocked',async()=>{
+test('context increase and route changes preserve session; pinned identity changes remain blocked',async()=>{
   const larger={...definition,profile:{...definition.profile,contextWindow:65536}};
   assert.equal(localResumeCompatible(definition,larger),true);
   assert.equal(localResumeCompatible(larger,definition),false);
   for(const field of ['id','providerKind','backend','model','credentialEnv','credentialVersion','endpoint','usageProtocol','maxOutputTokens']){
     assert.equal(localResumeCompatible(definition,{...larger,profile:{...larger.profile,[field]:'changed'}}),false,field);
   }
-  assert.equal(localResumeCompatible(definition,{...larger,host:{...larger.host,address:'other-host'}}),false);
+  assert.equal(localResumeCompatible(definition,{...larger,host:{...larger.host,address:'other-host'}}),true);
+  for(const field of ['hostKeyAlias','user','keyPath','sshPort','modelKey']){
+    assert.equal(localResumeCompatible(definition,{...larger,host:{...larger.host,address:'other-host',[field]:'different'}}),false,field);
+  }
   const client={query:async()=>({rows:[{provider_kind:'local',provider_snapshot:definition}]})};
   await validateLocalResume(client,'same-session',{...character,localProfile:larger},'same-external-id');
+});
+test('address-only resume keeps context and rejects an unpinned identity',()=>{
+  const changed={...definition,host:{...definition.host,address:'222.109.147.73'}};
+  assert.equal(localResumeCompatible(definition,changed),true);
+  assert.equal(localResumeCompatible({...definition,host:{...definition.host,hostKeyAlias:''}},{...changed,host:{...changed.host,hostKeyAlias:''}}),false);
+});
+test('idle profile cleanup uses verified new route, never interrupts active users',async()=>{
+  const service=new LocalProviderService({pool:{},stateDirectory:'/tmp/unused'});
+  const calls=[];
+  const e={definition,users:1,active:null,resource:{reconnectAddress:ip=>calls.push(ip)}};
+  service.entries.set('test',e);service.close=async entry=>{assert.equal(entry,e);calls.push('closed');};
+  await assert.rejects(service.closeIdleProfile(definition.profile.id,'222.109.147.73'),/사용 중/);
+  assert.deepEqual(calls,[]);
+  e.users=0;await service.closeIdleProfile(definition.profile.id,'222.109.147.73');
+  assert.deepEqual(calls,['222.109.147.73','closed']);
 });
 test('a live 32K entry cannot silently be reused as a 64K model',async t=>{
   const s=await setup(t);
@@ -130,6 +148,11 @@ test('cloud stays untouched; local profile must explicitly match and snapshot',a
   const local={...character,config:{localProfileId:definition.profile.id}};delete local.localProfile;
   await resolveLocalCharacter(client,local);assert.equal(local.localProfile.profile.id,definition.profile.id);
   await snapshotLocalTurn(client,'turn',local);assert.equal(queries,2);
+  const routed={...local,config:{...local.config,localHostAddress:'222.109.147.73'}};
+  await resolveLocalCharacter(client,routed);
+  assert.equal(routed.localProfile.host.address,'222.109.147.73');
+  assert.equal(definition.host.address,'127.0.0.1');
+  assert.equal(localResumeCompatible(local.localProfile,routed.localProfile),true);
   await assert.rejects(()=>resolveLocalCharacter(client,{...local,effort:'high'}));
 });
 test('cloud resume cannot silently become local; local resume keeps provider identity',async()=>{

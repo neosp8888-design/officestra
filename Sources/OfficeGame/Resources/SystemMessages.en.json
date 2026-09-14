@@ -1,4 +1,7 @@
 [
+  {"source":"올바른 IPv4 주소를 입력하세요. 포트나 http://는 넣지 마세요.","translation":"Enter a valid IPv4 address without a port or http://."},
+  {"source":"해당 IP의 기존 PC에 SSH 연결할 수 없습니다. 주소와 PC 상태를 확인하세요.","translation":"Cannot connect to the previously trusted PC via SSH at this IP. Check the address and the PC's status."},
+  {"source":"로컬 연결을 사용 중입니다. 작업을 마치고 터미널을 닫아주세요.","translation":"The local connection is in use. Finish the task and close the terminal."},
   {"source":"직원 설정은 JSON 객체여야 합니다.","translation":"Teammate settings must be a JSON object."},
   {"source":"직원 식별자를 입력하세요.","translation":"Enter a teammate ID."},
   {"source":"지원하지 않는 CLI입니다.","translation":"This CLI is not supported."},

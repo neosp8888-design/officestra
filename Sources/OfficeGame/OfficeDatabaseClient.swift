@@ -128,6 +128,16 @@ struct OfficeDatabaseClient: Sendable {
         try validate(response, data: data)
     }
 
+    func setLocalHostAddress(_ address: String, for character: OfficeCharacter) async throws {
+        var request = URLRequest(url: baseURL.appending(path: "api/characters/\(character.rawValue)/local-address"))
+        request.httpMethod = "PUT"
+        request.timeoutInterval = 45
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["address": address])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response, data: data)
+    }
+
     func openTerminalSession(
         character: OfficeCharacter
     ) async throws -> TerminalLaunchSpecification {
@@ -1030,6 +1040,18 @@ struct LocalProfileAssignment: Decodable, Sendable {
     let characterId: String
     let profileId: String
     var reasoning: String? = nil
+    var address: String? = nil
+}
+
+enum LocalHostAddressInput {
+    static func isValid(_ value: String) -> Bool {
+        let parts = value.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count == 4 && parts.allSatisfy { part in
+            guard !part.isEmpty, part.utf8.allSatisfy({ (48...57).contains($0) }),
+                  part.count == 1 || part.first != "0", let number = Int(part) else { return false }
+            return (0...255).contains(number)
+        }
+    }
 }
 
 struct LocalProviderStatus: Decodable, Identifiable, Equatable, Sendable {

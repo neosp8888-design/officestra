@@ -797,6 +797,7 @@ final class AgentDirector: ObservableObject {
     @Published private(set) var localProviderStatuses: [LocalProviderStatus] = []
     @Published private(set) var localModelOptions: [LocalModelOption] = []
     @Published private(set) var localProfileAssignments: [String: String] = [:]
+    @Published private(set) var localHostAddresses: [String: String] = [:]
     @Published private(set) var localReasoningSelections: [String: String] = [:]
     @Published private(set) var terminalRestartRequest:
         TerminalRestartRequest?
@@ -2606,11 +2607,19 @@ final class AgentDirector: ObservableObject {
             localModelOptions = (catalog.profiles ?? []).filter(\.enabled)
             localProfileAssignments = Dictionary((catalog.assignments ?? []).map { ($0.characterId, $0.profileId) }, uniquingKeysWith: { _, last in last })
             localReasoningSelections = Dictionary((catalog.assignments ?? []).map { ($0.characterId, $0.reasoning ?? "default") }, uniquingKeysWith: { _, last in last })
+            localHostAddresses = Dictionary((catalog.assignments ?? []).compactMap { assignment in
+                assignment.address.map { (assignment.characterId, $0) }
+            }, uniquingKeysWith: { _, last in last })
         }
     }
 
     func localProfileID(for character: OfficeCharacter) -> String? {
         localProfileAssignments[character.rawValue]
+    }
+
+    func setLocalHostAddress(_ address: String, for character: OfficeCharacter) async throws {
+        try await database.setLocalHostAddress(address, for: character)
+        await refreshLocalProviderStatuses()
     }
 
     func setLocalReasoning(_ reasoning: String, for character: OfficeCharacter) async -> Bool {

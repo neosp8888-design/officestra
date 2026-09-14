@@ -3151,6 +3151,55 @@ enum CharacterIdentitySettingsLayout {
     static let identityPromptHeight: CGFloat = 280
 }
 
+private struct LocalConnectionSettingsView: View {
+    @ObservedObject var director: AgentDirector
+    let character: OfficeCharacter
+    @State private var address = ""
+    @State private var saving = false
+    @State private var message: String?
+    @State private var failed = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(OfficeLocalization.string("로컬 PC 연결 주소"))
+                .font(.system(size: 12, weight: .semibold))
+            HStack {
+                TextField("192.168.0.10", text: $address)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("localPCAddressField")
+                    .disabled(saving)
+                Button(OfficeLocalization.string(saving ? "연결 확인 중…" : "확인 후 주소 저장")) {
+                    Task {
+                        saving = true
+                        message = nil
+                        defer { saving = false }
+                        do {
+                            try await director.setLocalHostAddress(address.trimmingCharacters(in: .whitespacesAndNewlines), for: character)
+                            failed = false
+                            message = OfficeLocalization.string("주소를 저장했습니다. 기존 대화는 그대로 이어집니다.")
+                        } catch {
+                            failed = true
+                            message = OfficeLocalization.systemMessage(error.localizedDescription)
+                        }
+                    }
+                }
+                .accessibilityIdentifier("saveLocalPCAddress")
+                .disabled(saving || !LocalHostAddressInput.isValid(address))
+            }
+            Text(OfficeLocalization.string("PC의 IPv4 주소만 입력하세요. 작업을 마치고 터미널을 닫은 뒤 저장하세요."))
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+            if let message {
+                Text(message).font(.system(size: 11)).foregroundStyle(failed ? Color.red : Color.secondary)
+            }
+        }
+        .task(id: character) {
+            await director.refreshLocalProviderStatuses()
+            address = director.localHostAddresses[character.rawValue] ?? ""
+        }
+        .interactiveDismissDisabled(saving)
+    }
+}
+
 private struct CharacterIdentitySettingsView: View {
     let director: AgentDirector
     let character: OfficeCharacter
@@ -3244,6 +3293,11 @@ private struct CharacterIdentitySettingsView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            if director.localProfileID(for: character) != nil {
+                Divider()
+                LocalConnectionSettingsView(director: director, character: character)
+            }
+
             if let errorMessage {
                 Text(OfficeLocalization.systemMessage(errorMessage))
                     .font(.system(size: 11, weight: .medium))
@@ -3267,7 +3321,7 @@ private struct CharacterIdentitySettingsView: View {
         .padding(18)
         .frame(
             width: CharacterIdentitySettingsLayout.width,
-            height: CharacterIdentitySettingsLayout.height
+            height: CharacterIdentitySettingsLayout.height + (director.localProfileID(for: character) != nil ? 140 : 0)
         )
         .task(id: character) {
             await load()

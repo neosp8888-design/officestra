@@ -734,3 +734,8 @@
 "로컬 4090 메뉴에서 클라우드로 돌아간 뒤 설정을 변경하세요." = "Return to cloud in the Local AI menu before changing settings.";
 "잠시 후 다시 시도하세요." = "Please try again shortly.";
 "전환" = "Switch";
+"로컬 PC 연결 주소" = "Local PC address";
+"연결 확인 중…" = "Checking connection…";
+"확인 후 주소 저장" = "Verify and save address";
+"주소를 저장했습니다. 기존 대화는 그대로 이어집니다." = "Address saved. Your existing conversation will continue.";
+"PC의 IPv4 주소만 입력하세요. 작업을 마치고 터미널을 닫은 뒤 저장하세요." = "Enter only the PC's IPv4 address. Finish the task and close the terminal before saving.";

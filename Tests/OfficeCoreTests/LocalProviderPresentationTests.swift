@@ -2,6 +2,12 @@ import XCTest
 @testable import OfficeGame
 
 final class LocalProviderPresentationTests: XCTestCase {
+    func testAddressDecodeAndIPv4Validation() throws {
+        let data = Data(#"{"characterId":"right-woman","profileId":"local","address":"222.109.147.73"}"#.utf8)
+        XCTAssertEqual(try JSONDecoder().decode(LocalProfileAssignment.self, from: data).address, "222.109.147.73")
+        for value in ["222.109.147.73", " 192.168.0.10 "] { XCTAssertTrue(LocalHostAddressInput.isValid(value)) }
+        for value in ["", "1.2.3.256", "01.2.3.4", "1.2.3", "1.2.3.4:22", "http://1.2.3.4", "::1", "1.2.3.4;ls"] { XCTAssertFalse(LocalHostAddressInput.isValid(value), value) }
+    }
     func testVerifiedReasoningOptionsAndSelectionDecode() throws {
         let json = #"{"profiles":[{"id":"qwen38","enabled":true,"model":"qwen","contextWindow":65536,"reasoningOptions":["default","on","off"]}],"assignments":[{"characterId":"right-woman","profileId":"qwen38","reasoning":"on"}],"statuses":[]}"#
         let catalog = try JSONDecoder().decode(LocalProviderList.self, from: Data(json.utf8))
