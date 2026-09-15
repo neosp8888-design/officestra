@@ -321,7 +321,7 @@ final class UsageBoardLayoutTests: XCTestCase {
         )
         XCTAssertEqual(
             usageResetRemainingText(later, relativeTo: now),
-            "131시간 0분"
+            "5일 11시간 0분"
         )
         XCTAssertEqual(
             usageResetRemainingText(
@@ -341,6 +341,47 @@ final class UsageBoardLayoutTests: XCTestCase {
             "1시간 29분"
         )
         XCTAssertNil(usageResetRemainingText(minutes: 0))
+    }
+
+    func testUsagePaceMarkerTracksRemainingShareOfWindow() throws {
+        let sevenDays = 7 * 24 * 60
+        let fourDays = 4 * 24 * 60
+
+        XCTAssertEqual(
+            try XCTUnwrap(usagePaceRemainingFraction(
+                remainingMinutes: fourDays,
+                windowMinutes: sevenDays
+            )),
+            4.0 / 7.0,
+            accuracy: 0.000_001
+        )
+        let expected = try XCTUnwrap(usagePaceRemainingFraction(
+            remainingMinutes: fourDays,
+            windowMinutes: sevenDays
+        ))
+        XCTAssertEqual(
+            usagePaceStatus(remainingPercent: 57, expectedFraction: expected),
+            .comfortable
+        )
+        XCTAssertEqual(
+            usagePaceStatus(remainingPercent: 56, expectedFraction: expected),
+            .behind
+        )
+        XCTAssertNil(
+            usagePaceStatus(remainingPercent: nil, expectedFraction: expected)
+        )
+        XCTAssertNil(
+            usagePaceRemainingFraction(
+                remainingMinutes: nil,
+                windowMinutes: sevenDays
+            )
+        )
+        XCTAssertNil(
+            usagePaceRemainingFraction(
+                remainingMinutes: 0,
+                windowMinutes: sevenDays
+            )
+        )
     }
 
     func testUsageSummaryDecodesProviderResetTimestamp() throws {

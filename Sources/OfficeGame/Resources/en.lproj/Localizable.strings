@@ -133,6 +133,7 @@
 "%d초" = "%d sec";
 "%d분 %d초" = "%d min %d sec";
 "%d시간 %d분" = "%d hr %d min";
+"%d일 %d시간 %d분" = "%d d %d hr %d min";
 "파일 %d개를 편집하는 중" = "Editing %d files";
 "파일 변경을 적용하는 중" = "Applying file changes";
 "파일 %d개 변경에 실패했습니다" = "Failed to change %d files";
@@ -570,6 +571,8 @@
 "첫 대화 뒤 활성 세션이 생기면 압축할 수 있습니다" = "Can be compacted once an active session is created after the first conversation";
 "체크한 모델은 하단 선택기에서 제외됩니다. 새 모델은 자동으로 표시됩니다." = "Checked models will be excluded from the bottom picker. New models are shown automatically.";
 "초기화까지 %@" = "Reset in %@";
+"여유" = "Ahead";
+"부족" = "Behind";
 "최근 수집 %@" = "Recently collected %@";
 "추론 %@" = "Reasoning %@";
 "추론, %@" = "Reasoning, %@";

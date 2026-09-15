@@ -269,6 +269,8 @@ final class OfficeLocalizationTests: XCTestCase {
             ("터미널 상태를 확인하지 못했습니다", "Could not check terminal status"),
             ("5시간", "5H"),
             ("7일", "7D"),
+            ("여유", "Ahead"),
+            ("부족", "Behind"),
             ("주간", "Weekly"),
             ("오늘 비용", "Today"),
             ("30일 비용", "30D"),

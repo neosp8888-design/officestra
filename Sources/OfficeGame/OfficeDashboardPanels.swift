@@ -877,6 +877,7 @@ private struct UsageProviderCard: View {
                 UsageMeter(
                     label: OfficeLocalization.string("5시간"),
                     value: fiveHour,
+                    windowMinutes: 5 * 60,
                     resetAt: fiveHourResetAt,
                     fetchedAt: fetchedAt,
                     tint: tint
@@ -885,6 +886,7 @@ private struct UsageProviderCard: View {
             UsageMeter(
                 label: OfficeLocalization.string("7일"),
                 value: weekly,
+                windowMinutes: 7 * 24 * 60,
                 resetAt: weeklyResetAt,
                 fetchedAt: fetchedAt,
                 tint: tint
@@ -1087,51 +1089,115 @@ private struct UsageResetCountdown<Content: View>: View {
 private struct UsageMeter: View {
     let label: String
     let value: Int?
+    let windowMinutes: Int
     let resetAt: Date?
     let fetchedAt: Date
     let tint: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 9) {
-                Text(label)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 32, alignment: .leading)
+        TimelineView(.periodic(from: fetchedAt, by: 60)) { timeline in
+            let remainingMinutes = usageResetRemainingMinutes(
+                resetAt,
+                relativeTo: timeline.date
+            )
+            let paceFraction = usagePaceRemainingFraction(
+                remainingMinutes: remainingMinutes,
+                windowMinutes: windowMinutes
+            )
+            let paceStatus = usagePaceStatus(
+                remainingPercent: value,
+                expectedFraction: paceFraction
+            )
 
-                GeometryReader { geometry in
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(Color.primary.opacity(0.075))
-                        Capsule()
-                            .fill(tint)
-                            .frame(
-                                width: geometry.size.width
-                                    * CGFloat(value ?? 0) / 100
-                            )
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 9) {
+                    Text(label)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32, alignment: .leading)
+
+                    GeometryReader { geometry in
+                        ZStack(alignment: .leading) {
+                            Capsule()
+                                .fill(Color.primary.opacity(0.075))
+                                .frame(height: 6)
+                            Capsule()
+                                .fill(tint)
+                                .frame(
+                                    width: geometry.size.width
+                                        * CGFloat(value ?? 0) / 100,
+                                    height: 6
+                                )
+                            if let paceFraction {
+                                let halfWidth = CGFloat(1.5)
+                                let markerX = min(
+                                    max(
+                                        halfWidth,
+                                        geometry.size.width * CGFloat(paceFraction)
+                                    ),
+                                    max(halfWidth, geometry.size.width - halfWidth)
+                                )
+                                Capsule()
+                                    .fill(Color.white.opacity(0.96))
+                                    .overlay {
+                                        Capsule()
+                                            .stroke(
+                                                Color.primary.opacity(0.62),
+                                                lineWidth: 0.75
+                                            )
+                                    }
+                                    .frame(width: halfWidth * 2, height: 10)
+                                    .position(
+                                        x: markerX,
+                                        y: geometry.size.height / 2
+                                    )
+                                    .accessibilityHidden(true)
+                            }
+                        }
                     }
+                    .frame(height: 10)
+
+                    Text(value.map { "\($0)%" } ?? "–")
+                        .font(
+                            .system(size: 10, weight: .bold, design: .rounded)
+                        )
+                        .frame(width: 34, alignment: .trailing)
                 }
-                .frame(height: 6)
 
-                Text(value.map { "\($0)%" } ?? "–")
-                    .font(
-                        .system(size: 10, weight: .bold, design: .rounded)
-                    )
-                    .frame(width: 34, alignment: .trailing)
+                if let reset = usageResetRemainingText(minutes: remainingMinutes) {
+                    HStack(spacing: 6) {
+                        if let paceStatus {
+                            Text(OfficeLocalization.string(paceStatus.textKey))
+                                .foregroundStyle(paceStatus.color)
+                        }
+                        Spacer(minLength: 4)
+                        Label(
+                            OfficeLocalization.format("초기화까지 %@", reset),
+                            systemImage: "clock.arrow.circlepath"
+                        )
+                        .foregroundStyle(.tertiary)
+                    }
+                    .font(.system(size: 8.5, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                }
             }
+        }
+    }
+}
 
-            UsageResetCountdown(
-                resetAt: resetAt,
-                fetchedAt: fetchedAt
-            ) { reset in
-                Label(
-                    OfficeLocalization.format("초기화까지 %@", reset),
-                    systemImage: "clock.arrow.circlepath"
-                )
-                .font(.system(size: 8.5, weight: .semibold))
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-            }
+private extension UsagePaceStatus {
+    var textKey: String {
+        switch self {
+        case .comfortable: "여유"
+        case .behind: "부족"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .comfortable: Color(red: 0.10, green: 0.48, blue: 0.30)
+        case .behind: Color(red: 0.85, green: 0.45, blue: 0.12)
         }
     }
 }

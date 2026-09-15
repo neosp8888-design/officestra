@@ -402,12 +402,44 @@ func usageResetRemainingText(minutes totalMinutes: Int?) -> String? {
         return nil
     }
 
-    let hours = totalMinutes / 60
+    let days = totalMinutes / (24 * 60)
+    let hours = (totalMinutes % (24 * 60)) / 60
     let minutes = totalMinutes % 60
+    if days > 0 {
+        return OfficeLocalization.format("%d일 %d시간 %d분", days, hours, minutes)
+    }
     if hours == 0 {
         return OfficeLocalization.format("%d분", minutes)
     }
     return OfficeLocalization.format("%d시간 %d분", hours, minutes)
+}
+
+/// 현재 속도로 한도를 고르게 쓴다면 남아 있어야 하는 할당량 비율이다.
+/// 막대 자체가 남은 할당량을 나타내므로 남은 시간 비율과 같은 위치에 둔다.
+func usagePaceRemainingFraction(
+    remainingMinutes: Int?,
+    windowMinutes: Int
+) -> Double? {
+    guard let remainingMinutes, remainingMinutes > 0, windowMinutes > 0 else {
+        return nil
+    }
+    return min(1, Double(remainingMinutes) / Double(windowMinutes))
+}
+
+enum UsagePaceStatus: Equatable {
+    case comfortable
+    case behind
+}
+
+func usagePaceStatus(
+    remainingPercent: Int?,
+    expectedFraction: Double?
+) -> UsagePaceStatus? {
+    guard let remainingPercent, let expectedFraction else {
+        return nil
+    }
+    let expectedPercent = Int((expectedFraction * 100).rounded())
+    return remainingPercent >= expectedPercent ? .comfortable : .behind
 }
 
 /// 직원이 쓰는 CLI의 설치본과 배포 최신본 비교 결과다.
