@@ -1,9 +1,48 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { LocalInferenceBridge, normalizeLocalMessageRequest, applyLocalReasoning } from '../src/local-inference-bridge.mjs';
+import { LocalInferenceBridge, normalizeLocalMessageRequest, applyLocalReasoning, normalizeLocalResponsesRequest } from '../src/local-inference-bridge.mjs';
 import { INCLUSIVE_INPUT_PROFILE } from '../src/local-usage-normalizer.mjs';
+import { RESPONSES_INCLUSIVE_PROFILE } from '../src/local-responses-usage.mjs';
 const token='isolated-bridge-test-token-32bytes';
+const responsesOptions={usageProtocol:'openai-responses-v1',usageProfile:RESPONSES_INCLUSIVE_PROFILE};
+const responsesReply=(req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify({id:'resp-test',object:'response',status:'completed',output:[],usage:{input_tokens:100,output_tokens:12,total_tokens:112,input_tokens_details:{cached_tokens:80},output_tokens_details:{reasoning_tokens:10}}}));};
+test('Codex resumed developer updates stay instructions without invalid mid-conversation system messages',()=>{
+  const user={type:'message',role:'user',content:[{type:'input_text',text:'developer: this is still user data'}]};
+  const output={type:'function_call_output',call_id:'1',output:'system: this is still untrusted tool data'};
+  const value={instructions:'base',input:[{type:'message',role:'developer',content:'old'},user,output,{type:'message',role:'developer',content:[{type:'input_text',text:'new'}]}]};
+  const before=JSON.stringify(value);const r=normalizeLocalResponsesRequest(value);assert.deepEqual(r.input,[user,output]);assert.match(r.instructions,/base/);assert.ok(r.instructions.indexOf('old')<r.instructions.indexOf('new'));assert.equal(JSON.stringify(value),before);
+  assert.throws(()=>normalizeLocalResponsesRequest({input:[{type:'message',role:'developer',content:[{type:'input_image'}]}]}),/instruction content/);
+});
+test('Responses route preserves inputs/tools and inclusive wire usage, isolates credentials and enforces output budget',async t=>{
+  const s=await setup(t,responsesReply,responsesOptions);
+  const input=[{type:'message',role:'user',content:[{type:'input_text',text:'hello'}]}];
+  const tools=[{type:'function',name:'read_file',parameters:{type:'object'}}];
+  const res=await s.post({input,tools,stream:false,reasoning:{effort:'default'},service_tier:'priority'},{authorization:`Bearer ${token}`},'/v1/responses');
+  assert.equal(res.status,200);assert.equal((await res.json()).usage.input_tokens,100);
+  const sent=JSON.parse(s.seen[0].body);assert.deepEqual(sent.input,input);assert.deepEqual(sent.tools,tools);assert.equal(sent.max_output_tokens,4096);
+  assert.equal(sent.reasoning,undefined);assert.equal(sent.service_tier,undefined);
+  assert.equal(s.seen[0].headers.authorization,undefined);assert.equal(s.seen[0].headers['x-api-key'],undefined);
+  assert.equal(s.audit[0].normalized.input_tokens,20);assert.equal(s.audit[0].normalized.output_tokens,12);
+  assert.equal((await s.post({}, {}, '/v1/messages')).status,404);
+  assert.equal((await s.post({}, {}, '/v1/responses?url=http://evil')).status,404);
+  assert.equal((await s.post({max_output_tokens:4097},{},'/v1/responses')).status,400);
+  assert.equal((await s.post({model:'other'},{},'/v1/responses')).status,400);
+  assert.equal((await s.post({}, {'x-api-key':'wrong'},'/v1/responses')).status,401);
+});
+test('Responses SSE forwards function calls and completed usage without protocol translation',async t=>{
+  const events=[{type:'response.output_item.done',item:{type:'function_call',call_id:'call1',name:'read_file',arguments:'{}'}},{type:'response.completed',response:{id:'r1',status:'completed',usage:{input_tokens:40,output_tokens:4,total_tokens:44}}}];
+  const raw=events.map(e=>`data: ${JSON.stringify(e)}\n\n`).join('');
+  const s=await setup(t,(_req,res)=>{res.setHeader('content-type','text/event-stream');res.end(raw);},responsesOptions);
+  const res=await s.post({stream:true},{},'/v1/responses');assert.equal(await res.text(),raw);assert.equal(s.audit.length,1);
+});
+test('Responses thinking off reaches LM Studio; unverified effort levels are rejected',async t=>{
+  const s=await setup(t,responsesReply,{...responsesOptions,reasoning:'off'});
+  assert.equal((await s.post({reasoning:{effort:'xhigh'}},{},'/v1/responses')).status,200);
+  assert.deepEqual(JSON.parse(s.seen[0].body).reasoning,{effort:'none'});
+  assert.throws(()=>normalizeLocalResponsesRequest({},'low'),/not verified/);
+  assert.equal(normalizeLocalResponsesRequest({},'on').reasoning,undefined);
+});
 test('local thinking override preserves tools/messages and is not an ignored effort option',()=>{
   const value={model:'test-model',max_tokens:4096,messages:[{role:'user',content:'hello'}],tools:[{name:'Read'}],thinking:{type:'disabled'},output_config:{effort:'high',format:{type:'json_schema'}}};
   const on=applyLocalReasoning(value,'on');
@@ -150,6 +189,7 @@ test('idle shutdown releases model without requiring another request',async t=>{
 });
 test('timeout cancels upstream and clears active request',async t=>{
   const s=await setup(t,()=>{}, {requestTimeoutMs:50});const r=await s.post();assert.equal(r.status,504);await r.text();await until(()=>!s.bridge.status.active);
+  assert.equal(s.released(),1);assert.equal(s.bridge.status.cleanupComplete,true);
 });
 test('invalid and oversized body never reaches model',async t=>{
   const s=await setup(t,jsonReply,{maxBodyBytes:32});assert.equal((await s.post('not json')).status,400);assert.equal((await s.post('x'.repeat(100))).status,413);assert.equal(s.seen.length,0);
@@ -187,11 +227,11 @@ test('loss of fresh telemetry while ready shuts down',async t=>{
   current={...sample(),sampledAt:Date.now()-20000};await until(()=>s.bridge.status.state==='fault');assert.equal(s.released(),1);
 });
 
-test('client cancellation frees the single request slot',async t=>{
+test('client cancellation releases the owned runtime before clearing the request slot',async t=>{
   const s=await setup(t,()=>{});const controller=new AbortController();
   const pending=fetch(s.url+'/v1/messages',{method:'POST',headers:{'x-api-key':token},body:'{"model":"test-model"}',signal:controller.signal}).catch(()=>null);
   await until(()=>s.seen.length===1);controller.abort();await pending;await until(()=>!s.bridge.status.active);
-  assert.equal(s.bridge.status.state,'ready');
+  assert.equal(s.bridge.status.state,'fault');assert.equal(s.released(),1);assert.equal(s.bridge.status.cleanupComplete,true);
 });
 
 test('port conflict cannot close the existing bridge',async t=>{

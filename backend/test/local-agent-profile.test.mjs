@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createLocalAgentLaunch, normalizeLocalAgentProfile } from '../src/local-agent-profile.mjs';
+import { createLocalAgentLaunch, normalizeLocalAgentProfile, localTerminalExecutable } from '../src/local-agent-profile.mjs';
 import { buildArguments, executionEnvironment } from '../src/agent-runtime.mjs';
 
 const profile={id:'local-4090',providerKind:'local',backend:'claude',model:'officestra-local-smoke',
@@ -12,8 +12,46 @@ const base={PATH:'/usr/bin',OFFICESTRA_LOCAL_4090_TOKEN:'test-local-secret',
   OFFICESTRA_LOCAL_OTHER_TOKEN:'other-secret',ANTHROPIC_API_KEY:'cloud-secret',
   ANTHROPIC_BASE_URL:'https://cloud.example',CLAUDE_CODE_USE_BEDROCK:'1',
   CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:'40',CLAUDE_CODE_MAX_CONTEXT_TOKENS:'200000',
-  DISABLE_AUTO_COMPACT:'1',DISABLE_COMPACT:'1',OPENAI_API_KEY:'openai-secret'};
+  DISABLE_AUTO_COMPACT:'1',DISABLE_COMPACT:'1',OPENAI_API_KEY:'openai-secret',
+  CODEX_HOME:'/tmp/shared-codex-home',OFFICESTRA_PLUGIN_MARKER:'preserved'};
 const build=(overrides={})=>createLocalAgentLaunch({profile,character,workdir:'/tmp/local-validation',baseEnvironment:base,executable:'/usr/local/bin/claude',...overrides});
+const codexProfile={...profile,id:'local-4090-codex',backend:'codex',
+  usageProtocol:'openai-responses-v1'};
+const codexCharacter={...character,backend:'codex',permission:'danger-full-access'};
+const buildCodex=(overrides={})=>createLocalAgentLaunch({profile:codexProfile,
+  character:codexCharacter,workdir:'/tmp/local-validation',baseEnvironment:base,
+  executable:'/usr/local/bin/codex',...overrides});
+
+test('PTY executable is absolute and never resolved through relative PATH entries',()=>{
+  assert.equal(localTerminalExecutable('/test/codex',{}),'/test/codex');
+  assert.equal(localTerminalExecutable('true',{PATH:'.:/usr/bin'}),'/usr/bin/true');
+  assert.throws(()=>localTerminalExecutable('codex',{PATH:'.:relative'}),/not found/);
+});
+
+test('explicit 64K KV8 is preserved for both Codex launch modes; KV4 is rejected',()=>{
+  const kv4={...codexProfile,contextWindow:65536,kvCacheQuantization:'q8_0'};
+  for(const mode of ['gui','terminal']){
+    const result=buildCodex({mode,profile:kv4});
+    assert.equal(result.profile.kvCacheQuantization,'q8_0');
+    assert.ok(result.args.includes('model_context_window=65536'));
+    assert.notEqual(result.signature,buildCodex({mode,profile:{...codexProfile,contextWindow:65536}}).signature);
+  }
+  assert.equal(normalizeLocalAgentProfile(profile).kvCacheQuantization,undefined);
+  for(const invalid of [{...kv4,backend:'claude',usageProtocol:'anthropic-normalized-v1'},
+    {...kv4,contextWindow:32768},{...kv4,kvCacheQuantization:'q4_0'},{...kv4,kvCacheQuantization:null}]){
+    assert.throws(()=>normalizeLocalAgentProfile(invalid),/KV/);
+  }
+});
+
+function configArguments(args) {
+  const values=new Map();
+  for(let i=0;i<args.length;i++)if(args[i]==='-c') {
+    const config=String(args[++i]);
+    const split=config.indexOf('=');
+    values.set(config.slice(0,split),config.slice(split+1));
+  }
+  return values;
+}
 test('GUI and terminal reasoning selections are pinned in profile and worker identity',()=>{
   for(const mode of ['gui','terminal','persistent']) {
     const on=build({mode,profile:{...profile,reasoning:'on'}});
@@ -36,6 +74,72 @@ test('64K launch uses the measured window for GUI and terminal without disabling
     assert.deepEqual(larger.args,original.args);
     assert.notEqual(larger.signature,original.signature);
   }
+});
+
+test('Codex GUI and terminal use only process-local Responses provider overrides',()=>{
+  for(const mode of ['gui','terminal']) {
+    const result=buildCodex({mode,profile:{...codexProfile,contextWindow:65536}});
+    const configs=configArguments(result.args);
+    assert.equal(result.backend,'codex');
+    assert.equal(result.profile.usageProtocol,'openai-responses-v1');
+    assert.equal(result.profile.maxOutputTokens,4096);
+    assert.equal(configs.get('model'),JSON.stringify(codexProfile.model));
+    assert.equal(configs.get('model_provider'),JSON.stringify('officestra_local'));
+    assert.equal(configs.get('model_reasoning_effort'),JSON.stringify('default'));
+    assert.equal(configs.get('features.fast_mode'),'false');
+    assert.equal(configs.get('service_tier'),JSON.stringify('default'));
+    assert.equal(configs.get('model_providers.officestra_local.name'),JSON.stringify('OFFICESTRA Local'));
+    assert.equal(configs.get('model_providers.officestra_local.base_url'),JSON.stringify(`${codexProfile.endpoint}/v1`));
+    assert.equal(configs.get('model_providers.officestra_local.wire_api'),JSON.stringify('responses'));
+    assert.equal(configs.get('model_providers.officestra_local.env_key'),JSON.stringify(codexProfile.credentialEnv));
+    assert.equal(configs.get('model_providers.officestra_local.requires_openai_auth'),'false');
+    assert.equal(configs.get('model_providers.officestra_local.supports_websockets'),'false');
+    assert.equal(configs.get('model_providers.officestra_local.request_max_retries'),'0');
+    assert.equal(configs.get('model_providers.officestra_local.stream_max_retries'),'0');
+    assert.equal(configs.get('model_context_window'),'65536');
+    assert.equal(configs.get('model_auto_compact_token_limit'),'19660');
+    assert.equal(configs.get('model_auto_compact_token_limit_scope'),JSON.stringify('total'));
+    for(const key of ['model_reasoning_summary','show_raw_agent_reasoning'])assert.equal(configs.has(key),false);
+    assert.equal(result.args.includes('--ignore-user-config'),false);
+    assert.ok([...configs.keys()].some(key=>key==='developer_instructions'));
+    if(mode==='terminal')assert.ok([...configs.keys()].some(key=>key==='notify'));
+    if(mode==='terminal')assert.equal(result.args[result.args.indexOf('-C')+1],'/tmp/local-validation');
+  }
+});
+
+test('Codex local credential is isolated while shared Codex home and plugins remain available',()=>{
+  const result=buildCodex();
+  assert.equal(result.env[codexProfile.credentialEnv],'test-local-secret');
+  assert.equal(result.env.OPENAI_API_KEY,undefined);
+  assert.equal(result.env.ANTHROPIC_API_KEY,undefined);
+  assert.equal(result.env.OFFICESTRA_LOCAL_OTHER_TOKEN,undefined);
+  assert.equal(result.env.CODEX_HOME,base.CODEX_HOME);
+  assert.equal(result.env.OFFICESTRA_PLUGIN_MARKER,'preserved');
+  assert.ok(!JSON.stringify({profile:result.profile,args:result.args,signature:result.signature})
+    .includes('test-local-secret'));
+});
+
+test('Codex GUI and terminal reuse native fresh and resume argument shapes',()=>{
+  const gui=buildCodex({prompt:'--config-looking-user-prompt'});
+  assert.equal(gui.args[0],'exec');
+  assert.equal(gui.args.at(-1),'--config-looking-user-prompt');
+  assert.equal(gui.args.filter(value=>value==='--config-looking-user-prompt').length,1);
+  const resumedGUI=buildCodex({previousSessionID:'codex-session'});
+  assert.deepEqual(resumedGUI.args.slice(0,4),['exec','resume','codex-session','--json']);
+  const terminal=buildCodex({mode:'terminal'});
+  assert.notEqual(terminal.args[0],'exec');
+  const resumedTerminal=buildCodex({mode:'terminal',previousSessionID:'codex-session'});
+  assert.deepEqual(resumedTerminal.args.slice(0,2),['resume','codex-session']);
+});
+
+test('persistent mode and mismatched Codex profile contracts fail closed',()=>{
+  assert.throws(()=>buildCodex({mode:'persistent'}),/Persistent local Codex/);
+  assert.throws(()=>normalizeLocalAgentProfile({...codexProfile,usageProtocol:'anthropic-normalized-v1'}));
+  assert.throws(()=>normalizeLocalAgentProfile({...profile,usageProtocol:'openai-responses-v1'}));
+  assert.throws(()=>buildCodex({character:{...codexCharacter,permission:'plan'}}));
+  assert.throws(()=>buildCodex({character:{...codexCharacter,backend:'claude'}}));
+  assert.throws(()=>buildCodex({character:{...codexCharacter,effort:'high'}}));
+  assert.throws(()=>buildCodex({character:{...codexCharacter,fastMode:true}}));
 });
 
 for(const mode of ['gui','persistent','terminal']) for(const previousSessionID of [null,'test-session']) {

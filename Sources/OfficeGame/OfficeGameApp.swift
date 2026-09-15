@@ -2550,16 +2550,31 @@ private struct AgentQuickSettingsView: View {
 
     private var isLocal: Bool { director.localProfileID(for: character.id) != nil }
 
+    private var localProfile: LocalModelOption? {
+        director.localModelOption(for: character.id)
+    }
+
     private var localModelTitle: String {
-        director.localModelOptions.first { $0.id == director.localProfileID(for: character.id) }?.displayTitle ?? "로컬 AI"
+        localProfile?.displayTitle ?? "로컬 AI"
     }
 
     private var localContextTitle: String {
-        director.localModelOptions.first { $0.id == director.localProfileID(for: character.id) }?.contextWindowTitle ?? "—"
+        localProfile?.contextWindowTitle ?? "—"
+    }
+
+    private var localRunnerTitle: String {
+        guard let backend = localProfile?.backend else {
+            return OfficeLocalization.string("로컬 AI")
+        }
+        return "\(OfficeLocalization.string("로컬 AI")) · \(backend.title)"
     }
 
     private func localReasoningTitle(_ value: String) -> String {
-        OfficeLocalization.string(value == "on" ? "추론 켜기" : value == "off" ? "추론 끄기" : "기본 추론")
+        if ["low", "medium", "xhigh"].contains(value) { return value }
+        if value == "default", localProfile?.supportsReasoningLevels == true {
+            return OfficeLocalization.string("기본 추론") + " · xhigh"
+        }
+        return OfficeLocalization.string(value == "on" ? "추론 켜기" : value == "off" ? "추론 끄기" : "기본 추론")
     }
 
     private var settings: CharacterAgentSettings {
@@ -2642,14 +2657,14 @@ private struct AgentQuickSettingsView: View {
                         Button {
                             requestLocalSwitch(profile.id)
                         } label: {
-                            Label("\(OfficeLocalization.string("로컬 AI")) · \(profile.displayTitle)", systemImage: director.localProfileID(for: character.id) == profile.id ? "checkmark" : "desktopcomputer")
+                            Label("\(OfficeLocalization.string("로컬 AI")) · \(profile.backend.title) · \(profile.displayTitle)", systemImage: director.localProfileID(for: character.id) == profile.id ? "checkmark" : "desktopcomputer")
                         }
                         .disabled(director.localProfileID(for: character.id) == profile.id)
                     }
                 }
             } label: {
                 QuickSettingLabel(
-                    text: isLocal ? OfficeLocalization.string("로컬 AI") : settings.backend.title,
+                    text: isLocal ? localRunnerTitle : settings.backend.title,
                     systemImage: "terminal"
                 )
             }
@@ -2661,7 +2676,7 @@ private struct AgentQuickSettingsView: View {
                 QuickSettingLabel(text: localModelTitle, systemImage: "cpu")
                 QuickSettingLabel(text: localContextTitle, systemImage: "memorychip")
                 let reasoning = director.localReasoningSelections[character.id.rawValue] ?? "default"
-                let reasoningOptions = director.localModelOptions.first { $0.id == director.localProfileID(for: character.id) }?.reasoningOptions ?? []
+                let reasoningOptions = localProfile?.reasoningOptions ?? []
                 if reasoningOptions.isEmpty {
                     QuickSettingLabel(text: localReasoningTitle(reasoning), systemImage: "brain")
                 } else {
@@ -2681,7 +2696,7 @@ private struct AgentQuickSettingsView: View {
                         QuickSettingLabel(text: localReasoningTitle(reasoning), systemImage: "brain")
                     }
                     .disabled(!availability.canChangeBackend)
-                    .help(OfficeLocalization.string("다음 요청부터 적용됩니다. 강도 단계는 현재 엔진에서 지원되지 않습니다."))
+                    .help(localProfile?.reasoningHelp ?? "")
                     .accessibilityIdentifier("localReasoningPicker")
                 }
                 QuickSettingLabel(text: OfficeLocalization.string(settings.permission.title), systemImage: "shield")

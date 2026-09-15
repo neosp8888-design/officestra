@@ -2617,6 +2617,13 @@ final class AgentDirector: ObservableObject {
         localProfileAssignments[character.rawValue]
     }
 
+    func localModelOption(for character: OfficeCharacter) -> LocalModelOption? {
+        guard let profileID = localProfileID(for: character) else {
+            return nil
+        }
+        return localModelOptions.first { $0.id == profileID }
+    }
+
     func setLocalHostAddress(_ address: String, for character: OfficeCharacter) async throws {
         try await database.setLocalHostAddress(address, for: character)
         await refreshLocalProviderStatuses()

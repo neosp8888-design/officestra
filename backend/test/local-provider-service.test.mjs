@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { readFile, access } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { LocalProviderService, resolveLocalCharacter, snapshotLocalTurn, validateLocalResume, localResumeCompatible } from '../src/local-provider-service.mjs';
 import { LocalHostBusyError, WindowsLMStudioHost, verifyLocalRuntimeVersion, LOCAL_HOST_LOAD_CONFIG, LOCAL_HOST_MEMORY_BUDGET, localHostMemoryExceeded, localHostLoadConfig } from '../src/local-provider-host.mjs';
@@ -10,6 +11,35 @@ import { TerminalSessionManager } from '../src/terminal-sessions.mjs';
 
 const definition={profile:{id:'local-test',providerKind:'local',backend:'claude',model:'test-model',endpoint:'http://127.0.0.1:41235',credentialEnv:'OFFICESTRA_LOCAL_TEST_TOKEN',credentialVersion:'v1',contextWindow:32768,maxOutputTokens:4096,usageProtocol:'anthropic-normalized-v1'},host:{address:'127.0.0.1',user:'test',sshPort:2222,keyPath:'/tmp/test-key',hostKeyAlias:'test-host',modelKey:'test/model',comfyPort:8188}};
 const character={id:'isolated-validation',backend:'claude',model:definition.profile.model,effort:'default',fastMode:false,permission:'plan',localProfile:definition};
+test('local Codex uses authenticated Responses front door, preserves cancellation and never resumes Claude identity',async t=>{
+  const codexDefinition={...definition,profile:{...definition.profile,id:'local-codex-test',backend:'codex',usageProtocol:'openai-responses-v1'}};
+  const codexCharacter={...character,backend:'codex',permission:'read-only',localProfile:codexDefinition,config:{localProfileId:codexDefinition.profile.id}};
+  const queries={query:async()=>({rows:[{definition:codexDefinition}]})};
+  const resolved=await resolveLocalCharacter(queries,{...codexCharacter,localProfile:undefined});assert.equal(resolved.localProfile.profile.backend,'codex');
+  assert.equal(localResumeCompatible(definition,codexDefinition),false);
+  const requests=[];
+  const upstream=createServer(async(req,res)=>{let body='';for await(const c of req)body+=c;requests.push({url:req.url,body:JSON.parse(body)});res.setHeader('content-type','application/json');res.end(JSON.stringify({id:'response-test',status:'completed',output:[],usage:{input_tokens:12,output_tokens:2,total_tokens:14}}));});
+  await new Promise(r=>upstream.listen(0,'127.0.0.1',r));
+  const service=new LocalProviderService({pool:{},stateDirectory:'/tmp/unused',hostFactory:()=>({start:async()=>({upstream:`http://127.0.0.1:${upstream.address().port}`,sample:async()=>({vramPct:70,ramPct:30,sampledAt:Date.now(),busy:false}),alive:()=>true,release:async()=>{}})})});
+  t.after(async()=>{await service.shutdown();upstream.closeAllConnections();await new Promise(r=>upstream.close(r));});
+  const spec=await service.launch({character:codexCharacter,mode:'gui',workdir:'/tmp',executable:'/test/codex',prompt:'hello'});
+  const catalogArg=spec.args.find(x=>x.startsWith('model_catalog_json='));
+  const catalogPath=JSON.parse(catalogArg.slice(catalogArg.indexOf('=')+1));
+  const pinned=JSON.parse(await readFile(catalogPath,'utf8'));
+  assert.equal(pinned.models[0].slug,character.model);
+  assert.equal(pinned.models[0].supports_search_tool,true);
+  const baseArg=spec.args.find(x=>x.startsWith('model_providers.')&&x.includes('.base_url='));
+  const base=JSON.parse(baseArg.slice(baseArg.indexOf('=')+1));
+  const token=spec.env[definition.profile.credentialEnv];assert.ok(token);
+  const catalog=await fetch(base+'/models?client_version=0.154.0',{headers:{authorization:`Bearer ${token}`}}).then(r=>r.json());
+  assert.equal(catalog.models.length,1);assert.equal(catalog.models[0].slug,character.model);assert.equal(catalog.models[0].context_window,32768);assert.deepEqual(catalog.models[0].service_tiers,[]);
+  assert.equal((await fetch(base+'/models')).status,401);assert.equal(requests.length,0);
+  const res=await fetch(base+'/responses',{method:'POST',headers:{authorization:`Bearer ${token}`},body:JSON.stringify({model:character.model,input:'hello'})});
+  assert.equal(res.status,200);assert.equal((await res.json()).usage.input_tokens,12);assert.equal(requests[0].url,'/v1/responses');assert.equal(requests[0].body.max_output_tokens,4096);
+  assert.equal((await fetch(base+'/messages',{method:'POST',headers:{authorization:`Bearer ${token}`},body:'{}'})).status,404);
+  await spec.release();
+  await assert.rejects(access(catalogPath),{code:'ENOENT'});
+});
 test('64K uses quantized KV only; original 32K load policy stays unchanged',()=>{
   assert.equal(localHostLoadConfig(definition.profile),LOCAL_HOST_LOAD_CONFIG);
   const config=localHostLoadConfig({...definition.profile,contextWindow:65536});
@@ -17,6 +47,22 @@ test('64K uses quantized KV only; original 32K load policy stays unchanged',()=>
   assert.equal(config.llamaKCacheQuantizationType,'q8_0');assert.equal(config.llamaVCacheQuantizationType,'q8_0');
   assert.equal(config.flashAttention,true);assert.equal(config.gpuStrictVramCap,false);
   assert.throws(()=>localHostLoadConfig({...definition.profile,contextWindow:49152}));
+});
+test('explicit Codex KV8 retains 64K and GPU policy without changing Claude defaults',()=>{
+  const profile={...definition.profile,backend:'codex',usageProtocol:'openai-responses-v1',contextWindow:65536,kvCacheQuantization:'q8_0'};
+  const config=localHostLoadConfig(profile);
+  assert.equal(config.contextLength,65536);
+  assert.equal(config.llamaKCacheQuantizationType,'q8_0');
+  assert.equal(config.llamaVCacheQuantizationType,'q8_0');
+  assert.equal(config.gpu.ratio,1);
+  assert.equal(config.evalBatchSize,128);
+  assert.equal(localHostLoadConfig({...definition.profile,contextWindow:65536}).llamaKCacheQuantizationType,'q8_0');
+  assert.equal(localHostLoadConfig(definition.profile),LOCAL_HOST_LOAD_CONFIG);
+  assert.throws(()=>localHostLoadConfig({...profile,backend:'claude'}),/KV/);
+  assert.throws(()=>localHostLoadConfig({...profile,contextWindow:32768}),/KV/);
+  assert.throws(()=>localHostLoadConfig({...profile,kvCacheQuantization:'unknown'}),/KV/);
+  const original={...definition,profile:{...profile}};delete original.profile.kvCacheQuantization;
+  assert.equal(localResumeCompatible(original,{...definition,profile}),false);
 });
 test('context increase and route changes preserve session; pinned identity changes remain blocked',async()=>{
   const larger={...definition,profile:{...definition.profile,contextWindow:65536}};

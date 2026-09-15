@@ -2,7 +2,7 @@
 
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
-import { LocalProviderService, normalizeLocalDefinition } from './local-provider-service.mjs';
+import { LocalProviderService, normalizeLocalDefinition, LOCAL_TURN_EFFORT_SQL } from './local-provider-service.mjs';
 import { selectLocalProfile, setLocalReasoning, setLocalHostAddress } from './local-profile-selection.mjs';
 import { LocalHostBusyError } from './local-provider-host.mjs';
 import { WebSocket, WebSocketServer } from "ws";
@@ -759,7 +759,7 @@ async function characterHistory(response, characterID) {
         t.cli_session_id AS "sessionId",
         t.backend AS "executionBackend",
         t.model AS "executionModel",
-        t.effort AS "executionEffort",
+        ${LOCAL_TURN_EFFORT_SQL} AS "executionEffort",
         t.fast_mode AS "executionFastMode",
         t.origin,
         (SELECT jsonb_build_object('characterId', sender.id, 'name', sender.name)
@@ -846,7 +846,7 @@ async function globalHistory(response, url) {
         c.backend,
         t.backend AS "executionBackend",
         t.model AS "executionModel",
-        t.effort AS "executionEffort",
+        ${LOCAL_TURN_EFFORT_SQL} AS "executionEffort",
         t.fast_mode AS "executionFastMode",
         t.origin,
         (SELECT jsonb_build_object('characterId', sender.id, 'name', sender.name)
@@ -1155,7 +1155,7 @@ async function queryTurnFeed({
               t.prompt,
               t.backend,
               t.model,
-              t.effort,
+              ${LOCAL_TURN_EFFORT_SQL},
               session.external_id,
               (
                 SELECT text
@@ -1203,7 +1203,7 @@ async function queryTurnFeed({
         c.backend AS "characterBackend",
         t.backend,
         t.model,
-        t.effort,
+        ${LOCAL_TURN_EFFORT_SQL} AS effort,
         t.fast_mode AS "fastMode",
         t.origin,
         (SELECT jsonb_build_object('characterId', sender.id, 'name', sender.name)
@@ -1361,7 +1361,7 @@ async function queryArchiveFeed({ query, limit, offset }) {
             t.prompt,
             t.backend,
             t.model,
-            t.effort,
+            ${LOCAL_TURN_EFFORT_SQL},
             session.external_id,
             (
               SELECT text
@@ -2255,7 +2255,7 @@ const server = createServer(async (request, response) => {
     ) {
       const profiles = await pool.query('SELECT id, enabled, definition FROM local_agent_profiles ORDER BY id');
       const assignments = await pool.query("SELECT c.id AS \"characterId\", c.config->>'localProfileId' AS \"profileId\", c.config->>'localReasoning' AS reasoning, COALESCE(c.config->>'localHostAddress', p.definition->'host'->>'address') AS address FROM characters c LEFT JOIN local_agent_profiles p ON p.id=c.config->>'localProfileId' WHERE c.config ? 'localProfileId'");
-      send(response,200,{profiles:profiles.rows.map(row=>({id:row.id,enabled:row.enabled,model:row.definition.profile.model,title:row.definition.host.modelKey.split('/').at(-1),contextWindow:row.definition.profile.contextWindow,reasoningOptions:row.definition.host.modelKey==='qwen3.8-27b'?['default','on','off']:[]})),assignments:assignments.rows,statuses:localProviders?.status()??[]});
+      send(response,200,{profiles:profiles.rows.map(row=>({id:row.id,enabled:row.enabled,backend:row.definition.profile.backend,model:row.definition.profile.model,title:row.definition.host.modelKey.split('/').at(-1),contextWindow:row.definition.profile.contextWindow,kvCacheQuantization:row.definition.profile.kvCacheQuantization??null,reasoningOptions:row.definition.profile.runtime==='llama-cpp-b10982'?['default','low','medium','xhigh']:row.definition.host.modelKey==='qwen3.8-27b'?['default','on','off']:[]})),assignments:assignments.rows,statuses:localProviders?.status()??[]});
     } else if (request.method === 'PUT' && /^\/api\/characters\/[^/]+\/local-address$/.test(url.pathname)) {
       if(!trustedJSONMutation(request,response))return;
       const body=await readJSON(request);
@@ -2264,7 +2264,7 @@ const server = createServer(async (request, response) => {
     } else if (request.method === 'PUT' && /^\/api\/characters\/[^/]+\/local-reasoning$/.test(url.pathname)) {
       if(!trustedJSONMutation(request,response))return;
       const body=await readJSON(request);
-      if(!['default','on','off'].includes(body.reasoning)){send(response,400,{error:'Unsupported local reasoning option'});return;}
+      if(!['default','on','off','low','medium','xhigh'].includes(body.reasoning)){send(response,400,{error:'Unsupported local reasoning option'});return;}
       send(response,200,await setLocalReasoning({pool,runtime,characterID:decodeURIComponent(url.pathname.split('/')[3]),reasoning:body.reasoning,broadcast}));
     } else if (request.method === 'PUT' && /^\/api\/characters\/[^/]+\/local-profile$/.test(url.pathname)) {
       if(!trustedJSONMutation(request,response))return;

@@ -1281,7 +1281,7 @@ export class AgentRuntime {
   async execute(state) {
     if (state.character.localProfile) {
       if (!this.localProviders) throw new Error('Local provider service unavailable');
-      if (state.externalSessionID) prepareClaudeSessionResume({sessionID:state.externalSessionID,workdir:state.workdir,previousWorkdir:state.resumeExecutionWorkdir});
+      if (state.character.backend === 'claude' && state.externalSessionID) prepareClaudeSessionResume({sessionID:state.externalSessionID,workdir:state.workdir,previousWorkdir:state.resumeExecutionWorkdir});
       const spec = await this.localProviders.launch({character:state.character,mode:'gui',prompt:state.executionPrompt ?? state.prompt,previousSessionID:state.externalSessionID,workdir:state.workdir});
       try { await this.executeSingleProcess(state, spec); }
       finally { await spec.release(); }

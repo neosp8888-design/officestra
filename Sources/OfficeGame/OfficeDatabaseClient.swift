@@ -1025,11 +1025,49 @@ struct LocalProviderList: Decodable {
 struct LocalModelOption: Decodable, Identifiable, Equatable, Sendable {
     let id: String
     let enabled: Bool
+    let backend: AgentBackend
     let model: String
     let title: String?
     let contextWindow: Int
+    let kvCacheQuantization: String?
     var reasoningOptions: [String]? = nil
-    var displayTitle: String { title ?? model }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case enabled
+        case backend
+        case model
+        case title
+        case contextWindow
+        case kvCacheQuantization
+        case reasoningOptions
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        enabled = try container.decode(Bool.self, forKey: .enabled)
+        // Older servers did not return a runner. Their existing local profiles
+        // were Claude profiles, so retain that interpretation during rollout.
+        backend = try container.decodeIfPresent(AgentBackend.self, forKey: .backend) ?? .claude
+        model = try container.decode(String.self, forKey: .model)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        contextWindow = try container.decode(Int.self, forKey: .contextWindow)
+        kvCacheQuantization = try container.decodeIfPresent(String.self, forKey: .kvCacheQuantization)
+        reasoningOptions = try container.decodeIfPresent([String].self, forKey: .reasoningOptions)
+    }
+
+    var displayTitle: String {
+        (title ?? model) + (kvCacheQuantization == "q8_0" ? " · KV8" : "")
+    }
+    var supportsReasoningLevels: Bool {
+        reasoningOptions?.contains("low") == true && reasoningOptions?.contains("xhigh") == true
+    }
+    var reasoningHelp: String {
+        OfficeLocalization.string(supportsReasoningLevels
+            ? "다음 요청부터 적용됩니다. 기본 추론은 xhigh입니다."
+            : "다음 요청부터 적용됩니다. 강도 단계는 현재 엔진에서 지원되지 않습니다.")
+    }
     var contextWindowTitle: String {
         contextWindow > 0 && contextWindow.isMultiple(of: 1024)
             ? "\(contextWindow / 1024)K" : "\(contextWindow)"

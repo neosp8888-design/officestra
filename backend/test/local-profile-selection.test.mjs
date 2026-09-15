@@ -52,7 +52,24 @@ test('reasoning change is session-locked, idle-only and preserves existing setti
   await assert.rejects(setLocalReasoning(args),/작업/);
   s.runtime.running.clear();s.runtime.terminalSessionRegistry.has=()=>true;
   await assert.rejects(setLocalReasoning(args),/터미널/);
+  s.runtime.terminalSessionRegistry.has=()=>false;
   await assert.rejects(setLocalReasoning({...args,reasoning:'xhigh'}),/Unsupported/);
+});
+
+test('direct runtime persists each verified effort without replacing the session',async()=>{
+  const s=fixture();const writes=[];
+  const direct={...definition,profile:{...definition.profile,backend:'codex',runtime:'llama-cpp-b10982',model:'officestra-qwen38-27b',contextWindow:65536,kvCacheQuantization:'q8_0',usageProtocol:'openai-responses-v1'},host:{...definition.host,modelKey:'qwen3.8-27b'}};
+  const client={query:async(sql,values)=>{
+    if(sql.startsWith('SELECT config'))return {rows:[{config:{localProfileId:'direct',keep:'unchanged'}}]};
+    if(sql.startsWith('SELECT definition'))return {rows:[{definition:direct}]};
+    writes.push({sql,values});return {rows:[]};
+  },release:()=>{}};
+  for(const reasoning of ['low','medium','xhigh']){
+    assert.equal((await setLocalReasoning({...s,pool:{connect:async()=>client},characterID:'test',reasoning})).reasoning,reasoning);
+  }
+  assert.deepEqual(writes.filter(w=>w.sql.startsWith('UPDATE characters')).map(w=>JSON.parse(w.values[1]).localReasoning),['low','medium','xhigh']);
+  assert.ok(!writes.some(w=>/DELETE|UPDATE turns|UPDATE cli_sessions/.test(w.sql)));
+  await assert.rejects(setLocalReasoning({...s,pool:{connect:async()=>client},characterID:'test',reasoning:'on'}),/Unsupported/);
 });
 
 test('local selection pins measured model and restores exact previous cloud settings/config',()=>{
@@ -67,10 +84,22 @@ test('local selection pins measured model and restores exact previous cloud sett
   assert.equal(localSelectionSettings(original,null),null);
 });
 
+test('local selection uses the profile runner and maps permissions for that CLI',()=>{
+  const codexDefinition={...definition,profile:{...definition.profile,id:'local-codex',backend:'codex'}};
+  assert.equal(localSelectionSettings(original,codexDefinition).backend,'codex');
+  assert.equal(localSelectionSettings(original,codexDefinition).permission,'workspace-write');
+  assert.equal(localSelectionSettings({...original,permission:'danger-full-access'},codexDefinition).permission,'danger-full-access');
+  assert.equal(localSelectionSettings({...original,permission:'plan'},codexDefinition).permission,'read-only');
+  assert.throws(()=>localSelectionSettings(original,{...definition,profile:{...definition.profile,backend:'antigravity'}}),/Unsupported local runner backend/);
+});
+
 test('selecting another local profile does not overwrite cloud restore point',()=>{
   const first=localSelectionSettings(original,definition);
   const second=localSelectionSettings(first,{...definition,profile:{...definition.profile,id:'second',model:'other'}});
   assert.deepEqual(second.config.localPreviousSettings,first.config.localPreviousSettings);
+  first.config.localHostAddress='222.109.147.73';
+  const codex=localSelectionSettings(first,{...definition,profile:{...definition.profile,id:'codex-profile',backend:'codex'}});
+  assert.equal(codex.config.localHostAddress,'222.109.147.73');
   assert.throws(()=>localSelectionSettings({config:{localProfileId:'missing'}},null));
 });
 

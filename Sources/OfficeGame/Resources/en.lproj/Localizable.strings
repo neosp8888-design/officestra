@@ -727,6 +727,7 @@
 "로컬 4090" = "Local AI";
 "이전 클라우드 설정으로 돌아가기" = "Return to previous cloud settings";
 "기본 추론" = "Default reasoning";
+"다음 요청부터 적용됩니다. 기본 추론은 xhigh입니다." = "Applies to the next request. Default reasoning is xhigh.";
 "추론 켜기" = "Thinking on";
 "추론 끄기" = "Thinking off";
 "다음 요청부터 적용됩니다. 강도 단계는 현재 엔진에서 지원되지 않습니다." = "Applies to the next request. Effort levels are not supported by the current engine.";

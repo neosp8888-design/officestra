@@ -13,6 +13,10 @@ export class LocalHostBusyError extends Error {}
 export const LOCAL_HOST_MEMORY_BUDGET=Object.freeze({vramGuardPercent:98,ramGuardPercent:77});
 export const LOCAL_HOST_LOAD_CONFIG=Object.freeze({gpu:Object.freeze({ratio:1}),gpuStrictVramCap:false,contextLength:32768,tryMmap:false,keepModelInMemory:false,evalBatchSize:128,flashAttention:true});
 export function localHostLoadConfig(profile) {
+  if(profile?.kvCacheQuantization!==undefined){
+    if(profile.backend!=='codex'||profile.contextWindow!==65536||profile.kvCacheQuantization!=='q8_0')throw new Error('Unsupported local KV configuration');
+    return {...LOCAL_HOST_LOAD_CONFIG,contextLength:65536,llamaKCacheQuantizationType:'q8_0',llamaVCacheQuantizationType:'q8_0'};
+  }
   if(profile?.contextWindow===32768)return LOCAL_HOST_LOAD_CONFIG;
   if(profile?.contextWindow===65536)return {...LOCAL_HOST_LOAD_CONFIG,contextLength:65536,llamaKCacheQuantizationType:'q8_0',llamaVCacheQuantizationType:'q8_0'};
   throw new Error('Unsupported local context configuration');
@@ -33,8 +37,9 @@ export function validateHost(h) {
   return {...h};
 }
 export class WindowsLMStudioHost {
-  constructor({host,profile,pool,stateDirectory}) {
+  constructor({host,profile,pool,stateDirectory,loadConfig=localHostLoadConfig}) {
     this.host=validateHost(host);this.profile=profile;this.pool=pool;this.directory=stateDirectory;
+    this.loadConfig=loadConfig;
     this.key=createHash('sha256').update(`${host.address}:${host.sshPort}`).digest('hex');
     this.statePath=join(stateDirectory,`${this.key}.json`);this.owned=null;this.client=null;this.tunnel=null;
     this.sshArgs=['-o','BatchMode=yes','-o','ConnectTimeout=6','-o','StrictHostKeyChecking=yes',
@@ -101,7 +106,7 @@ export class WindowsLMStudioHost {
         let versionTimer;
         try{verifyLocalRuntimeVersion(await Promise.race([this.sdk.system.getLMStudioVersion(),new Promise((_,reject)=>{versionTimer=setTimeout(()=>reject(new Error('LM Studio version check timed out')),8000);})]));}
         finally{clearTimeout(versionTimer);}
-        await this.sdk.llm.load(this.host.modelKey,{identifier:this.profile.model,config:localHostLoadConfig(this.profile),signal:controller.signal,verbose:false});
+        await this.sdk.llm.load(this.host.modelKey,{identifier:this.profile.model,config:this.loadConfig(this.profile),signal:controller.signal,verbose:false});
         const loaded=await this.sample();
         if(controller.signal.aborted||localHostMemoryExceeded(loaded)||loaded.busy)throw new Error('Local model exceeds memory budget after loading');
       }

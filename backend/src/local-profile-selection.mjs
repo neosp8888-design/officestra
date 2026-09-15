@@ -10,6 +10,14 @@ export function normalizeLocalHostAddress(value) {
   return address;
 }
 
+function localPermission(previousPermission, backend) {
+  const fullAccess=['danger-full-access','dangerously-skip-permissions','bypassPermissions'].includes(previousPermission);
+  if(fullAccess)return backend==='codex'?'danger-full-access':'bypassPermissions';
+  const workspaceWrite=['workspace-write','accept-edits','acceptEdits','auto'].includes(previousPermission);
+  if(workspaceWrite)return backend==='codex'?'workspace-write':'auto';
+  return backend==='codex'?'read-only':'plan';
+}
+
 export async function setLocalHostAddress({pool,runtime,localProviders,characterID,address,verifyHost=async definition=>{
   const host=new WindowsLMStudioHost({...definition,stateDirectory:'/tmp/officestra-address-check'});
   try{await host.remote('Write-Output OFFICESTRA_ADDRESS_OK',{timeout:10000});}
@@ -54,18 +62,22 @@ export function localSelectionSettings(previous, definition) {
     return {...saved,config};
   }
   if(config.localProfileId===definition.profile.id)return null;
+  const backend=definition.profile.backend;
+  if(!['claude','codex'].includes(backend))throw new Error('Unsupported local runner backend');
   if(!config.localProfileId)config.localPreviousSettings={backend:previous.backend,model:previous.model,effort:previous.effort,fastMode:previous.fastMode,permission:previous.permission,executablePath:config.executablePath??null};
   delete config.executablePath;
+  const localAddress=config.localProfileId?config.localHostAddress:undefined;
   config.localProfileId=definition.profile.id;
   delete config.localReasoning;
   delete config.localHostAddress;
-  const permission=['danger-full-access','dangerously-skip-permissions','bypassPermissions'].includes(previous.permission)?'bypassPermissions'
-    :['workspace-write','accept-edits','acceptEdits','auto'].includes(previous.permission)?'auto':'plan';
-  return {backend:'claude',model:definition.profile.model,effort:'default',fastMode:false,permission,config};
+  // The runner changes, not the user's PC route. SSH still validates the new
+  // profile's pinned host identity before any model request can be made.
+  if(localAddress)config.localHostAddress=normalizeLocalHostAddress(localAddress);
+  return {backend,model:definition.profile.model,effort:'default',fastMode:false,permission:localPermission(previous.permission,backend),config};
 }
 
 export async function setLocalReasoning({pool,runtime,characterID,reasoning,broadcast=()=>{}}) {
-  if(!['default','on','off'].includes(reasoning))throw new Error('Unsupported local reasoning option');
+  if(!['default','on','off','low','medium','xhigh'].includes(reasoning))throw new Error('Unsupported local reasoning option');
   const busy=()=>!runtime||runtime.draining||runtime.running.has(characterID)||runtime.preparingCharacters.has(characterID)||runtime.compactingCharacters.has(characterID)||runtime.terminalSessionRegistry?.has(characterID);
   if(busy())throw new AgentBusyError('이 직원의 작업을 마치고 터미널을 닫은 뒤 전환하세요.');
   runtime.preparingCharacters.add(characterID);
@@ -78,6 +90,8 @@ export async function setLocalReasoning({pool,runtime,characterID,reasoning,broa
         if(!previous?.config?.localProfileId)throw new Error('Local profile required');
         const found=(await client.query('SELECT definition FROM local_agent_profiles WHERE id=$1 AND enabled=true FOR SHARE',[previous.config.localProfileId])).rows[0];
         if(found?.definition?.host?.modelKey!=='qwen3.8-27b')throw new Error('Reasoning control is verified only for Qwen3.8-27B');
+        const allowed=found.definition.profile.runtime==='llama-cpp-b10982'?['default','low','medium','xhigh']:['default','on','off'];
+        if(!allowed.includes(reasoning))throw new Error('Unsupported local reasoning option for this runtime');
         await client.query('UPDATE characters SET config=$2::jsonb,updated_at=now() WHERE id=$1',[characterID,JSON.stringify({...previous.config,localReasoning:reasoning})]);
         await client.query('COMMIT');
       }catch(error){await client.query('ROLLBACK');throw error;}
@@ -109,6 +123,7 @@ export async function selectLocalProfile({pool,runtime,characterID,profileID,bro
         }
         const next=localSelectionSettings(current.rows[0],definition);
         if(next) {
+          if(current.rows[0].config?.localProfileId)await runtime.localProviders?.closeIdleProfile(current.rows[0].config.localProfileId);
           plan=await runtime.inspectWorkspaceForSessionEnd(characterID,client);
           await runtime.applyWorkspaceSessionEndPlan(client,plan);
           await client.query('UPDATE characters SET backend=$2,model=$3,effort=$4,fast_mode=$5,permission=$6,config=$7::jsonb,updated_at=now() WHERE id=$1',[characterID,next.backend,next.model,next.effort,next.fastMode,next.permission,JSON.stringify(next.config)]);

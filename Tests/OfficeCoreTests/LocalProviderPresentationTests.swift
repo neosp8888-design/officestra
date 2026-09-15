@@ -2,6 +2,23 @@ import XCTest
 @testable import OfficeGame
 
 final class LocalProviderPresentationTests: XCTestCase {
+    func testDirectRuntimeReasoningLevelsDecodeWithoutReducingContext() throws {
+        let json = #"{"profiles":[{"id":"local-4090-qwen38-llamacpp","enabled":true,"backend":"codex","model":"qwen3.8","contextWindow":65536,"kvCacheQuantization":"q8_0","reasoningOptions":["default","low","medium","xhigh"]}],"assignments":[{"characterId":"right-woman","profileId":"local-4090-qwen38-llamacpp","reasoning":"xhigh"}],"statuses":[]}"#
+        let catalog = try JSONDecoder().decode(LocalProviderList.self, from: Data(json.utf8))
+        XCTAssertEqual(catalog.profiles?.first?.reasoningOptions, ["default", "low", "medium", "xhigh"])
+        XCTAssertEqual(catalog.profiles?.first?.contextWindowTitle, "64K")
+        XCTAssertEqual(catalog.profiles?.first?.displayTitle, "qwen3.8 · KV8")
+        XCTAssertEqual(catalog.assignments?.first?.reasoning, "xhigh")
+        XCTAssertTrue(catalog.profiles?.first?.supportsReasoningLevels == true)
+        XCTAssertEqual(catalog.profiles?.first?.reasoningHelp, OfficeLocalization.string("다음 요청부터 적용됩니다. 기본 추론은 xhigh입니다."))
+    }
+    func testExplicitKV8LabelDoesNotChangeContextLabel() throws {
+        let data = Data(#"{"id":"local-codex","enabled":true,"backend":"codex","model":"qwen","contextWindow":65536,"kvCacheQuantization":"q8_0"}"#.utf8)
+        let profile = try JSONDecoder().decode(LocalModelOption.self, from: data)
+        XCTAssertEqual(profile.contextWindowTitle, "64K")
+        XCTAssertEqual(profile.displayTitle, "qwen · KV8")
+        XCTAssertEqual(profile.kvCacheQuantization, "q8_0")
+    }
     func testAddressDecodeAndIPv4Validation() throws {
         let data = Data(#"{"characterId":"right-woman","profileId":"local","address":"222.109.147.73"}"#.utf8)
         XCTAssertEqual(try JSONDecoder().decode(LocalProfileAssignment.self, from: data).address, "222.109.147.73")
@@ -9,16 +26,19 @@ final class LocalProviderPresentationTests: XCTestCase {
         for value in ["", "1.2.3.256", "01.2.3.4", "1.2.3", "1.2.3.4:22", "http://1.2.3.4", "::1", "1.2.3.4;ls"] { XCTAssertFalse(LocalHostAddressInput.isValid(value), value) }
     }
     func testVerifiedReasoningOptionsAndSelectionDecode() throws {
-        let json = #"{"profiles":[{"id":"qwen38","enabled":true,"model":"qwen","contextWindow":65536,"reasoningOptions":["default","on","off"]}],"assignments":[{"characterId":"right-woman","profileId":"qwen38","reasoning":"on"}],"statuses":[]}"#
+        let json = #"{"profiles":[{"id":"qwen38","enabled":true,"backend":"codex","model":"qwen","contextWindow":65536,"reasoningOptions":["default","on","off"]}],"assignments":[{"characterId":"right-woman","profileId":"qwen38","reasoning":"on"}],"statuses":[]}"#
         let catalog = try JSONDecoder().decode(LocalProviderList.self, from: Data(json.utf8))
         XCTAssertEqual(catalog.profiles?.first?.reasoningOptions, ["default", "on", "off"])
+        XCTAssertEqual(catalog.profiles?.first?.backend, .codex)
         XCTAssertEqual(catalog.assignments?.first?.reasoning, "on")
+        XCTAssertFalse(catalog.profiles?.first?.supportsReasoningLevels == true)
     }
     func testContextLabelUsesActualProfileWindow() throws {
         for (tokens, expected) in [(32768, "32K"), (65536, "64K"), (262144, "256K")] {
             let json = "{\"id\":\"local-test\",\"enabled\":true,\"model\":\"qwen\",\"contextWindow\":\(tokens)}"
             let profile = try JSONDecoder().decode(LocalModelOption.self, from: Data(json.utf8))
             XCTAssertEqual(profile.contextWindowTitle, expected)
+            XCTAssertEqual(profile.backend, .claude)
         }
     }
 

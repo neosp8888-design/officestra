@@ -1,14 +1,50 @@
 import { createServer, request } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { pipeline } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
+import { mkdtemp, writeFile, unlink, rmdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { LocalInferenceBridge } from './local-inference-bridge.mjs';
 import { INCLUSIVE_INPUT_PROFILE } from './local-usage-normalizer.mjs';
+import { RESPONSES_INCLUSIVE_PROFILE, LLAMA_RESPONSES_PROFILE } from './local-responses-usage.mjs';
+import { WindowsLlamaCppHost } from './local-llama-host.mjs';
 import { WindowsLMStudioHost, LocalHostBusyError, validateHost, LOCAL_HOST_MEMORY_BUDGET } from './local-provider-host.mjs';
 import { normalizeLocalAgentProfile, createLocalAgentLaunch } from './local-agent-profile.mjs';
 
+// Historical presentation only: never rewrite stored execution settings or
+// infer an old turn's effort from the employee's current selection.
+export const LOCAL_TURN_EFFORT_SQL = `CASE
+  WHEN t.provider_kind = 'local' AND t.effort = 'default'
+    AND t.provider_snapshot->'profile'->>'runtime' = 'llama-cpp-b10982'
+  THEN CASE
+    WHEN t.provider_snapshot->'profile'->>'reasoning' IN ('low','medium','xhigh')
+      THEN t.provider_snapshot->'profile'->>'reasoning'
+    WHEN COALESCE(t.provider_snapshot->'profile'->>'reasoning','default') = 'default' THEN 'xhigh'
+    ELSE t.effort END
+  ELSE t.effort END`;
+
 export function normalizeLocalDefinition(value) {
   return {profile:normalizeLocalAgentProfile(value?.profile),host:validateHost(value?.host)};
+}
+export function localCodexModelCatalog(profile) {
+  // Codex asks its custom provider for model metadata, not LM Studio's generic
+  // OpenAI models list. Advertise only this pinned model, never cloud tiers.
+  return {models:[{
+    slug:profile.model,display_name:profile.model,description:'Local Qwen on your 4090',
+    default_reasoning_level:profile.runtime==='llama-cpp-b10982'?'xhigh':null,
+    supported_reasoning_levels:profile.runtime==='llama-cpp-b10982'?['low','medium','xhigh'].map(e=>({effort:e,description:`Qwen ${e}`})):[],shell_type:'unified_exec',
+    visibility:'list',supported_in_api:true,priority:1,additional_speed_tiers:[],service_tiers:[],
+    availability_nux:null,upgrade:null,
+    base_instructions:'You are a coding assistant running a local Qwen model through Codex. Use the available tools to complete the user request. Follow tool documentation and do not invent tool results.',
+    model_messages:null,default_reasoning_summary:'none',support_verbosity:false,
+    default_verbosity:null,apply_patch_tool_type:'freeform',web_search_tool_type:'text',
+    truncation_policy:{mode:'tokens',limit:10000},supports_image_detail_original:false,
+    context_window:profile.contextWindow,max_context_window:profile.contextWindow,
+    effective_context_window_percent:95,experimental_supported_tools:[],
+    input_modalities:['text','image'],supports_search_tool:true,supports_experimental_context:false,
+  }]};
 }
 export async function resolveLocalCharacter(client,character) {
   const id=character.config?.localProfileId;
@@ -18,7 +54,7 @@ export async function resolveLocalCharacter(client,character) {
   const definition=normalizeLocalDefinition(result.rows[0].definition);
   if(character.config?.localHostAddress)definition.host=validateHost({...definition.host,address:character.config.localHostAddress});
   if(character.config?.localReasoning)definition.profile=normalizeLocalAgentProfile({...definition.profile,reasoning:character.config.localReasoning});
-  if(character.backend!=='claude'||character.model!==definition.profile.model||character.effort!=='default'||character.fastMode)throw new Error('Local employee settings do not match the profile');
+  if(character.backend!==definition.profile.backend||character.model!==definition.profile.model||character.effort!=='default'||character.fastMode)throw new Error('Local employee settings do not match the profile');
   character.localProfile=definition;
   return character;
 }
@@ -48,7 +84,7 @@ export async function validateLocalResume(client,sessionID,character,externalID)
 // interactive CLI's ANTHROPIC_BASE_URL. Only the next request may reconnect;
 // an interrupted inference is never replayed.
 export class LocalProviderService {
-  constructor({pool,stateDirectory,broadcast=()=>{},hostFactory=o=>new WindowsLMStudioHost(o),bridgeFactory=o=>new LocalInferenceBridge(o),waitMs=300000,retryMs=2000,idleMs=180000,cleanupWaitMs=15000}) {
+  constructor({pool,stateDirectory,broadcast=()=>{},hostFactory=o=>o.profile.runtime==='llama-cpp-b10982'?new WindowsLlamaCppHost(o):new WindowsLMStudioHost(o),bridgeFactory=o=>new LocalInferenceBridge(o),waitMs=300000,retryMs=2000,idleMs=180000,cleanupWaitMs=15000}) {
     Object.assign(this,{pool,stateDirectory,broadcast,hostFactory,bridgeFactory,waitMs,retryMs,idleMs,cleanupWaitMs});
     this.entries=new Map();this.closed=false;
   }
@@ -76,21 +112,34 @@ export class LocalProviderService {
     await this.awaitCleanup(e);
     if(e.closed)throw new Error('Local session is closed');
     e.users++;
-    let released=false;
-    const release=async()=>{if(released)return;released=true;e.users--;if(!e.users){
+    let released=false,catalogDirectory,catalogPath;
+    const release=async()=>{if(released)return;released=true;
+      // Temporary metadata cleanup must not strand a GPU lease if the file was
+      // already removed by the OS. The live process has exited before release.
+      if(catalogPath)await unlink(catalogPath).catch(error=>{if(error.code!=='ENOENT')console.warn('Local catalog cleanup failed:',error.code);});
+      if(catalogDirectory)await rmdir(catalogDirectory).catch(error=>{if(error.code!=='ENOENT')console.warn('Local catalog directory cleanup failed:',error.code);});
+      e.users--;if(!e.users){
       if(options.mode==='terminal')await this.close(e);
-      else {e.active?.abort.abort();e.retire=setTimeout(()=>this.close(e),this.idleMs);e.retire.unref();}
+      else {if(e.active&&!e.active.completed)e.active.abort.abort();e.retire=setTimeout(()=>this.close(e),this.idleMs);e.retire.unref();}
     }};
     try {
       const profile={...definition.profile,endpoint:`http://127.0.0.1:${e.server.address().port}`};
-      return {...createLocalAgentLaunch({...options,character,profile,baseEnvironment:{...(options.baseEnvironment??process.env),[profile.credentialEnv]:e.token}}),release};
+      if(profile.backend==='codex'){
+        // A shared fresh cloud models_cache.json can suppress provider refresh.
+        // Pin metadata per process; never modify the user's shared Codex home.
+        catalogDirectory=await mkdtemp(join(tmpdir(),'officestra-local-catalog-'));
+        catalogPath=join(catalogDirectory,'models.json');
+        await writeFile(catalogPath,JSON.stringify(localCodexModelCatalog(profile)),{mode:0o600});
+      }
+      return {...createLocalAgentLaunch({...options,character,profile,catalogPath,baseEnvironment:{...(options.baseEnvironment??process.env),[profile.credentialEnv]:e.token}}),release};
     }catch(error){await release();throw error;}
   }
   async awaitCleanup(e,signal) {
-    // Only a cancelled request may wait. Genuine concurrent inference remains 409.
+    // Completed HTTP streams may still be draining when Codex starts its next
+    // tool round. Wait for their cleanup, but reject concurrent inference.
     const previous=e.active;
-    if(previous?.abort.signal.aborted){
-      this.change(e,'draining','이전 로컬 요청을 정리하는 중');
+    if(previous&&(previous.completed||previous.abort.signal.aborted)){
+      if(!previous.completed)this.change(e,'draining','이전 로컬 요청을 정리하는 중');
       let timer,onAbort;
       try{await Promise.race([previous.done,new Promise((_,reject)=>{
         timer=setTimeout(()=>reject(new Error('Local cleanup is still pending')),this.cleanupWaitMs);
@@ -115,7 +164,8 @@ export class LocalProviderService {
         this.change(e,'starting');
         const resource=await host.start({signal});
         e.resource=resource;
-        e.bridge=this.bridgeFactory({upstream:resource.upstream,token:e.token,model:e.definition.profile.model,reasoning:e.definition.profile.reasoning??'default',usageProfile:INCLUSIVE_INPUT_PROFILE,...LOCAL_HOST_MEMORY_BUDGET,
+        e.bridge=this.bridgeFactory({upstream:resource.upstream,token:e.token,model:e.definition.profile.model,reasoning:e.definition.profile.reasoning??'default',usageProtocol:e.definition.profile.usageProtocol,usageProfile:e.definition.profile.runtime==='llama-cpp-b10982'?LLAMA_RESPONSES_PROFILE:e.definition.profile.backend==='codex'?RESPONSES_INCLUSIVE_PROFILE:INCLUSIVE_INPUT_PROFILE,...LOCAL_HOST_MEMORY_BUDGET,
+          onResponseCompleted:()=>{if(e.active)e.active.completed=true;},
           readResources:async()=>{if(!resource.alive())throw new Error('SSH tunnel disconnected');const sample=await resource.sample();e.resources=sample;return sample;},
           audit:()=>{},release:async()=>{await resource.release();if(e.state!=='error')this.change(e,'idle');},idleMs:this.idleMs,sampleTimeoutMs:12000,sampleMaxAgeMs:15000,pollMs:3000});
         const address=await e.bridge.start();
@@ -134,13 +184,18 @@ export class LocalProviderService {
     const token=req.headers['x-api-key']??String(req.headers.authorization??'').replace(/^Bearer /,'');
     const a=Buffer.from(String(token)),b=Buffer.from(e.token);
     if(req.headers.origin||a.length!==b.length||!timingSafeEqual(a,b)){reply(401,'Unauthorized');return;}
-    if(req.method!=='POST'||!/^\/v1\/messages(?:\/count_tokens)?(?:\?beta=true)?$/.test(req.url)){reply(404,'Unsupported route');return;}
-    const abort=new AbortController();
-    res.once('close',()=>{if(!res.writableFinished)abort.abort();});
+    if(e.definition.profile.backend==='codex'&&req.method==='GET'&&/^\/v1\/models(?:\?client_version=[0-9A-Za-z._-]+)?$/.test(req.url)) {
+      res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});
+      res.end(JSON.stringify(localCodexModelCatalog(e.definition.profile)));return;
+    }
+    const supported=e.definition.profile.backend==='codex'?req.url==='/v1/responses':/^\/v1\/messages(?:\/count_tokens)?(?:\?beta=true)?$/.test(req.url);
+    if(req.method!=='POST'||!supported){reply(404,'Unsupported route');return;}
+    const abort=new AbortController();let active;
+    res.once('close',()=>{if(!res.writableFinished&&!active?.completed)abort.abort();});
     try{await this.awaitCleanup(e,abort.signal);}catch(error){reply(503,error.message);return;}
     if(e.active||e.closed){reply(409,'Local inference is busy');return;}
     let settled;
-    const active={abort,done:new Promise(resolve=>{settled=resolve;})};
+    active={abort,done:new Promise(resolve=>{settled=resolve;})};
     e.active=active;
     const timer=setTimeout(()=>abort.abort(),this.waitMs+240000);
     try{
@@ -151,11 +206,12 @@ export class LocalProviderService {
         const upstream=request(`${url}${req.url}`,{method:'POST',headers,signal:abort.signal},response=>{
           if(response.statusCode>=500)this.change(e,'error','로컬 연결 실패 — 다음 요청에서 다시 연결합니다');
           res.writeHead(response.statusCode,{'content-type':response.headers['content-type']??'application/json'});
-          response.pipe(res);response.once('error',reject);response.once('aborted',()=>reject(new Error('Local response interrupted')));response.once('end',resolve);
+          pipeline(response,res,error=>error?reject(error):resolve());
         });
         upstream.once('error',reject);req.once('error',reject);req.pipe(upstream);
       });
     }catch(error){
+      if(active.completed)return;
       abort.abort();
       try{await e.bridge?.stop('connection failed');e.cleanupFailed=!!e.bridge&&!e.bridge.status.cleanupComplete;}
       catch{e.cleanupFailed=true;}
