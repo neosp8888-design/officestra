@@ -44,6 +44,27 @@ while coworkers exchange requests, replies, and reviews through the API.
 Conversations and work records stay local. Search past work when needed,
 and publish knowledge to the company wiki with your approval.
 
+## Give coworkers instructions for working together
+
+Use **Settings** below a coworker's conversation to customize their name and
+**work instructions**. Give each coworker a distinct specialty and file scope,
+while keeping the collaboration rules consistent. This example fits within the
+1,200-character limit and can be pasted as-is or adapted to the role.
+
+```text
+Before starting, confirm the goal, scope, and prohibited actions.
+Delegate an independent task when another coworker is better suited to it by sending one request at a time with POST /api/agent-jobs. Set characterId to the recipient and senderCharacterId to your own ID. Include the goal, owned files, prohibited actions, and the characterId that should receive the reply.
+Do not stop at acknowledging a request from another coworker. Send the result, verification, and remaining risks back to the original sender in a new turn. Do not edit the same files concurrently or retry a 409 (busy) response indefinitely.
+The final owner must verify coworkers' findings against source and tests, then present one consolidated conclusion.
+Only delete, deploy, restart services, or expand permissions when the user has authorized it.
+```
+
+At launch, OFFICESTRA automatically adds the exact `senderCharacterId` guidance
+for that coworker. It is display attribution for the message bubble, not proof
+of authority. A delegated request must also name the **coworker ID that should
+receive the reply**. Prefer one result-bearing reply over an endless exchange of
+acknowledgements.
+
 ## New models arrive automatically. You choose.
 
 <p align="center">
@@ -54,6 +75,44 @@ Choose a different CLI, model, reasoning level, and role for each coworker.
 Supported models and reasoning options refresh automatically.
 In **model visibility settings**, hide only the models you do not want.<br>
 *A detail cropped from the original GUI screenshot, without rescaling its pixels.*
+
+## Local models are experimental
+
+Local AI is not a generally auto-detected model option. It is an **opt-in,
+experimental feature** that appears only after an operator registers and enables
+a validated profile. Cloud CLIs remain the default, and every other OFFICESTRA
+feature works without a local model.
+
+### If you do not have a local model
+
+- Install and sign in to only the Codex, Claude Code, or Antigravity CLIs you use.
+- Choose a CLI and cloud model from each coworker's quick settings bar.
+- Do not create a local profile. When no enabled profile exists, the **Local AI**
+  menu stays hidden and no additional configuration is required.
+
+### If you have a prepared local model host
+
+- The direct path validated in this public preview is narrowly pinned to a
+  **Codex runner, Responses bridge, SSH host-key-pinned Windows NVIDIA PC, and
+  Qwen3.8-27B with a 64K context (q8 KV)**. This is not yet a generic form for
+  arbitrary OpenAI-compatible URLs.
+- The local PC needs the model files and runtime pinned by the repository. The
+  Mac needs a non-interactive SSH key and pinned host key for that PC. A change
+  to the model, runtime, paths, or GPU configuration requires revalidation of
+  the profile and safety limits.
+- Once an operator registers and enables a valid profile in the local backend,
+  **Local AI** appears in the coworker's CLI menu. Finish active work and close
+  the terminal before selecting it.
+- Switching preserves conversation history but starts a new session. Use the
+  coworker's **Settings** to verify and save the local PC's IPv4 address. Choose
+  **Return to previous cloud settings** to restore the earlier CLI, model, and
+  permission.
+
+OFFICESTRA manages only local processes that it started and refuses to take over
+an existing model server or a GPU running another workload. Local turns show no
+API cost, but electricity and hardware costs are not tracked. This release does
+not include a general one-click profile creator; inspect the profile validation
+requirements in the source before connecting new hardware.
 
 ## See which AI is ready for the next task
 
@@ -79,7 +138,7 @@ This README describes features on the current `main` branch.
 
 ## Get started
 
-The latest DMG release is **v1.4.1**. To run from source, use the AI-assisted setup below.
+The latest DMG release is **v1.5.0**. To run from source, use the AI-assisted setup below.
 
 ### Easiest path: ask an AI to do it
 
@@ -93,7 +152,7 @@ use one of them:
 
 ### Download the app
 
-[Download OFFICESTRA v1.4.1 DMG](https://github.com/neosp8888-design/officestra/releases/tag/v1.4.1)
+[Download OFFICESTRA v1.5.0 DMG](https://github.com/neosp8888-design/officestra/releases/tag/v1.5.0)
 — Apple silicon · macOS 14 or later · English/Korean.
 
 Open the DMG and drag OFFICESTRA into Applications. Node.js is included. You still
