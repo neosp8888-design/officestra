@@ -35,7 +35,9 @@ test('local Codex uses authenticated Responses front door, preserves cancellatio
   assert.equal(catalog.models.length,1);assert.equal(catalog.models[0].slug,character.model);assert.equal(catalog.models[0].context_window,32768);assert.deepEqual(catalog.models[0].service_tiers,[]);
   assert.equal((await fetch(base+'/models')).status,401);assert.equal(requests.length,0);
   const res=await fetch(base+'/responses',{method:'POST',headers:{authorization:`Bearer ${token}`},body:JSON.stringify({model:character.model,input:'hello'})});
-  assert.equal(res.status,200);assert.equal((await res.json()).usage.input_tokens,12);assert.equal(requests[0].url,'/v1/responses');assert.equal(requests[0].body.max_output_tokens,4096);
+  assert.equal(res.status,200);assert.equal((await res.json()).usage.input_tokens,12);assert.equal(requests[0].url,'/v1/responses');assert.equal(requests[0].body.max_output_tokens,undefined);
+  assert.equal((await fetch(base+'/responses',{method:'POST',headers:{authorization:`Bearer ${token}`},body:JSON.stringify({model:character.model,input:'hello',max_output_tokens:32769})})).status,400);
+  assert.equal(requests.length,1);
   assert.equal((await fetch(base+'/messages',{method:'POST',headers:{authorization:`Bearer ${token}`},body:'{}'})).status,404);
   await spec.release();
   await assert.rejects(access(catalogPath),{code:'ENOENT'});
@@ -68,9 +70,10 @@ test('context increase and route changes preserve session; pinned identity chang
   const larger={...definition,profile:{...definition.profile,contextWindow:65536}};
   assert.equal(localResumeCompatible(definition,larger),true);
   assert.equal(localResumeCompatible(larger,definition),false);
-  for(const field of ['id','providerKind','backend','model','credentialEnv','credentialVersion','endpoint','usageProtocol','maxOutputTokens']){
+  for(const field of ['id','providerKind','backend','model','credentialEnv','credentialVersion','endpoint','usageProtocol']){
     assert.equal(localResumeCompatible(definition,{...larger,profile:{...larger.profile,[field]:'changed'}}),false,field);
   }
+  assert.equal(localResumeCompatible(definition,{...larger,profile:{...larger.profile,maxOutputTokens:16384}}),true);
   assert.equal(localResumeCompatible(definition,{...larger,host:{...larger.host,address:'other-host'}}),true);
   for(const field of ['hostKeyAlias','user','keyPath','sshPort','modelKey']){
     assert.equal(localResumeCompatible(definition,{...larger,host:{...larger.host,address:'other-host',[field]:'different'}}),false,field);

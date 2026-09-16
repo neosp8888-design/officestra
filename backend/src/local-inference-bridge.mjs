@@ -8,11 +8,13 @@ import { normalizeResponsesUsage, createResponsesUsageSSETransform, RESPONSES_IN
 import { adaptLocalResponsesTools } from './local-responses-tools.mjs';
 
 const error=(status,message)=>Object.assign(new Error(message),{status});
-export function normalizeLocalResponsesRequest(value,reasoning='default',usageProfile=RESPONSES_INCLUSIVE_PROFILE) {
+export function normalizeLocalResponsesRequest(value,reasoning='default',usageProfile=RESPONSES_INCLUSIVE_PROFILE,contextWindow=null) {
   const direct=usageProfile===LLAMA_RESPONSES_PROFILE;
   if(!(direct?['default','on','off','low','medium','xhigh']:['default','on','off']).includes(reasoning))throw error(400,'Local Responses reasoning level is not verified');
-  if(value.max_output_tokens!==undefined&&(!Number.isSafeInteger(value.max_output_tokens)||value.max_output_tokens<1||value.max_output_tokens>4096))throw error(400,'Unverified output budget');
-  // The LM Studio default must not silently exceed the measured output budget.
+  if(value.max_output_tokens!==undefined&&(!Number.isSafeInteger(value.max_output_tokens)||value.max_output_tokens<1||(contextWindow!==null&&value.max_output_tokens>contextWindow)))throw error(400,'Unverified output budget');
+  // Do not inject the old 4096-token ceiling. When Codex omits an explicit
+  // budget, the pinned local runtime may generate until EOS or the measured
+  // context window; an explicit caller budget still cannot exceed that window.
   // Codex accepts a `default` effort override, LM Studio's Responses enum does
   // not. A local 'default' selection means no upstream reasoning override; also
   // prevent a cloud effort inherited from shared Codex config from leaking in.
@@ -41,7 +43,7 @@ export function normalizeLocalResponsesRequest(value,reasoning='default',usagePr
     if(effort==='off')effort='none';
     if(!['none','low','medium','xhigh'].includes(effort))throw error(400,'Unsupported Qwen reasoning effort');
   }
-  return {...request,...(effort?{reasoning:{effort}}:{}),max_output_tokens:value.max_output_tokens??4096};
+  return {...request,...(effort?{reasoning:{effort}}:{}),...(value.max_output_tokens!==undefined?{max_output_tokens:value.max_output_tokens}:{})};
 }
 export function applyLocalReasoning(value,reasoning='default') {
   if(!['default','on','off'].includes(reasoning))throw new TypeError('Unsupported local reasoning option');
@@ -96,7 +98,7 @@ export class LocalInferenceBridge {
   #active=null;#state='idle';#failure=null;#address=null;#sampling=false;#cleanupComplete=false;
   constructor({upstream,token,model,usageProfile,usageProtocol='anthropic-normalized-v1',reasoning='default',readResources,audit,observeRequest=()=>{},onResponseCompleted=()=>{},release=async()=>{},port=0,
     guardPercent=77,vramGuardPercent=guardPercent,ramGuardPercent=guardPercent,sampleMaxAgeMs=5000,sampleTimeoutMs=3000,pollMs=1000,idleMs=180000,
-    requestTimeoutMs=240000,maxBodyBytes=8*1024*1024}) {
+    requestTimeoutMs=240000,maxBodyBytes=8*1024*1024,contextWindow=null,maxOutputTokens=4096}) {
     const url=new URL(upstream);
     if(url.protocol!=='http:'||!['127.0.0.1','[::1]'].includes(url.hostname)||!url.port||url.username||url.password||url.pathname!=='/'||url.search||url.hash)throw new TypeError('Upstream must be a loopback URL');
     if(typeof token!=='string'||Buffer.byteLength(token)<24||/[\r\n\0]/.test(token))throw new TypeError('Dedicated bridge token of at least 24 bytes required');
@@ -106,13 +108,16 @@ export class LocalInferenceBridge {
       ![guardPercent,ramGuardPercent].every(n=>Number.isFinite(n)&&n>0&&n<=95)||
       !Number.isFinite(vramGuardPercent)||vramGuardPercent<=0||vramGuardPercent>98)throw new TypeError('Invalid port or memory guard');
     for(const n of [sampleMaxAgeMs,sampleTimeoutMs,pollMs,idleMs,requestTimeoutMs,maxBodyBytes])if(!Number.isSafeInteger(n)||n<=0)throw new TypeError('Invalid limits');
+    if((contextWindow!==null&&(!Number.isSafeInteger(contextWindow)||contextWindow<1))||
+      !Number.isSafeInteger(maxOutputTokens)||maxOutputTokens<1||
+      (contextWindow!==null&&maxOutputTokens>contextWindow))throw new TypeError('Invalid output budget');
     if(!['anthropic-normalized-v1','openai-responses-v1'].includes(usageProtocol))throw new TypeError('Unsupported local usage protocol');
     if(usageProtocol==='openai-responses-v1') {
       if(!verifiedResponsesProfile(usageProfile))throw new TypeError('Explicit verified Responses usage profile required');
     } else createUsageNormalizer({profile:usageProfile});
-    if(usageProtocol==='openai-responses-v1')normalizeLocalResponsesRequest({},reasoning,usageProfile);else applyLocalReasoning({},reasoning);
+    if(usageProtocol==='openai-responses-v1')normalizeLocalResponsesRequest({},reasoning,usageProfile,contextWindow);else applyLocalReasoning({},reasoning);
     this.#upstream=url;this.#token=token;this.#sample=readResources;this.#audit=audit;this.#release=release;
-    this.#options={port,model,reasoning,usageProtocol,observeRequest,onResponseCompleted,guardPercent,vramGuardPercent,ramGuardPercent,sampleMaxAgeMs,sampleTimeoutMs,pollMs,idleMs,requestTimeoutMs,maxBodyBytes,usageProfile};
+    this.#options={port,model,reasoning,usageProtocol,observeRequest,onResponseCompleted,guardPercent,vramGuardPercent,ramGuardPercent,sampleMaxAgeMs,sampleTimeoutMs,pollMs,idleMs,requestTimeoutMs,maxBodyBytes,usageProfile,contextWindow,maxOutputTokens};
   }
   get status(){return {state:this.#state,active:this.#active!==null,address:this.#address,failure:this.#failure,cleanupComplete:this.#cleanupComplete};}
   async #resources(){
@@ -159,9 +164,9 @@ export class LocalInferenceBridge {
       let parsed;try{parsed=JSON.parse(body);}catch{throw error(400,'Invalid JSON');}
       if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw error(400,'Invalid JSON object');
       if(parsed.model!==this.#options.model)throw error(400,'Model does not match local profile');
-      if(parsed.max_tokens!==undefined&&(!Number.isSafeInteger(parsed.max_tokens)||parsed.max_tokens<=0||parsed.max_tokens>4096))throw error(400,'Unverified output budget');
+      if(parsed.max_tokens!==undefined&&(!Number.isSafeInteger(parsed.max_tokens)||parsed.max_tokens<=0||parsed.max_tokens>this.#options.maxOutputTokens))throw error(400,'Unverified output budget');
       if(active.abort.signal.aborted)throw error(503,'Request cancelled');
-      const adapter=responses?adaptLocalResponsesTools(normalizeLocalResponsesRequest(parsed,this.#options.reasoning,this.#options.usageProfile)):null;
+      const adapter=responses?adaptLocalResponsesTools(normalizeLocalResponsesRequest(parsed,this.#options.reasoning,this.#options.usageProfile,this.#options.contextWindow),{imageToolResultsAsMessages:this.#options.usageProfile===LLAMA_RESPONSES_PROFILE,reasoningContentAsSummary:this.#options.usageProfile===LLAMA_RESPONSES_PROFILE}):null;
       const normalized=adapter?adapter.request:applyLocalReasoning(normalizeLocalMessageRequest(parsed),this.#options.reasoning);
       this.#options.observeRequest(normalized);
       const outgoing=normalized===parsed?body:Buffer.from(JSON.stringify(normalized));

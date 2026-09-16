@@ -34,7 +34,7 @@ export function normalizeLocalAgentProfile(value) {
   const credentialEnv=text(value.credentialEnv,'credentialEnv');
   if (!/^OFFICESTRA_LOCAL_[A-Z0-9_]+_TOKEN$/.test(credentialEnv)) throw new TypeError('Use a dedicated local credential environment reference');
   const credentialVersion=text(value.credentialVersion,'credentialVersion');
-  if (![32768,65536].includes(value.contextWindow) || value.maxOutputTokens!==4096) throw new TypeError('Only measured 32K/64K contexts with 4096 output are enabled');
+  if (![32768,65536].includes(value.contextWindow) || !Number.isSafeInteger(value.maxOutputTokens) || value.maxOutputTokens<1 || value.maxOutputTokens>value.contextWindow) throw new TypeError('Local output budget must be a safe integer within the context window');
   const expectedUsageProtocol=value.backend==='codex'
     ? 'openai-responses-v1'
     : 'anthropic-normalized-v1';
@@ -50,7 +50,7 @@ export function normalizeLocalAgentProfile(value) {
   }
   return Object.freeze({id,providerKind:'local',backend:value.backend,model,
     endpoint:url.origin,credentialEnv,credentialVersion,contextWindow:value.contextWindow,
-    maxOutputTokens:4096,usageProtocol:value.usageProtocol,
+    maxOutputTokens:value.maxOutputTokens,usageProtocol:value.usageProtocol,
     ...(value.reasoning!==undefined?{reasoning:value.reasoning}:{}),
     ...(value.runtime?{runtime:value.runtime}:{}),
     ...(value.kvCacheQuantization!==undefined?{kvCacheQuantization:value.kvCacheQuantization}:{})});
@@ -88,7 +88,7 @@ export function localTerminalExecutable(executable,env){
 }
 const CODEX_CLOUD_CONFIG_KEYS=new Set([
   'model','model_reasoning_effort','features.fast_mode','service_tier',
-  'model_reasoning_summary','show_raw_agent_reasoning',
+  'model_reasoning_summary','show_raw_agent_reasoning','hide_agent_reasoning',
 ]);
 
 function quotedConfig(value) {
@@ -112,6 +112,13 @@ function localCodexOptions(args, profile, character, mode, catalogPath, workdir)
     '-c',`model=${quotedConfig(profile.model)}`,
     '-c',`model_provider=${quotedConfig(LOCAL_CODEX_PROVIDER)}`,
     '-c',`model_reasoning_effort=${quotedConfig(profile.runtime==='llama-cpp-b10982'?(profile.reasoning&&profile.reasoning!=='default'?profile.reasoning:'xhigh'):'default')}`,
+    // Display the reasoning this local model actually emits. This does not
+    // change effort or synthesize a summary; both GUI JSON and TUI need it.
+    // llama.cpp raw content is mirrored into the Codex summary display lane
+    // by our bridge. Do not print the same content twice in the native TUI.
+    '-c',`show_raw_agent_reasoning=${profile.runtime==='llama-cpp-b10982'?'false':'true'}`,
+    '-c','hide_agent_reasoning=false',
+    '-c','model_reasoning_summary="detailed"',
     '-c',`features.fast_mode=false`,
     '-c',`service_tier=${quotedConfig('default')}`,
     '-c',`model_providers.${LOCAL_CODEX_PROVIDER}.name=${quotedConfig('OFFICESTRA Local')}`,

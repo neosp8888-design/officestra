@@ -2274,8 +2274,69 @@ test("공개 진행 설명은 활동에 남기고 응답 본문에도 누적 유
   state.partialText = "";
   assert.equal(
     runtime.finalResponseCandidate(state),
-    "검증을 통과했습니다.",
+    "",
+    "Codex는 과거 진행 메시지를 최종 답변으로 다시 채택하지 않는다",
   );
+});
+
+test("Codex 진행 메시지 뒤 도구로 끝나면 최종 답변으로 완료하지 않는다", async () => {
+  const runtime = new AgentRuntime({
+    pool: { query: async () => ({ rowCount: 1 }) },
+    withTransaction: async () => {},
+    workdir: "/tmp",
+    broadcast: () => {},
+  });
+  const state = makeCodexActivityState();
+  const stream = Readable.from([
+    `${JSON.stringify({
+      type: "item.completed",
+      item: { id: "message-1", type: "agent_message", text: "확인해보겠습니다." },
+    })}\n`,
+    `${JSON.stringify({
+      type: "item.completed",
+      item: {
+        id: "command-1",
+        type: "command_execution",
+        command: "false",
+        exit_code: 1,
+      },
+    })}\n`,
+  ]);
+
+  await runtime.consumeOutput(state, stream);
+
+  assert.equal(runtime.finalResponseCandidate(state), "");
+  assert.deepEqual(state.visibleAgentMessages, [
+    { key: "message-1", text: "확인해보겠습니다." },
+  ]);
+  assert.equal(
+    state.activityRecords.get("message:message-1").text,
+    "확인해보겠습니다.",
+  );
+  assert.equal(state.activityRecords.get("command-1").status, "failed");
+});
+
+test("Codex가 추론만 출력하고 끝나면 최종 답변 후보가 없다", async () => {
+  const runtime = new AgentRuntime({
+    pool: { query: async () => ({ rowCount: 1 }) },
+    withTransaction: async () => {},
+    workdir: "/tmp",
+    broadcast: () => {},
+  });
+  const state = makeCodexActivityState();
+  await runtime.consumeOutput(state, Readable.from([
+    `${JSON.stringify({
+      type: "item.completed",
+      item: {
+        id: "reasoning-1",
+        type: "reasoning",
+        content: [{ type: "reasoning_text", text: "계속 분석 중입니다." }],
+      },
+    })}\n`,
+  ]));
+
+  assert.equal(runtime.finalResponseCandidate(state), "");
+  assert.equal(state.activityRecords.get("reasoning-1").kind, "thinking");
 });
 
 test("여러 조각으로 나뉜 응답은 조각마다 기계 블록을 떼고 합친다", () => {

@@ -324,7 +324,7 @@ struct CodexTranscriptPresentation: Equatable {
                 } else {
                     appendGroupedItem(
                         .activity(activity),
-                        kind: .work
+                        kind: activity.kind == "thinking" ? .reasoning : .work
                     )
                 }
             }

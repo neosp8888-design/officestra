@@ -65,7 +65,7 @@ export function localResumeCompatible(previous,next) {
   // Address is a route, not session identity. Every connection still verifies
   // the pinned SSH host key; user/key/model/hostKeyAlias changes remain blocked.
   const samePinnedHost=typeof previous?.host?.hostKeyAlias==='string' && previous.host.hostKeyAlias.length>0 && previous.host.hostKeyAlias===next?.host?.hostKeyAlias;
-  const strip=d=>d?{...d,host:samePinnedHost?Object.fromEntries(Object.entries(d.host??{}).filter(([k])=>k!=='address')):d.host,profile:Object.fromEntries(Object.entries(d.profile??{}).filter(([k])=>k!=='reasoning'))}:d;
+  const strip=d=>d?{...d,host:samePinnedHost?Object.fromEntries(Object.entries(d.host??{}).filter(([k])=>k!=='address')):d.host,profile:Object.fromEntries(Object.entries(d.profile??{}).filter(([k])=>!['reasoning','maxOutputTokens'].includes(k)))}:d;
   previous=strip(previous);next=strip(next);
   if(isDeepStrictEqual(previous,next))return true;
   // A measured window increase does not change model/account/session identity.
@@ -165,6 +165,7 @@ export class LocalProviderService {
         const resource=await host.start({signal});
         e.resource=resource;
         e.bridge=this.bridgeFactory({upstream:resource.upstream,token:e.token,model:e.definition.profile.model,reasoning:e.definition.profile.reasoning??'default',usageProtocol:e.definition.profile.usageProtocol,usageProfile:e.definition.profile.runtime==='llama-cpp-b10982'?LLAMA_RESPONSES_PROFILE:e.definition.profile.backend==='codex'?RESPONSES_INCLUSIVE_PROFILE:INCLUSIVE_INPUT_PROFILE,...LOCAL_HOST_MEMORY_BUDGET,
+          contextWindow:e.definition.profile.contextWindow,maxOutputTokens:e.definition.profile.maxOutputTokens,
           onResponseCompleted:()=>{if(e.active)e.active.completed=true;},
           readResources:async()=>{if(!resource.alive())throw new Error('SSH tunnel disconnected');const sample=await resource.sample();e.resources=sample;return sample;},
           audit:()=>{},release:async()=>{await resource.release();if(e.state!=='error')this.change(e,'idle');},idleMs:this.idleMs,sampleTimeoutMs:12000,sampleMaxAgeMs:15000,pollMs:3000});

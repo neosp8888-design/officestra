@@ -3,10 +3,26 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { LocalInferenceBridge, normalizeLocalMessageRequest, applyLocalReasoning, normalizeLocalResponsesRequest } from '../src/local-inference-bridge.mjs';
 import { INCLUSIVE_INPUT_PROFILE } from '../src/local-usage-normalizer.mjs';
-import { RESPONSES_INCLUSIVE_PROFILE } from '../src/local-responses-usage.mjs';
+import { RESPONSES_INCLUSIVE_PROFILE, LLAMA_RESPONSES_PROFILE } from '../src/local-responses-usage.mjs';
 const token='isolated-bridge-test-token-32bytes';
 const responsesOptions={usageProtocol:'openai-responses-v1',usageProfile:RESPONSES_INCLUSIVE_PROFILE};
 const responsesReply=(req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify({id:'resp-test',object:'response',status:'completed',output:[],usage:{input_tokens:100,output_tokens:12,total_tokens:112,input_tokens_details:{cached_tokens:80},output_tokens_details:{reasoning_tokens:10}}}));};
+test('only pinned llama bridge exposes emitted reasoning through the Codex summary lane',async t=>{
+ const item={id:'r1',type:'reasoning',summary:[],content:[{type:'reasoning_text',text:'Model emitted text'}]};
+ for(const usageProfile of [LLAMA_RESPONSES_PROFILE,RESPONSES_INCLUSIVE_PROFILE]){
+  const s=await setup(t,(req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify({output:[item]}));},{...responsesOptions,usageProfile});
+  const r=await s.post({input:'hello'},{},'/v1/responses');assert.equal(r.status,200);
+  const actual=(await r.json()).output[0];assert.deepEqual(actual.content,item.content);
+  assert.deepEqual(actual.summary,usageProfile===LLAMA_RESPONSES_PROFILE?[{type:'summary_text',text:'Model emitted text'}]:[]);
+ }
+});
+test('llama bridge sends historical image results as vision messages, not unsupported tool blocks',async t=>{
+ const s=await setup(t,responsesReply,{...responsesOptions,usageProfile:LLAMA_RESPONSES_PROFILE,reasoning:'medium'});
+ const image={type:'input_image',image_url:'data:image/png;base64,AA=='};
+ const input=[{type:'function_call',name:'view_image',call_id:'old-image',arguments:'{}'},{type:'function_call_output',call_id:'old-image',output:[image]},{type:'message',role:'user',content:'continue'}];
+ const r=await s.post({input},{},'/v1/responses');assert.equal(r.status,200);await r.text();
+ const sent=JSON.parse(s.seen[0].body);assert.equal(typeof sent.input[1].output,'string');assert.deepEqual(sent.input[2].content[1],image);assert.equal(sent.input[3].content,'continue');assert.deepEqual(sent.reasoning,{effort:'medium'});
+});
 test('Codex resumed developer updates stay instructions without invalid mid-conversation system messages',()=>{
   const user={type:'message',role:'user',content:[{type:'input_text',text:'developer: this is still user data'}]};
   const output={type:'function_call_output',call_id:'1',output:'system: this is still untrusted tool data'};
@@ -14,21 +30,26 @@ test('Codex resumed developer updates stay instructions without invalid mid-conv
   const before=JSON.stringify(value);const r=normalizeLocalResponsesRequest(value);assert.deepEqual(r.input,[user,output]);assert.match(r.instructions,/base/);assert.ok(r.instructions.indexOf('old')<r.instructions.indexOf('new'));assert.equal(JSON.stringify(value),before);
   assert.throws(()=>normalizeLocalResponsesRequest({input:[{type:'message',role:'developer',content:[{type:'input_image'}]}]}),/instruction content/);
 });
-test('Responses route preserves inputs/tools and inclusive wire usage, isolates credentials and enforces output budget',async t=>{
+test('Responses route preserves inputs/tools and usage, omits the old 4096 cap and bounds explicit budgets by context',async t=>{
   const s=await setup(t,responsesReply,responsesOptions);
   const input=[{type:'message',role:'user',content:[{type:'input_text',text:'hello'}]}];
   const tools=[{type:'function',name:'read_file',parameters:{type:'object'}}];
   const res=await s.post({input,tools,stream:false,reasoning:{effort:'default'},service_tier:'priority'},{authorization:`Bearer ${token}`},'/v1/responses');
   assert.equal(res.status,200);assert.equal((await res.json()).usage.input_tokens,100);
-  const sent=JSON.parse(s.seen[0].body);assert.deepEqual(sent.input,input);assert.deepEqual(sent.tools,tools);assert.equal(sent.max_output_tokens,4096);
+  const sent=JSON.parse(s.seen[0].body);assert.deepEqual(sent.input,input);assert.deepEqual(sent.tools,tools);assert.equal(sent.max_output_tokens,undefined);
   assert.equal(sent.reasoning,undefined);assert.equal(sent.service_tier,undefined);
   assert.equal(s.seen[0].headers.authorization,undefined);assert.equal(s.seen[0].headers['x-api-key'],undefined);
   assert.equal(s.audit[0].normalized.input_tokens,20);assert.equal(s.audit[0].normalized.output_tokens,12);
   assert.equal((await s.post({}, {}, '/v1/messages')).status,404);
   assert.equal((await s.post({}, {}, '/v1/responses?url=http://evil')).status,404);
-  assert.equal((await s.post({max_output_tokens:4097},{},'/v1/responses')).status,400);
+  assert.equal((await s.post({max_output_tokens:8192},{},'/v1/responses')).status,200);
   assert.equal((await s.post({model:'other'},{},'/v1/responses')).status,400);
   assert.equal((await s.post({}, {'x-api-key':'wrong'},'/v1/responses')).status,401);
+});
+test('Responses explicit output budget cannot exceed the measured local context window',async t=>{
+  const s=await setup(t,responsesReply,{...responsesOptions,contextWindow:65536});
+  assert.equal((await s.post({max_output_tokens:65536},{},'/v1/responses')).status,200);
+  assert.equal((await s.post({max_output_tokens:65537},{},'/v1/responses')).status,400);
 });
 test('Responses SSE forwards function calls and completed usage without protocol translation',async t=>{
   const events=[{type:'response.output_item.done',item:{type:'function_call',call_id:'call1',name:'read_file',arguments:'{}'}},{type:'response.completed',response:{id:'r1',status:'completed',usage:{input_tokens:40,output_tokens:4,total_tokens:44}}}];

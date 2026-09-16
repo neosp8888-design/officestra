@@ -85,6 +85,11 @@ final class AgentActivityLogPresentationTests: XCTestCase {
 
         XCTAssertTrue(presentation.showsWaiting)
         XCTAssertEqual(presentation.entries.count, 1)
+        guard case .activityGroup(let group) = presentation.entries[0] else {
+            return XCTFail("추론 카드가 없습니다.")
+        }
+        XCTAssertEqual(group.kind, .reasoning)
+        XCTAssertEqual(group.latestItem?.id, activity.id)
     }
 
     func testCodexTranscriptShowsLatestMessageBeforeLaterWork() throws {
@@ -793,25 +798,31 @@ final class AgentActivityLogPresentationTests: XCTestCase {
             isRunning: false
         )
 
-        XCTAssertEqual(presentation.entries.count, 4)
+        XCTAssertEqual(presentation.entries.count, 6)
         guard
-            case .activityGroup(let firstWorkGroup) =
+            case .activityGroup(let firstReasoning) =
                 presentation.entries[0],
-            case .message(let progressMessage) = presentation.entries[1],
-            case .activityGroup(let secondWorkGroup) =
+            case .activityGroup(let firstWorkGroup) =
+                presentation.entries[1],
+            case .activityGroup(let secondReasoning) =
                 presentation.entries[2],
-            case .message(let finalMessage) = presentation.entries[3]
+            case .message(let progressMessage) = presentation.entries[3],
+            case .activityGroup(let secondWorkGroup) =
+                presentation.entries[4],
+            case .message(let finalMessage) = presentation.entries[5]
         else {
             return XCTFail("Codex 타임라인 순서가 다릅니다.")
         }
         XCTAssertEqual(firstWorkGroup.kind, .work)
+        XCTAssertEqual(firstReasoning.kind, .reasoning)
+        XCTAssertEqual(secondReasoning.kind, .reasoning)
+        XCTAssertEqual(firstReasoning.items.map(\.id), ["reason-1"])
+        XCTAssertEqual(secondReasoning.items.map(\.id), ["reason-2"])
         XCTAssertEqual(
             firstWorkGroup.items.map(\.id),
             [
-                "reason-1",
                 "command-1",
                 "tool-1",
-                "reason-2",
             ]
         )
         XCTAssertEqual(progressMessage.text, "첫 확인을 마쳤습니다.")

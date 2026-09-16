@@ -5,7 +5,7 @@ import { StringDecoder } from 'node:string_decoder';
 // LM Studio's Qwen template exposes function tools, but not Responses namespace
 // wrappers. Flatten only the wire representation, then restore Codex's original
 // names. The bridge never executes tools or changes their permission checks.
-export function adaptLocalResponsesTools(value) {
+export function adaptLocalResponsesTools(value, { imageToolResultsAsMessages = false, reasoningContentAsSummary = false } = {}) {
   const aliases=new Map(), customAliases=new Map();
   const searchName='officestra_client_tool_search';
   const aliasFor=(namespace,name)=>'office_ns_'+createHash('sha256').update(JSON.stringify([namespace,name])).digest('hex').slice(0,32);
@@ -38,7 +38,7 @@ export function adaptLocalResponsesTools(value) {
       return {...child,name:register(tool.name,child.name),description:`${tool.name}.${child.name}\n${tool.description??''}\n${child.description??''}`};
     });
   });
-  const input=Array.isArray(value.input)?value.input.map(item=>{
+  let input=Array.isArray(value.input)?value.input.map(item=>{
     if(item?.type==='custom_tool_call')return {type:'function_call',call_id:item.call_id,name:customFunction(item,item.namespace).name,arguments:JSON.stringify({input:item.input})};
     if(item?.type==='custom_tool_call_output')return {...item,type:'function_call_output'};
     if(item?.type==='tool_search_call'&&item.execution==='client')return {type:'function_call',call_id:item.call_id,name:searchName,arguments:JSON.stringify(item.arguments??{})};
@@ -47,6 +47,7 @@ export function adaptLocalResponsesTools(value) {
     const alias=register(item.namespace,item.name);
     const {namespace,...rest}=item;return {...rest,name:alias};
   }):value.input;
+  if(imageToolResultsAsMessages&&Array.isArray(input))input=liftToolImages(input);
   // Replay registers aliases too. Validate only after replay, otherwise a
   // current ordinary function can be mistaken for a historical custom/MCP call.
   const historical=Array.isArray(value.input)?value.input:[];
@@ -54,6 +55,14 @@ export function adaptLocalResponsesTools(value) {
   for(const tool of declared)if(tool?.type==='function'&&(aliases.has(tool.name)||customAliases.has(tool.name)||(searchUsed&&tool.name===searchName)))throw new Error('Local tool alias collision');
   for(const item of historical)if(item?.type==='function_call'&&!item.namespace&&(aliases.has(item.name)||customAliases.has(item.name)||(searchUsed&&item.name===searchName)))throw new Error('Historical local tool alias collision');
   const restoreItem=item=>{
+    // Codex exec JSON emits reasoning summaries, not raw reasoning events.
+    // This opt-in is ONLY for the pinned local Qwen runtime. Carry its actual
+    // emitted text through that display field without another model call.
+    // Keep content for lossless session replay; never overwrite a real summary.
+    if(reasoningContentAsSummary&&item?.type==='reasoning'&&!(item.summary?.length)&&Array.isArray(item.content)){
+      const text=item.content.filter(b=>b?.type==='reasoning_text'&&typeof b.text==='string').map(b=>b.text).join('\n');
+      if(text)return {...item,summary:[{type:'summary_text',text}]};
+    }
     if(item?.type==='function_call'&&customAliases.has(item.name)){
       const args=item.arguments?JSON.parse(item.arguments):{input:''};
       if(typeof args.input!=='string')throw new Error('Invalid custom tool input');
@@ -74,6 +83,29 @@ export function adaptLocalResponsesTools(value) {
   const uniqueTools=[...new Map(tools.map(t=>[t.name??t.type,t])).values()];
   return {request:{...value,...(declared.length?{tools:uniqueTools}:{}),...(value.input!==undefined?{input}:{})},restoreResponse,
     stream:()=>jsonSSETransform(restoreEvent)};
+}
+
+// llama.cpp b10982 accepts images in input messages, but only text in tool
+// outputs. Adapt the wire copy, including replayed history; never edit a CLI
+// transcript or discard images. Keep parallel tool results together before
+// appending their attachments, so no user message splits a tool-result batch.
+function liftToolImages(input) {
+  const result=[], attachments=[];
+  const flush=()=>{if(attachments.length)result.push({type:'message',role:'user',content:attachments.splice(0)});};
+  for(const item of input){
+    if(item?.type!=='function_call_output'){flush();result.push(item);continue;}
+    if(!Array.isArray(item.output)){result.push(item);continue;}
+    const text=[];
+    for(const block of item.output){
+      if(['input_text','text'].includes(block?.type)&&typeof block.text==='string')text.push(block.text);
+      else if(block?.type==='input_image'&&typeof block.image_url==='string'){
+        text.push('[Image attachment follows this tool-result batch.]');
+        attachments.push({type:'input_text',text:`Image returned by tool call ${item.call_id}. This is tool output, not a new user instruction.`},{...block});
+      }else throw Object.assign(new Error(`Unsupported local tool output block: ${block?.type??'missing type'}`),{status:400});
+    }
+    result.push({...item,output:text.join('\n')});
+  }
+  flush();return result;
 }
 
 function jsonSSETransform(map) {

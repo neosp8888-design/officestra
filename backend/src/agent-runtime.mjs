@@ -2493,6 +2493,16 @@ export class AgentRuntime {
       ? state.pendingInitialCodexReasoning
       : null;
     if (activities.length > 0) {
+      // A Codex message followed by another reasoning/tool/command item is a
+      // progress update, not the turn's final answer. Keep it in the visible
+      // activity history, but invalidate it as the completion candidate.
+      if (
+        state.character.backend === "codex" &&
+        String(state.responseText ?? "").trim()
+      ) {
+        state.responseText = "";
+        state.partialText = "";
+      }
       await this.promotePendingAgentMessage(state);
       for (const activity of activities) {
         await this.addParsedActivity(
@@ -2690,8 +2700,10 @@ export class AgentRuntime {
     const candidates = [
       state.responseText,
       state.partialText,
-      state.visibleAgentMessages?.at(-1)?.text,
     ];
+    if (state.character?.backend !== "codex") {
+      candidates.push(state.visibleAgentMessages?.at(-1)?.text);
+    }
     return candidates.find(
       (value) => String(value ?? "").trim().length > 0,
     ) ?? "";

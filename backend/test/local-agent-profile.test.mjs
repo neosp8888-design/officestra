@@ -52,6 +52,16 @@ function configArguments(args) {
   }
   return values;
 }
+test('direct Qwen GUI and terminal display the mirrored summary once without changing selected effort',()=>{
+ const direct={...codexProfile,model:'officestra-qwen38-27b',runtime:'llama-cpp-b10982',contextWindow:65536,kvCacheQuantization:'q8_0'};
+ for(const mode of ['gui','terminal'])for(const reasoning of ['low','medium','xhigh']){
+  const configs=configArguments(buildCodex({mode,profile:{...direct,reasoning},character:{...codexCharacter,model:direct.model}}).args);
+  assert.equal(configs.get('show_raw_agent_reasoning'),'false');
+  assert.equal(configs.get('hide_agent_reasoning'),'false');
+  assert.equal(configs.get('model_reasoning_summary'),'"detailed"');
+  assert.equal(configs.get('model_reasoning_effort'),JSON.stringify(reasoning));
+ }
+});
 test('GUI and terminal reasoning selections are pinned in profile and worker identity',()=>{
   for(const mode of ['gui','terminal','persistent']) {
     const on=build({mode,profile:{...profile,reasoning:'on'}});
@@ -59,6 +69,21 @@ test('GUI and terminal reasoning selections are pinned in profile and worker ide
     assert.equal(on.profile.reasoning,'on');assert.equal(off.profile.reasoning,'off');
     assert.notEqual(on.signature,off.signature);
     assert.throws(()=>build({mode,profile:{...profile,reasoning:'high'}}));
+  }
+});
+
+test('local output budget is configurable beyond 4096 but cannot exceed context',()=>{
+  assert.equal(
+    normalizeLocalAgentProfile({...codexProfile,maxOutputTokens:16384})
+      .maxOutputTokens,
+    16384,
+  );
+  for(const maxOutputTokens of [0,65537,1.5,'8192']) {
+    assert.throws(()=>normalizeLocalAgentProfile({
+      ...codexProfile,
+      contextWindow:65536,
+      maxOutputTokens,
+    }),/output budget/);
   }
 });
 
@@ -99,7 +124,9 @@ test('Codex GUI and terminal use only process-local Responses provider overrides
     assert.equal(configs.get('model_context_window'),'65536');
     assert.equal(configs.get('model_auto_compact_token_limit'),'19660');
     assert.equal(configs.get('model_auto_compact_token_limit_scope'),JSON.stringify('total'));
-    for(const key of ['model_reasoning_summary','show_raw_agent_reasoning'])assert.equal(configs.has(key),false);
+    assert.equal(configs.get('model_reasoning_summary'),'"detailed"');
+    assert.equal(configs.get('show_raw_agent_reasoning'),'true');
+    assert.equal(configs.get('hide_agent_reasoning'),'false');
     assert.equal(result.args.includes('--ignore-user-config'),false);
     assert.ok([...configs.keys()].some(key=>key==='developer_instructions'));
     if(mode==='terminal')assert.ok([...configs.keys()].some(key=>key==='notify'));
