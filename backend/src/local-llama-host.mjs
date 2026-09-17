@@ -6,12 +6,24 @@ import {WindowsLMStudioHost,LocalHostBusyError,localHostMemoryExceeded,validateH
 // Pinned, separately installed runtime. Never substitutes for LM Studio files.
 export const LLAMA_SERVER_PATH='G:\\llm\\officestra-probes\\llama-b10982-cuda124\\bin\\llama-server.exe';
 export const LLAMA_SERVER_SHA256='FFAEE576AD271EDE87B92A7D8C3863DC8F331BBAC666EE00099C250E8809E743';
-const ROOT='G:\\llm\\unsloth\\Qwen3.8-27B-GGUF';
+export const LLAMA_MODEL_ID='officestra-qwen38-27b-uncensored-q4km';
+export const LLAMA_MODEL_ROOT='G:\\llm\\jonathancoletti\\Qwen3.8-27B-Uncensored-GGUF';
+export const LLAMA_MODEL_FILE='Qwen3.8-27B-Uncensored-Q4_K_M.gguf';
+export const LLAMA_MODEL_SIZE=16810714528;
+export const LLAMA_MODEL_SHA256='4C5E2DB039E9325AC7724C8846C71356A24AD1CDFA28002D73ECB6BE645F9675';
+export const LLAMA_MMPROJ_FILE='mmproj-Qwen3.8-27B-Uncensored-F16.gguf';
+export const LLAMA_MMPROJ_SIZE=927606912;
+export const LLAMA_MMPROJ_SHA256='5AC423F8A29059DC24E51BC6A43E9380DCD57A9347F28B62591E0B3F60B7081C';
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 const ps=s=>"'"+String(s).replaceAll("'","''")+"'";
+const artifactPath=file=>LLAMA_MODEL_ROOT+'\\'+file;
+const artifactCheck=(file,size,sha,label)=>`if(!(Test-Path -LiteralPath ${ps(artifactPath(file))})){throw '${label} is not installed'};$f=Get-Item -LiteralPath ${ps(artifactPath(file))};if($f.Length -ne ${size}){throw '${label} size changed; revalidation required'};if((Get-FileHash -LiteralPath ${ps(artifactPath(file))} -Algorithm SHA256).Hash -ne '${sha}'){throw '${label} changed; revalidation required'}`;
+export function llamaArtifactVerificationScript() {
+ return [artifactCheck(LLAMA_MODEL_FILE,LLAMA_MODEL_SIZE,LLAMA_MODEL_SHA256,'Pinned model'),artifactCheck(LLAMA_MMPROJ_FILE,LLAMA_MMPROJ_SIZE,LLAMA_MMPROJ_SHA256,'Pinned mmproj')].join(';');
+}
 export function llamaServerArguments(profile) {
- if(profile.runtime!=='llama-cpp-b10982'||profile.backend!=='codex'||profile.contextWindow!==65536||profile.kvCacheQuantization!=='q8_0'||profile.model!=='officestra-qwen38-27b')throw Error('Unsupported direct runtime configuration');
- return ['-m',ROOT+'\\Qwen3.8-27B-UD-Q4_K_M.gguf','--mmproj',ROOT+'\\mmproj-F16.gguf','-c','65536','-ctk','q8_0','-ctv','q8_0','-ngl','all','-fa','on','-np','1','-b','128','-ub','128','--jinja','--host','127.0.0.1','--port','18181','--alias',profile.model,'--load-mode','none','--fit','off'];
+ if(profile.runtime!=='llama-cpp-b10982'||profile.backend!=='codex'||profile.contextWindow!==65536||profile.kvCacheQuantization!=='q8_0'||profile.model!==LLAMA_MODEL_ID)throw Error('Unsupported direct runtime configuration');
+ return ['-m',artifactPath(LLAMA_MODEL_FILE),'--mmproj',artifactPath(LLAMA_MMPROJ_FILE),'-c','65536','-ctk','q8_0','-ctv','q8_0','-ngl','all','-fa','on','-np','1','-b','128','-ub','128','--jinja','--host','127.0.0.1','--port','18181','--alias',profile.model,'--load-mode','none','--fit','off'];
 }
 export function validLlamaOwnership(record) {
  return Number.isSafeInteger(record?.pid)&&record.pid>0&&record.path===LLAMA_SERVER_PATH&&typeof record.created==='string'&&/^\d{4}-\d\d-\d\dT[0-9:.]+Z$/.test(record.created);
@@ -44,7 +56,7 @@ export class WindowsLlamaCppHost extends WindowsLMStudioHost {
    const args=llamaServerArguments(this.profile);
    const cmd=[LLAMA_SERVER_PATH,...args].map(s=>'"'+s+'"').join(' ');
    // WMI avoids Windows OpenSSH waiting for a detached Start-Process child.
-   const owned=JSON.parse(await this.remote(`$ErrorActionPreference='Stop';if(Get-NetTCPConnection -LocalPort 18181 -State Listen -ErrorAction SilentlyContinue){throw 'Direct port occupied'};if(!(Test-Path ${ps(LLAMA_SERVER_PATH)})){throw 'Pinned llama.cpp runtime is not installed'};if((Get-FileHash ${ps(LLAMA_SERVER_PATH)} -Algorithm SHA256).Hash -ne '${LLAMA_SERVER_SHA256}'){throw 'Pinned llama.cpp binary changed; revalidation required'};$r=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=${ps(cmd)};CurrentDirectory=${ps(LLAMA_SERVER_PATH.slice(0,LLAMA_SERVER_PATH.lastIndexOf('\\')))}};if($r.ReturnValue -ne 0){throw 'Direct server launch failed'};$p=Get-CimInstance Win32_Process -Filter "ProcessId=$($r.ProcessId)";@{pid=[int]$r.ProcessId;path=$p.ExecutablePath;created=$p.CreationDate.ToUniversalTime().ToString('o')} | ConvertTo-Json -Compress`));
+   const owned=JSON.parse(await this.remote(`$ErrorActionPreference='Stop';if(Get-NetTCPConnection -LocalPort 18181 -State Listen -ErrorAction SilentlyContinue){throw 'Direct port occupied'};if(!(Test-Path -LiteralPath ${ps(LLAMA_SERVER_PATH)})){throw 'Pinned llama.cpp runtime is not installed'};if((Get-FileHash -LiteralPath ${ps(LLAMA_SERVER_PATH)} -Algorithm SHA256).Hash -ne '${LLAMA_SERVER_SHA256}'){throw 'Pinned llama.cpp binary changed; revalidation required'};${llamaArtifactVerificationScript()};$r=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=${ps(cmd)};CurrentDirectory=${ps(LLAMA_SERVER_PATH.slice(0,LLAMA_SERVER_PATH.lastIndexOf('\\')))}};if($r.ReturnValue -ne 0){throw 'Direct server launch failed'};$p=Get-CimInstance Win32_Process -Filter "ProcessId=$($r.ProcessId)";@{pid=[int]$r.ProcessId;path=$p.ExecutablePath;created=$p.CreationDate.ToUniversalTime().ToString('o')} | ConvertTo-Json -Compress`,{timeout:60000,signal:controller.signal}));
    if(!validLlamaOwnership(owned))throw Error('Direct server identity unavailable');this.owned=owned;
    await writeFile(this.statePath,JSON.stringify(owned),{mode:0o600});
    const socket=createServer();await new Promise(r=>socket.listen(0,'127.0.0.1',r));const port=socket.address().port;await new Promise(r=>socket.close(r));

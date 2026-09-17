@@ -42,7 +42,7 @@ export function normalizeLocalAgentProfile(value) {
     throw new TypeError(`Local ${value.backend} profile requires ${expectedUsageProtocol}`);
   }
   if(value.runtime!==undefined&&value.runtime!=='llama-cpp-b10982')throw new TypeError('Unsupported local runtime');
-  if(value.runtime&&!(value.backend==='codex'&&value.contextWindow===65536&&value.kvCacheQuantization==='q8_0'&&model==='officestra-qwen38-27b'))throw new TypeError('Direct runtime requires verified Qwen 64K KV8');
+  if(value.runtime&&!(value.backend==='codex'&&value.contextWindow===65536&&value.kvCacheQuantization==='q8_0'&&model==='officestra-qwen38-27b-uncensored-q4km'))throw new TypeError('Direct runtime requires verified Qwen 64K KV8');
   if(value.reasoning!==undefined&&!(value.runtime?['default','low','medium','xhigh']:['default','on','off']).includes(value.reasoning))throw new TypeError('Unsupported local reasoning option');
   if(value.kvCacheQuantization!==undefined &&
       !(value.kvCacheQuantization==='q8_0'&&value.backend==='codex'&&value.contextWindow===65536)) {

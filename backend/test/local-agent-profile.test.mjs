@@ -53,7 +53,7 @@ function configArguments(args) {
   return values;
 }
 test('direct Qwen GUI and terminal display the mirrored summary once without changing selected effort',()=>{
- const direct={...codexProfile,model:'officestra-qwen38-27b',runtime:'llama-cpp-b10982',contextWindow:65536,kvCacheQuantization:'q8_0'};
+ const direct={...codexProfile,model:'officestra-qwen38-27b-uncensored-q4km',runtime:'llama-cpp-b10982',contextWindow:65536,kvCacheQuantization:'q8_0'};
  for(const mode of ['gui','terminal'])for(const reasoning of ['low','medium','xhigh']){
   const configs=configArguments(buildCodex({mode,profile:{...direct,reasoning},character:{...codexCharacter,model:direct.model}}).args);
   assert.equal(configs.get('show_raw_agent_reasoning'),'false');

@@ -58,7 +58,7 @@ test('reasoning change is session-locked, idle-only and preserves existing setti
 
 test('direct runtime persists each verified effort without replacing the session',async()=>{
   const s=fixture();const writes=[];
-  const direct={...definition,profile:{...definition.profile,backend:'codex',runtime:'llama-cpp-b10982',model:'officestra-qwen38-27b',contextWindow:65536,kvCacheQuantization:'q8_0',usageProtocol:'openai-responses-v1'},host:{...definition.host,modelKey:'qwen3.8-27b'}};
+  const direct={...definition,profile:{...definition.profile,backend:'codex',runtime:'llama-cpp-b10982',model:'officestra-qwen38-27b-uncensored-q4km',contextWindow:65536,kvCacheQuantization:'q8_0',usageProtocol:'openai-responses-v1'},host:{...definition.host,modelKey:'qwen3.8-27b'}};
   const client={query:async(sql,values)=>{
     if(sql.startsWith('SELECT config'))return {rows:[{config:{localProfileId:'direct',keep:'unchanged'}}]};
     if(sql.startsWith('SELECT definition'))return {rows:[{definition:direct}]};
