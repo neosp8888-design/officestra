@@ -62,17 +62,44 @@ BIN_DIR="$(swift build -c release --show-bin-path)"
 CORE_RESOURCE_BUNDLE="$BIN_DIR/OfficeLLM_OfficeCore.bundle"
 GAME_RESOURCE_BUNDLE="$BIN_DIR/OfficeLLM_OfficeGame.bundle"
 
+# SwiftPM 6.4 emits macOS-style resource bundles under Contents/Resources,
+# while older toolchains emitted flat bundles. Normalize both layouts so the
+# shipped app remains compatible with its existing flat resource lookup paths.
+if [[ -f "$CORE_RESOURCE_BUNDLE/Info.plist" ]]; then
+    CORE_RESOURCE_INFO="$CORE_RESOURCE_BUNDLE/Info.plist"
+    CORE_RESOURCE_ROOT="$CORE_RESOURCE_BUNDLE"
+elif [[ -f "$CORE_RESOURCE_BUNDLE/Contents/Info.plist" \
+        && -d "$CORE_RESOURCE_BUNDLE/Contents/Resources" ]]; then
+    CORE_RESOURCE_INFO="$CORE_RESOURCE_BUNDLE/Contents/Info.plist"
+    CORE_RESOURCE_ROOT="$CORE_RESOURCE_BUNDLE/Contents/Resources"
+else
+    print -u2 "OfficeCore 리소스 번들 구조를 인식할 수 없습니다. $CORE_RESOURCE_BUNDLE"
+    exit 1
+fi
+
+if [[ -f "$GAME_RESOURCE_BUNDLE/Info.plist" ]]; then
+    GAME_RESOURCE_INFO="$GAME_RESOURCE_BUNDLE/Info.plist"
+    GAME_RESOURCE_ROOT="$GAME_RESOURCE_BUNDLE"
+elif [[ -f "$GAME_RESOURCE_BUNDLE/Contents/Info.plist" \
+        && -d "$GAME_RESOURCE_BUNDLE/Contents/Resources" ]]; then
+    GAME_RESOURCE_INFO="$GAME_RESOURCE_BUNDLE/Contents/Info.plist"
+    GAME_RESOURCE_ROOT="$GAME_RESOURCE_BUNDLE/Contents/Resources"
+else
+    print -u2 "OfficeGame 리소스 번들 구조를 인식할 수 없습니다. $GAME_RESOURCE_BUNDLE"
+    exit 1
+fi
+
 for required_path in \
     "$BIN_DIR/OfficeLLM" \
-    "$CORE_RESOURCE_BUNDLE/Info.plist" \
-    "$CORE_RESOURCE_BUNDLE/characters.json" \
-    "$CORE_RESOURCE_BUNDLE/office-retina-v1" \
-    "$CORE_RESOURCE_BUNDLE/avatars" \
-    "$CORE_RESOURCE_BUNDLE/profiles" \
-    "$GAME_RESOURCE_BUNDLE/Info.plist" \
-    "$GAME_RESOURCE_BUNDLE/SystemMessages.en.json" \
-    "$GAME_RESOURCE_BUNDLE/en.lproj/Localizable.strings" \
-    "$GAME_RESOURCE_BUNDLE/ko.lproj/Localizable.strings"; do
+    "$CORE_RESOURCE_INFO" \
+    "$CORE_RESOURCE_ROOT/characters.json" \
+    "$CORE_RESOURCE_ROOT/office-retina-v1" \
+    "$CORE_RESOURCE_ROOT/avatars" \
+    "$CORE_RESOURCE_ROOT/profiles" \
+    "$GAME_RESOURCE_INFO" \
+    "$GAME_RESOURCE_ROOT/SystemMessages.en.json" \
+    "$GAME_RESOURCE_ROOT/en.lproj/Localizable.strings" \
+    "$GAME_RESOURCE_ROOT/ko.lproj/Localizable.strings"; do
     if [[ ! -e "$required_path" ]]; then
         print -u2 "필수 빌드 결과가 없습니다. $required_path"
         exit 1
@@ -129,14 +156,18 @@ cp "$PROJECT_DIR/Resources/OFFICESTRA.icns" "$RESOURCES_DIR/OFFICESTRA.icns"
 /usr/bin/rsync \
     -a \
     --delete \
-    "$CORE_RESOURCE_BUNDLE/" \
+    "$CORE_RESOURCE_ROOT/" \
     "$RESOURCES_DIR/OfficeLLM_OfficeCore.bundle/"
+cp "$CORE_RESOURCE_INFO" \
+    "$RESOURCES_DIR/OfficeLLM_OfficeCore.bundle/Info.plist"
 
 /usr/bin/rsync \
     -a \
     --delete \
-    "$GAME_RESOURCE_BUNDLE/" \
+    "$GAME_RESOURCE_ROOT/" \
     "$RESOURCES_DIR/OfficeLLM_OfficeGame.bundle/"
+cp "$GAME_RESOURCE_INFO" \
+    "$RESOURCES_DIR/OfficeLLM_OfficeGame.bundle/Info.plist"
 
 # 백엔드 코드, Node 런타임, Compose 설정과 production 의존성을 앱에
 # 포함해 사용자 프로젝트와 OFFICESTRA 설치 소스의 경로를 분리한다.
