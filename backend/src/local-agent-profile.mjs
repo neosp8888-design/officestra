@@ -168,6 +168,16 @@ export function createLocalAgentLaunch({profile,character,mode='gui',prompt='',
       CLAUDE_CODE_USE_GATEWAY:'1',CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:'1',
       CLAUDE_CODE_MAX_RETRIES:'0',CLAUDE_CODE_MAX_CONTEXT_TOKENS:String(p.contextWindow),
       CLAUDE_CODE_MAX_OUTPUT_TOKENS:String(p.maxOutputTokens),MAX_THINKING_TOKENS:'0',
+      // A local model can spend several minutes loading and evaluating a long
+      // prompt before it sends response headers. Claude Code otherwise applies
+      // both its SDK request timeout and independent first-byte/stream
+      // watchdogs, which can terminate a healthy generation. OFFICESTRA owns
+      // cancellation through the child process and local bridge instead.
+      // Claude's SDK treats zero as an immediate timeout. Use the largest
+      // delay Node can schedule without overflowing to a near-zero timer
+      // (about 24.8 days), which is effectively unbounded for one turn.
+      API_TIMEOUT_MS:'2147483647',CLAUDE_ENABLE_BYTE_WATCHDOG:'0',
+      CLAUDE_ENABLE_STREAM_WATCHDOG:'0',
       ANTHROPIC_DEFAULT_HAIKU_MODEL:p.model,ANTHROPIC_DEFAULT_SONNET_MODEL:p.model,
       ANTHROPIC_DEFAULT_OPUS_MODEL:p.model,DISABLE_TELEMETRY:'1',
     });

@@ -2,7 +2,7 @@ import { AgentBusyError } from './agent-runtime.mjs';
 import { withCharacterSessionLocks } from './character-settings.mjs';
 import { normalizeLocalDefinition } from './local-provider-service.mjs';
 import { isIP } from 'node:net';
-import { WindowsLMStudioHost } from './local-provider-host.mjs';
+import { WindowsLMStudioHost, isQwen38LMStudioModelKey } from './local-provider-host.mjs';
 
 export function normalizeLocalHostAddress(value) {
   const address=typeof value==='string'?value.trim():'';
@@ -89,7 +89,7 @@ export async function setLocalReasoning({pool,runtime,characterID,reasoning,broa
         const previous=(await client.query('SELECT config FROM characters WHERE id=$1 FOR UPDATE',[characterID])).rows[0];
         if(!previous?.config?.localProfileId)throw new Error('Local profile required');
         const found=(await client.query('SELECT definition FROM local_agent_profiles WHERE id=$1 AND enabled=true FOR SHARE',[previous.config.localProfileId])).rows[0];
-        if(found?.definition?.host?.modelKey!=='qwen3.8-27b')throw new Error('Reasoning control is verified only for Qwen3.8-27B');
+        if(!isQwen38LMStudioModelKey(found?.definition?.host?.modelKey))throw new Error('Reasoning control is verified only for Qwen3.8-27B');
         const allowed=found.definition.profile.runtime==='llama-cpp-b10982'?['default','low','medium','xhigh']:['default','on','off'];
         if(!allowed.includes(reasoning))throw new Error('Unsupported local reasoning option for this runtime');
         await client.query('UPDATE characters SET config=$2::jsonb,updated_at=now() WHERE id=$1',[characterID,JSON.stringify({...previous.config,localReasoning:reasoning})]);

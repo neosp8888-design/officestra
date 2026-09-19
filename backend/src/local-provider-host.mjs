@@ -11,6 +11,9 @@ export class LocalHostBusyError extends Error {}
 // User-approved tolerance above 95%; this remains a sampled stop threshold,
 // not a driver-enforced allocation cap. Preserve CPU RAM protection.
 export const LOCAL_HOST_MEMORY_BUDGET=Object.freeze({vramGuardPercent:98,ramGuardPercent:77});
+export const LOCAL_HOST_RESOURCE_SAMPLE_TIMEOUT_MS=30000;
+export const QWEN38_LMSTUDIO_MODEL_KEYS=Object.freeze(['qwen3.8-27b','qwen3.8-27b-uncensored']);
+export function isQwen38LMStudioModelKey(value){return QWEN38_LMSTUDIO_MODEL_KEYS.includes(value);}
 export const LOCAL_HOST_LOAD_CONFIG=Object.freeze({gpu:Object.freeze({ratio:1}),gpuStrictVramCap:false,contextLength:32768,tryMmap:false,keepModelInMemory:false,evalBatchSize:128,flashAttention:true});
 export function localHostLoadConfig(profile) {
   if(profile?.kvCacheQuantization!==undefined){
@@ -23,6 +26,19 @@ export function localHostLoadConfig(profile) {
 }
 export function localHostMemoryExceeded(sample) {
   return sample.vramPct>=LOCAL_HOST_MEMORY_BUDGET.vramGuardPercent||sample.ramPct>=LOCAL_HOST_MEMORY_BUDGET.ramGuardPercent;
+}
+export function localHostResourceSampleScript(comfyPort) {
+  if(!Number.isInteger(comfyPort)||comfyPort<1||comfyPort>65535)throw new TypeError('Invalid ComfyUI port');
+  // Win32_OperatingSystem CIM queries can exceed the SSH command deadline on
+  // an otherwise idle Windows host. The standard .NET APIs return the same
+  // physical-memory and listener facts without waiting on the WMI provider.
+  return `$ErrorActionPreference='Stop'; $g=(& nvidia-smi --query-gpu=memory.total,memory.used --format=csv,noheader,nounits) -split ','; Add-Type -AssemblyName Microsoft.VisualBasic; $o=New-Object Microsoft.VisualBasic.Devices.ComputerInfo; $busy=$false; $queueState='offline'; $listener=[System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | Where-Object {$_.Port -eq ${comfyPort}} | Select-Object -First 1; if($listener){ try{$q=Invoke-RestMethod -Uri http://127.0.0.1:${comfyPort}/queue -TimeoutSec 2; if($null -eq $q.queue_running -or $null -eq $q.queue_pending){throw 'Invalid queue'}; $busy=($q.queue_running.Count + $q.queue_pending.Count) -gt 0; $queueState='ready'}catch{$busy=$true;$queueState='unavailable'} }; [pscustomobject]@{vramPct=100*[double]$g[1]/[double]$g[0];ramPct=100*(1-[double]$o.AvailablePhysicalMemory/[double]$o.TotalPhysicalMemory);busy=$busy;queueState=$queueState} | ConvertTo-Json -Compress`;
+}
+export function localHostListenerPIDScript(port) {
+  if(!Number.isInteger(port)||port<1||port>65535)throw new TypeError('Invalid listener port');
+  // Get-NetTCPConnection can block on the Windows CIM provider. netstat is a
+  // read-only native query and gives us the owning PID without that dependency.
+  return `$line=netstat -ano -p TCP | Select-String -Pattern '^\\s*TCP\\s+\\S+:${port}\\s+\\S+\\s+LISTENING\\s+(\\d+)\\s*$' | Select-Object -First 1;if($line -and $line.Line -match '\\s+(\\d+)\\s*$'){$Matches[1]}else{0}`;
 }
 export function verifyLocalRuntimeVersion(value) {
   if(value?.version!=='0.4.24'||value?.build!==1)throw new Error('LM Studio usage protocol requires revalidation after an update');
@@ -53,17 +69,17 @@ export class WindowsLMStudioHost {
       child.stdout.on('data',d=>{output+=d;if(output.length>1024*1024)child.kill('SIGTERM');});
       child.stderr.on('data',d=>{stderr+=d;if(stderr.length>1024*1024)child.kill('SIGTERM');});
       const abort=()=>child.kill('SIGTERM');signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
-      const timer=setTimeout(abort,timeout);
+      let timedOut=false;const timer=setTimeout(()=>{timedOut=true;abort();},timeout);
       child.once('error',reject);child.once('close',code=>{clearTimeout(timer);signal?.removeEventListener('abort',abort);
-        if(code!==0)reject(new Error('4090 SSH operation failed',{cause:stderr.slice(-2000)}));else resolve(output.trim().replace(/^\uFEFF/,''));});
+        if(code!==0)reject(new Error(timedOut?`4090 SSH operation timed out after ${timeout}ms`:'4090 SSH operation failed',{cause:stderr.slice(-2000)}));else resolve(output.trim().replace(/^\uFEFF/,''));});
     });
   }
   async sample() {
-    const raw=await this.remote(`$ErrorActionPreference='Stop'; $g=(& nvidia-smi --query-gpu=memory.total,memory.used --format=csv,noheader,nounits) -split ','; $o=Get-CimInstance Win32_OperatingSystem; $busy=$false; $queueState='offline'; $listener=Get-NetTCPConnection -LocalPort ${this.host.comfyPort} -State Listen -ErrorAction SilentlyContinue; if($listener){ try{$q=Invoke-RestMethod -Uri http://127.0.0.1:${this.host.comfyPort}/queue -TimeoutSec 2; if($null -eq $q.queue_running -or $null -eq $q.queue_pending){throw 'Invalid queue'}; $busy=($q.queue_running.Count + $q.queue_pending.Count) -gt 0; $queueState='ready'}catch{$busy=$true;$queueState='unavailable'} }; [pscustomobject]@{vramPct=100*[double]$g[1]/[double]$g[0];ramPct=100*(1-$o.FreePhysicalMemory/$o.TotalVisibleMemorySize);busy=$busy;queueState=$queueState} | ConvertTo-Json -Compress`);
+    const raw=await this.remote(localHostResourceSampleScript(this.host.comfyPort),{timeout:LOCAL_HOST_RESOURCE_SAMPLE_TIMEOUT_MS});
     return {...JSON.parse(raw),sampledAt:Date.now()};
   }
   async serverPID() {
-    return Number(await this.remote(`$p=Get-NetTCPConnection -LocalPort 1234 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess; if($p){$p}else{0}`));
+    return Number(await this.remote(localHostListenerPIDScript(1234)));
   }
   async cleanupOwned() {
     const owned=this.owned;if(!owned)return;

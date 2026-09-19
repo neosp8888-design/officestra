@@ -10,7 +10,7 @@ import { LocalInferenceBridge } from './local-inference-bridge.mjs';
 import { INCLUSIVE_INPUT_PROFILE } from './local-usage-normalizer.mjs';
 import { RESPONSES_INCLUSIVE_PROFILE, LLAMA_RESPONSES_PROFILE } from './local-responses-usage.mjs';
 import { WindowsLlamaCppHost } from './local-llama-host.mjs';
-import { WindowsLMStudioHost, LocalHostBusyError, validateHost, LOCAL_HOST_MEMORY_BUDGET } from './local-provider-host.mjs';
+import { WindowsLMStudioHost, LocalHostBusyError, validateHost, LOCAL_HOST_MEMORY_BUDGET, LOCAL_HOST_RESOURCE_SAMPLE_TIMEOUT_MS } from './local-provider-host.mjs';
 import { normalizeLocalAgentProfile, createLocalAgentLaunch } from './local-agent-profile.mjs';
 
 // Historical presentation only: never rewrite stored execution settings or
@@ -24,6 +24,7 @@ export const LOCAL_TURN_EFFORT_SQL = `CASE
     WHEN COALESCE(t.provider_snapshot->'profile'->>'reasoning','default') = 'default' THEN 'xhigh'
     ELSE t.effort END
   ELSE t.effort END`;
+export const LOCAL_PROVIDER_SAMPLE_TIMEOUT_MS=LOCAL_HOST_RESOURCE_SAMPLE_TIMEOUT_MS+5000;
 
 export function normalizeLocalDefinition(value) {
   return {profile:normalizeLocalAgentProfile(value?.profile),host:validateHost(value?.host)};
@@ -104,7 +105,7 @@ export class LocalProviderService {
       this.entries.set(id,e);
       e.pending=new Set();
       e.server=createServer((req,res)=>{const task=this.handle(e,req,res).catch(()=>res.destroy());e.pending.add(task);task.finally(()=>e.pending.delete(task));});
-      e.server.requestTimeout=360000;e.server.headersTimeout=10000;
+      e.server.requestTimeout=0;e.server.headersTimeout=10000;
       e.ready=new Promise((resolve,reject)=>{e.server.once('error',reject);e.server.listen(0,'127.0.0.1',resolve);});
     }
     await e.ready;
@@ -168,7 +169,7 @@ export class LocalProviderService {
           contextWindow:e.definition.profile.contextWindow,maxOutputTokens:e.definition.profile.maxOutputTokens,
           onResponseCompleted:()=>{if(e.active)e.active.completed=true;},
           readResources:async()=>{if(!resource.alive())throw new Error('SSH tunnel disconnected');const sample=await resource.sample();e.resources=sample;return sample;},
-          audit:()=>{},release:async()=>{await resource.release();if(e.state!=='error')this.change(e,'idle');},idleMs:this.idleMs,sampleTimeoutMs:12000,sampleMaxAgeMs:15000,pollMs:3000});
+          audit:()=>{},release:async()=>{await resource.release();if(e.state!=='error')this.change(e,'idle');},idleMs:this.idleMs,sampleTimeoutMs:LOCAL_PROVIDER_SAMPLE_TIMEOUT_MS,sampleMaxAgeMs:15000,pollMs:3000});
         const address=await e.bridge.start();
         if(signal.aborted||e.closed){await e.bridge.stop();throw new Error('Local startup cancelled');}
         e.cleanupFailed=false;this.change(e,'ready');return address;
@@ -198,7 +199,6 @@ export class LocalProviderService {
     let settled;
     active={abort,done:new Promise(resolve=>{settled=resolve;})};
     e.active=active;
-    const timer=setTimeout(()=>abort.abort(),this.waitMs+240000);
     try{
       const url=await this.ensure(e,abort.signal);
       await new Promise((resolve,reject)=>{
@@ -216,8 +216,9 @@ export class LocalProviderService {
       abort.abort();
       try{await e.bridge?.stop('connection failed');e.cleanupFailed=!!e.bridge&&!e.bridge.status.cleanupComplete;}
       catch{e.cleanupFailed=true;}
-      this.change(e,'error',e.cleanupFailed?'로컬 자원 정리 완료를 확인하지 못했습니다':'로컬 연결 실패 — 다음 요청에서 다시 연결합니다');reply(503,e.error);
-    }finally{clearTimeout(timer);if(e.active===active)e.active=null;settled();}
+      const detail=error instanceof Error?error.message:String(error);
+      this.change(e,'error',e.cleanupFailed?'로컬 자원 정리 완료를 확인하지 못했습니다':`로컬 연결 실패: ${detail}`);reply(503,e.error);
+    }finally{if(e.active===active)e.active=null;settled();}
   }
   async close(e){
     if(e.closing)return e.closing;

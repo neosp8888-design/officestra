@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { LocalInferenceBridge, normalizeLocalMessageRequest, applyLocalReasoning, normalizeLocalResponsesRequest } from '../src/local-inference-bridge.mjs';
+import { LocalInferenceBridge, LOCAL_INFERENCE_REQUEST_TIMEOUT_MS, normalizeLocalMessageRequest, applyLocalReasoning, normalizeLocalResponsesRequest } from '../src/local-inference-bridge.mjs';
 import { INCLUSIVE_INPUT_PROFILE } from '../src/local-usage-normalizer.mjs';
 import { RESPONSES_INCLUSIVE_PROFILE, LLAMA_RESPONSES_PROFILE } from '../src/local-responses-usage.mjs';
 const token='isolated-bridge-test-token-32bytes';
@@ -211,6 +211,11 @@ test('idle shutdown releases model without requiring another request',async t=>{
 test('timeout cancels upstream and clears active request',async t=>{
   const s=await setup(t,()=>{}, {requestTimeoutMs:50});const r=await s.post();assert.equal(r.status,504);await r.text();await until(()=>!s.bridge.status.active);
   assert.equal(s.released(),1);assert.equal(s.bridge.status.cleanupComplete,true);
+});
+test('production local inference has no wall-clock request timeout',async t=>{
+  assert.equal(LOCAL_INFERENCE_REQUEST_TIMEOUT_MS,0);
+  const s=await setup(t,(req,res)=>setTimeout(()=>jsonReply(req,res),80));
+  const r=await s.post();assert.equal(r.status,200);await r.text();assert.equal(s.bridge.status.state,'ready');
 });
 test('invalid and oversized body never reaches model',async t=>{
   const s=await setup(t,jsonReply,{maxBodyBytes:32});assert.equal((await s.post('not json')).status,400);assert.equal((await s.post('x'.repeat(100))).status,413);assert.equal(s.seen.length,0);

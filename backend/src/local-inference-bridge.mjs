@@ -90,15 +90,20 @@ function readBody(req,limit,signal){return new Promise((resolve,reject)=>{
   const abort=()=>{req.removeListener('data',data);req.resume();reject(error(499,'Request cancelled'));};
   signal?.addEventListener('abort',abort,{once:true});
   req.once('end',()=>signal?.removeEventListener('abort',abort));
-  if(signal?.aborted)abort();
+ if(signal?.aborted)abort();
 });}
+
+// Long local contexts can legitimately need several minutes. Zero disables the
+// wall-clock request limit; cancellation, disconnects, resource guards and
+// runtime/SSH failures still stop an active request.
+export const LOCAL_INFERENCE_REQUEST_TIMEOUT_MS=0;
 
 export class LocalInferenceBridge {
   #server;#starting;#stopping;#monitor;#idle;#release;#token;#upstream;#audit;#sample;#options;
   #active=null;#state='idle';#failure=null;#address=null;#sampling=false;#cleanupComplete=false;
   constructor({upstream,token,model,usageProfile,usageProtocol='anthropic-normalized-v1',reasoning='default',readResources,audit,observeRequest=()=>{},onResponseCompleted=()=>{},release=async()=>{},port=0,
     guardPercent=77,vramGuardPercent=guardPercent,ramGuardPercent=guardPercent,sampleMaxAgeMs=5000,sampleTimeoutMs=3000,pollMs=1000,idleMs=180000,
-    requestTimeoutMs=240000,maxBodyBytes=8*1024*1024,contextWindow=null,maxOutputTokens=4096}) {
+    requestTimeoutMs=LOCAL_INFERENCE_REQUEST_TIMEOUT_MS,maxBodyBytes=8*1024*1024,contextWindow=null,maxOutputTokens=4096}) {
     const url=new URL(upstream);
     if(url.protocol!=='http:'||!['127.0.0.1','[::1]'].includes(url.hostname)||!url.port||url.username||url.password||url.pathname!=='/'||url.search||url.hash)throw new TypeError('Upstream must be a loopback URL');
     if(typeof token!=='string'||Buffer.byteLength(token)<24||/[\r\n\0]/.test(token))throw new TypeError('Dedicated bridge token of at least 24 bytes required');
@@ -107,7 +112,8 @@ export class LocalInferenceBridge {
     if(!Number.isInteger(port)||port<0||port>65535||
       ![guardPercent,ramGuardPercent].every(n=>Number.isFinite(n)&&n>0&&n<=95)||
       !Number.isFinite(vramGuardPercent)||vramGuardPercent<=0||vramGuardPercent>98)throw new TypeError('Invalid port or memory guard');
-    for(const n of [sampleMaxAgeMs,sampleTimeoutMs,pollMs,idleMs,requestTimeoutMs,maxBodyBytes])if(!Number.isSafeInteger(n)||n<=0)throw new TypeError('Invalid limits');
+    for(const n of [sampleMaxAgeMs,sampleTimeoutMs,pollMs,idleMs,maxBodyBytes])if(!Number.isSafeInteger(n)||n<=0)throw new TypeError('Invalid limits');
+    if(!Number.isSafeInteger(requestTimeoutMs)||requestTimeoutMs<0)throw new TypeError('Invalid request timeout');
     if((contextWindow!==null&&(!Number.isSafeInteger(contextWindow)||contextWindow<1))||
       !Number.isSafeInteger(maxOutputTokens)||maxOutputTokens<1||
       (contextWindow!==null&&maxOutputTokens>contextWindow))throw new TypeError('Invalid output budget');
@@ -131,7 +137,7 @@ export class LocalInferenceBridge {
     const sample=await this.#resources();if(sample.busy===true)throw error(503,'GPU reserved by another workload');
     if(this.#state!=='starting')throw error(503,'Startup cancelled');
     this.#server=createServer((req,res)=>{this.#handle(req,res).catch(()=>res.destroy());});
-    this.#server.requestTimeout=this.#options.requestTimeoutMs;this.#server.headersTimeout=Math.min(10000,this.#options.requestTimeoutMs);
+    this.#server.requestTimeout=this.#options.requestTimeoutMs;this.#server.headersTimeout=this.#options.requestTimeoutMs?Math.min(10000,this.#options.requestTimeoutMs):10000;
     await new Promise((resolve,reject)=>{this.#server.once('error',reject);this.#server.listen(this.#options.port,'127.0.0.1',resolve);});
     if(this.#state!=='starting'){this.#server.closeAllConnections();await new Promise(r=>this.#server.close(r));throw error(503,'Startup cancelled');}
     this.#address=`http://127.0.0.1:${this.#server.address().port}`;this.#state='ready';
@@ -156,7 +162,7 @@ export class LocalInferenceBridge {
     if(this.#state!=='ready'){req.resume();reply(503,'Bridge unavailable');return;}
     if(this.#active){req.resume();reply(409,'Local inference is busy');return;}
     const active={abort:new AbortController()};this.#active=active;clearTimeout(this.#idle);
-    const timer=setTimeout(()=>{reply(504,'Local inference timed out');active.abort.abort();},this.#options.requestTimeoutMs);
+    const timer=this.#options.requestTimeoutMs?setTimeout(()=>{reply(504,'Local inference timed out');active.abort.abort();},this.#options.requestTimeoutMs):null;
     res.once('close',()=>{if(!res.writableFinished&&!active.completed)active.abort.abort();});
     try{
       const sample=await this.#resources();if(sample.busy===true)throw error(503,'GPU reserved by another workload');

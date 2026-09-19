@@ -176,6 +176,9 @@ for(const mode of ['gui','persistent','terminal']) for(const previousSessionID o
     assert.equal(result.env.CLAUDE_CODE_USE_GATEWAY,'1');
     assert.equal(result.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS,'32768');
     assert.equal(result.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS,'4096');
+    assert.equal(result.env.API_TIMEOUT_MS,'2147483647');
+    assert.equal(result.env.CLAUDE_ENABLE_BYTE_WATCHDOG,'0');
+    assert.equal(result.env.CLAUDE_ENABLE_STREAM_WATCHDOG,'0');
     assert.equal(result.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE,undefined);
     assert.equal(result.env.DISABLE_AUTO_COMPACT,undefined);
     assert.equal(result.env.DISABLE_COMPACT,undefined);

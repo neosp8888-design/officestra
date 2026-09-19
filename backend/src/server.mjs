@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { LocalProviderService, normalizeLocalDefinition, LOCAL_TURN_EFFORT_SQL } from './local-provider-service.mjs';
 import { selectLocalProfile, setLocalReasoning, setLocalHostAddress } from './local-profile-selection.mjs';
-import { LocalHostBusyError } from './local-provider-host.mjs';
+import { LocalHostBusyError, isQwen38LMStudioModelKey } from './local-provider-host.mjs';
 import { WebSocket, WebSocketServer } from "ws";
 
 import {
@@ -2255,7 +2255,7 @@ const server = createServer(async (request, response) => {
     ) {
       const profiles = await pool.query('SELECT id, enabled, definition FROM local_agent_profiles ORDER BY id');
       const assignments = await pool.query("SELECT c.id AS \"characterId\", c.config->>'localProfileId' AS \"profileId\", c.config->>'localReasoning' AS reasoning, COALESCE(c.config->>'localHostAddress', p.definition->'host'->>'address') AS address FROM characters c LEFT JOIN local_agent_profiles p ON p.id=c.config->>'localProfileId' WHERE c.config ? 'localProfileId'");
-      send(response,200,{profiles:profiles.rows.map(row=>({id:row.id,enabled:row.enabled,backend:row.definition.profile.backend,model:row.definition.profile.model,title:row.definition.host.modelKey.split('/').at(-1),contextWindow:row.definition.profile.contextWindow,kvCacheQuantization:row.definition.profile.kvCacheQuantization??null,reasoningOptions:row.definition.profile.runtime==='llama-cpp-b10982'?['default','low','medium','xhigh']:row.definition.host.modelKey==='qwen3.8-27b'?['default','on','off']:[]})),assignments:assignments.rows,statuses:localProviders?.status()??[]});
+      send(response,200,{profiles:profiles.rows.map(row=>({id:row.id,enabled:row.enabled,backend:row.definition.profile.backend,model:row.definition.profile.model,title:row.definition.host.modelKey.split('/').at(-1),contextWindow:row.definition.profile.contextWindow,kvCacheQuantization:row.definition.profile.kvCacheQuantization??null,reasoningOptions:row.definition.profile.runtime==='llama-cpp-b10982'?['default','low','medium','xhigh']:isQwen38LMStudioModelKey(row.definition.host.modelKey)?['default','on','off']:[]})),assignments:assignments.rows,statuses:localProviders?.status()??[]});
     } else if (request.method === 'PUT' && /^\/api\/characters\/[^/]+\/local-address$/.test(url.pathname)) {
       if(!trustedJSONMutation(request,response))return;
       const body=await readJSON(request);

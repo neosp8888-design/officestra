@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readFile, access } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
-import { LocalProviderService, resolveLocalCharacter, snapshotLocalTurn, validateLocalResume, localResumeCompatible } from '../src/local-provider-service.mjs';
-import { LocalHostBusyError, WindowsLMStudioHost, verifyLocalRuntimeVersion, LOCAL_HOST_LOAD_CONFIG, LOCAL_HOST_MEMORY_BUDGET, localHostMemoryExceeded, localHostLoadConfig } from '../src/local-provider-host.mjs';
+import { LocalProviderService, resolveLocalCharacter, snapshotLocalTurn, validateLocalResume, localResumeCompatible, LOCAL_PROVIDER_SAMPLE_TIMEOUT_MS } from '../src/local-provider-service.mjs';
+import { LocalHostBusyError, WindowsLMStudioHost, verifyLocalRuntimeVersion, LOCAL_HOST_LOAD_CONFIG, LOCAL_HOST_MEMORY_BUDGET, LOCAL_HOST_RESOURCE_SAMPLE_TIMEOUT_MS, localHostResourceSampleScript, localHostListenerPIDScript, localHostMemoryExceeded, localHostLoadConfig } from '../src/local-provider-host.mjs';
 import { characterSettingsRequireNewSession } from '../src/configuration.mjs';
 import { AgentRuntime } from '../src/agent-runtime.mjs';
 import { TerminalSessionManager } from '../src/terminal-sessions.mjs';
@@ -172,6 +172,21 @@ test('host requests full GPU at 32K with no silent partial offload policy',()=>{
   assert.equal(localHostMemoryExceeded({vramPct:97.99,ramPct:55}),false);
   assert.equal(localHostMemoryExceeded({vramPct:98,ramPct:55}),true);
   assert.equal(localHostMemoryExceeded({vramPct:90,ramPct:77}),true);
+});
+test('resource sampling avoids slow WMI inventory and gives SSH cleanup headroom',()=>{
+  const script=localHostResourceSampleScript(8188);
+  assert.match(script,/Microsoft\.VisualBasic\.Devices\.ComputerInfo/);
+  assert.match(script,/GetActiveTcpListeners/);
+  assert.doesNotMatch(script,/Get-CimInstance Win32_OperatingSystem/);
+  assert.doesNotMatch(script,/Get-NetTCPConnection/);
+  assert.equal(LOCAL_HOST_RESOURCE_SAMPLE_TIMEOUT_MS,30000);
+  assert.ok(LOCAL_PROVIDER_SAMPLE_TIMEOUT_MS>LOCAL_HOST_RESOURCE_SAMPLE_TIMEOUT_MS);
+  assert.throws(()=>localHostResourceSampleScript(0),/port/);
+  const listener=localHostListenerPIDScript(1234);
+  assert.match(listener,/netstat -ano -p TCP/);
+  assert.match(listener,/:1234/);
+  assert.doesNotMatch(listener,/Get-NetTCPConnection/);
+  assert.throws(()=>localHostListenerPIDScript(0),/port/);
 });
 test('ComfyUI/lease busy waits, resumes once available without duplicate inference',async t=>{
   const s=await setup(t,{busy:2});assert.equal((await s.post()).status,200);
