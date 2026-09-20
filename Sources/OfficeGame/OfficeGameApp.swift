@@ -9,11 +9,12 @@ struct OfficeGameApp: App {
     @StateObject private var launchCoordinator = OfficeLaunchCoordinator()
 
     var body: some Scene {
-        WindowGroup("OFFICESTRA") {
+        WindowGroup("OFFICESTRA", id: "officestra-main") {
             OfficeLaunchRootView(coordinator: launchCoordinator)
                 .environment(\.locale, OfficeLocalization.locale)
+                .background(OfficeWindowFramePersistence())
         }
-        .defaultSize(width: 1_440, height: 900)
+        .defaultSize(OfficeWindowPlacementStore.shared.initialContentSize)
         .windowResizability(.contentMinSize)
     }
 }
