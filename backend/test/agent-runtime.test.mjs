@@ -1,5 +1,41 @@
 // 이 파일은 파일 첨부 인수와 실행 중단 상태 저장을 검증한다.
 
+test('employee message availability distinguishes retained sessions from executing turns', async () => {
+  const rows=[
+    {characterId:'sender',name:'sender',sessionOpen:true,turnId:'a',turnStatus:'running'},
+    {characterId:'recipient',name:'recipient',sessionOpen:true,turnId:null,turnStatus:null},
+    {characterId:'queued',name:'queued',sessionOpen:false,turnId:'b',turnStatus:'pending'},
+  ];
+  const runtime={pool:{query:async(sql,args)=>{
+    assert.doesNotMatch(sql,/work_records/);
+    assert.match(sql,/turn.status IN \('pending', 'running'\)/);
+    return {rows:args[0]?rows.filter(r=>r.characterId===args[0]):rows};
+  }},running:new Map(),compactingCharacters:new Set(),preparingCharacters:new Set()};
+  const inspect=id=>AgentRuntime.prototype.messageAvailability.call(runtime,id);
+  const states=await inspect();
+  assert.deepEqual(states.map(s=>[s.characterId,s.state,s.canReceive]),[
+    ['sender','running',false],['recipient','ready',true],['queued','pending',false],
+  ]);
+  assert.equal((await inspect('recipient'))[0].canReceive,true,'sender activity must not block another employee');
+  assert.deepEqual(await inspect('missing'),[]);
+  for(const [property,value,expected] of [
+    ['running',new Map([['recipient',{}]]),'running'],
+    ['compactingCharacters',new Set(['recipient']),'compacting'],
+    ['preparingCharacters',new Set(['recipient']),'preparing'],
+    ['draining',true,'draining'],
+  ]){
+    const previous=runtime[property];runtime[property]=value;
+    const [state]=await inspect('recipient');assert.equal(state.state,expected);assert.equal(state.canReceive,false);
+    runtime[property]=previous;
+  }
+  for(const [terminal,expected] of [[{},'ready'],[{runningTurnID:'t'},'running'],[{dispatch:{}},'pending'],[{closing:true},'closing']]){
+    runtime.terminalSessionRegistry={sessions:new Map([['recipient',terminal]]),opening:new Set()};
+    const [state]=await inspect('recipient');assert.equal(state.state,expected);assert.equal(state.canReceive,expected==='ready');
+  }
+  runtime.terminalSessionRegistry.opening.add('recipient');
+  assert.equal((await inspect('recipient'))[0].state,'preparing');
+});
+
 import assert from "node:assert/strict";
 import {
   appendFileSync,

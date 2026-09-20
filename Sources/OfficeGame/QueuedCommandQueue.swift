@@ -1,20 +1,24 @@
 // 이 파일은 응답 생성 중인 직원에게 미리 걸어두는 다음 업무 예약을 다룬다.
 
 import Foundation
+import OfficeCore
 
 struct QueuedCommand: Identifiable, Equatable, Sendable {
     let id: UUID
     let prompt: String
     let attachments: [PendingAttachment]
+    let replyRecipient: OfficeCharacter?
 
     init(
         id: UUID = UUID(),
         prompt: String,
-        attachments: [PendingAttachment] = []
+        attachments: [PendingAttachment] = [],
+        replyRecipient: OfficeCharacter? = nil
     ) {
         self.id = id
         self.prompt = prompt
         self.attachments = attachments
+        self.replyRecipient = replyRecipient
     }
 
     /// 예약 칩에 보여줄 한 줄 요약이다.

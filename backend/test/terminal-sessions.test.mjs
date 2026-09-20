@@ -923,6 +923,19 @@ test('유휴 터미널 API는 같은 CLI 훅 접수 후에만 202 turnId를 반�
   assert.equal(f.runtime.completed[0].turnID, started.turnId);
 });
 
+test('terminal reply tag and delivery identity survive PTY acknowledgement without polluting stored user text',async t=>{
+  const f=await dispatchFixture(t);
+  const result=f.manager.dispatch({characterID:'boss',prompt:'자연스럽게 답해줘',senderCharacterID:'left-woman',replyRecipientID:'right-woman',deliveryID:'delivery-test'});
+  await waitUntil(()=>f.events.some(e=>e.type==='terminal.dispatch'));
+  const {prompt}=f.control('claim');assert.match(prompt,/앱이 "right-woman" 직원에게 자동으로 한 번 전달/);
+  const started=await f.submit(prompt);await result;
+  assert.equal(f.runtime.begun[0].prompt,'자연스럽게 답해줘');
+  assert.equal(f.runtime.begun[0].replyRecipientID,'right-woman');
+  assert.equal(f.runtime.begun[0].deliveryID,'delivery-test');
+  await f.manager.handleEvent('boss',{source:'claude',payload:{hook_event_name:'Stop',last_assistant_message:'네, 좋아요.'}});
+  assert.equal(f.runtime.completed[0].turnID,started.turnId);
+});
+
 test('터미널 dispatch 중복·DB running·압축은 즉시409이며 예약하지 않는다', async t => {
   const f = await dispatchFixture(t);
   f.runtime.pool.query = async () => ({ rows: [{ id: 'running' }] });

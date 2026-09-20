@@ -273,10 +273,11 @@ test('an unmeasured LM Studio update cannot silently change token normalization'
 test('GUI dispatch uses local single-process runner and releases on success/failure, not cloud worker',async()=>{
   for(const fail of [false,true]) {
     let launches=0,releases=0;
-    const runtime=new AgentRuntime({pool:{},withTransaction:()=>{},workdir:'/tmp',broadcast:()=>{},localProviders:{launch:async o=>{launches++;assert.equal(o.character.localProfile.profile.id,definition.profile.id);return {args:['local'],release:async()=>{releases++;}};}}});
+    const attachments=[{path:'/tmp/attached.png',isCodexImage:true}];
+    const runtime=new AgentRuntime({pool:{},withTransaction:()=>{},workdir:'/tmp',broadcast:()=>{},localProviders:{launch:async o=>{launches++;assert.equal(o.character.localProfile.profile.id,definition.profile.id);assert.equal(o.attachments,attachments);return {args:['local'],release:async()=>{releases++;}};}}});
     runtime.executeClaude=()=>assert.fail('cloud worker must not execute');
     runtime.executeSingleProcess=async(_,spec)=>{assert.deepEqual(spec.args,['local']);if(fail)throw new Error('failed');};
-    const pending=runtime.execute({character,workdir:'/tmp',prompt:'hello'});
+    const pending=runtime.execute({character,workdir:'/tmp',prompt:'hello',attachments});
     if(fail)await assert.rejects(pending);else await pending;
     assert.equal(launches,1);assert.equal(releases,1);
   }

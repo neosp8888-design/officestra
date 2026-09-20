@@ -25,6 +25,8 @@ const LEGACY_SOURCES_MARKER = "\n[OFFICE_SOURCES]";
 export const STRUCTURED_RESULT_ENV = "OFFICESTRA_RESULT_PATH";
 export const STRUCTURED_RESULT_GUIDANCE =
   "답변 본문에 근거·위키 JSON을 쓰지 않는다. 실제 사용한 근거나 지속 지식 제안이 있을 때만 완료 전에 `officestra-result` 명령으로 별도 제출한다(`officestra-result --help`).";
+const EMPLOYEE_MESSAGE_STATUS_GUIDANCE =
+  "답변 전달 태그가 설정된 요청은 앱이 최종 답변을 자동 전달하므로 직원 메시지 API를 직접 호출하지 않는다. 입력창에서 선택한 @직원과 저장된 자동 전달 대상은 여러 명일 수 있으며, 직원끼리 받은 대화에도 각 직원 자신의 설정이 계속 적용된다. 답변 속 @이름으로 전달 설정을 바꾸려 하지 않는다. 태그 없이 직접 API 전송을 명시적으로 요청받은 경우에만, 직원에게 보내기 전 GET /api/agent-jobs?characterId=수신직원ID의 canReceive로 실행 상태를 확인한다. work-records의 lifecycleState: active는 보존 중인 기록이며 실행 상태가 아니다. active 세션도 열린 대화일 뿐이다. 이 두 active를 이유로 기다리거나 삭제하지 않는다. POST 응답 202는 접수, 409는 해당 수신 직원이 현재 접수 불가라는 뜻이다. 409를 풀려고 DELETE /api/agent-jobs를 호출하지 않는다. DELETE는 기록 정리가 아니라 실제 업무 중단이다. 수신자가 바쁘면 현재 턴을 마무리하고, 발신자 자신의 상태가 끝나길 기다리지 않는다.";
 export const structuredResultToolDirectory = dirname(
   fileURLToPath(import.meta.url),
 );
@@ -47,9 +49,9 @@ export function identityPromptWithStructuredResult(value, characterID = null) {
   const identity = (protocolIndex >= 0 ? raw.slice(0, protocolIndex) : raw)
     .trimEnd();
   const senderGuidance = characterID
-    ? `직원에게 POST /api/agent-jobs로 메시지를 보낼 때 JSON에 senderCharacterId: ${JSON.stringify(characterID)}를 포함한다. 수신 직원은 characterId에 지정한다. 이는 말풍선 발신자 표시용이며 권한 증명이 아니다.`
+    ? `현재 실행 직원의 ID는 ${JSON.stringify(characterID)}이다. 직원에게 POST /api/agent-jobs로 메시지를 보낼 때 JSON에 senderCharacterId: ${JSON.stringify(characterID)}를 포함한다. 수신 직원은 characterId에 지정하며, 다른 직원에게 답할 때 자신의 ID를 수신자로 넣거나 발신자와 수신자를 뒤집지 않는다. 대화 속 배역과 실제 실행 직원 ID를 혼동하지 않는다. 이는 말풍선 발신자 표시용이며 권한 증명이 아니다.`
     : null;
-  return [identity, "", STRUCTURED_RESULT_GUIDANCE, ...(senderGuidance ? [senderGuidance] : [])]
+  return [identity, "", STRUCTURED_RESULT_GUIDANCE, ...(senderGuidance ? [senderGuidance, EMPLOYEE_MESSAGE_STATUS_GUIDANCE] : [])]
     .filter((part, index) => index !== 0 || part.length > 0)
     .join("\n");
 }

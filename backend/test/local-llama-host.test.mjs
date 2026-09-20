@@ -3,13 +3,25 @@ import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {setTimeout as delay} from 'node:timers/promises';
 import {llamaServerArguments,llamaServerCommand,llamaArtifactVerificationScript,validLlamaOwnership,llamaCleanupScript,llamaOrphanCleanupScript,llamaDirectPortGuardScript,LLAMA_CLEANUP_REMOTE_TIMEOUT_MS,LLAMA_ORPHAN_CLEANUP_REMOTE_TIMEOUT_MS,LLAMA_SERVER_PATH,LLAMA_MODEL_ID,LLAMA_MODEL_ROOT,LLAMA_MODEL_FILE,LLAMA_MODEL_SIZE,LLAMA_MODEL_SHA256,LLAMA_MMPROJ_FILE,LLAMA_MMPROJ_SIZE,LLAMA_MMPROJ_SHA256} from '../src/local-llama-host.mjs';
-import {isQwen38LMStudioModelKey} from '../src/local-provider-host.mjs';
+import {isQwen38LMStudioModelKey,localHostRemoteCommand} from '../src/local-provider-host.mjs';
 import {normalizeLocalAgentProfile,createLocalAgentLaunch} from '../src/local-agent-profile.mjs';
 import {normalizeLocalResponsesRequest} from '../src/local-inference-bridge.mjs';
 import {LocalProviderService,localCodexModelCatalog} from '../src/local-provider-service.mjs';
 import {LLAMA_RESPONSES_PROFILE,RESPONSES_INCLUSIVE_PROFILE,extractResponsesUsage} from '../src/local-responses-usage.mjs';
 const profile={id:'direct-test',providerKind:'local',backend:'codex',runtime:'llama-cpp-b10982',model:LLAMA_MODEL_ID,endpoint:'http://127.0.0.1:41235',credentialEnv:'OFFICESTRA_LOCAL_TEST_TOKEN',credentialVersion:'v1',contextWindow:65536,maxOutputTokens:4096,usageProtocol:'openai-responses-v1',kvCacheQuantization:'q8_0',reasoning:'medium'};
 const host={address:'127.0.0.1',user:'test',sshPort:2222,keyPath:'/tmp/test-key',hostKeyAlias:'test',modelKey:'qwen3.8-27b',comfyPort:8188};
+test('long Windows SSH scripts bypass command-line truncation without changing Unicode or quoting',()=>{
+ const scripts=["Write-Output '짧은 명령'",llamaOrphanCleanupScript(profile)+"\n#"+'한글 $x \' " '.repeat(400)+"\nWrite-Output '끝'"];
+ for(const [index,script] of scripts.entries()){
+  const {command,input}=localHostRemoteCommand(script);
+  assert.ok(command.length<7001);
+  const commandPayload=command.split(' -EncodedCommand ')[1];
+  const decoded=Buffer.from(input??commandPayload,'base64').toString('utf16le');
+  assert.ok(decoded.endsWith(script));
+  if(index===0)assert.equal(input,null);
+  else {assert.ok(input);assert.match(Buffer.from(commandPayload,'base64').toString('utf16le'),/ReadToEnd/);}
+ }
+});
 test('direct server pins 64K KV8 full GPU vision and rejects silent reductions',()=>{
  assert.equal(isQwen38LMStudioModelKey('qwen3.8-27b'),true);
  assert.equal(isQwen38LMStudioModelKey('qwen3.8-27b-uncensored'),true);

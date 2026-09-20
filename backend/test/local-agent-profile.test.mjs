@@ -22,6 +22,19 @@ const buildCodex=(overrides={})=>createLocalAgentLaunch({profile:codexProfile,
   character:codexCharacter,workdir:'/tmp/local-validation',baseEnvironment:base,
   executable:'/usr/local/bin/codex',...overrides});
 
+test('local Codex new and resumed GUI turns attach image bytes through CLI image arguments',()=>{
+  for(const previousSessionID of [null,'existing-session']){
+    const attachments=[{path:'/tmp/그림 1.png',isCodexImage:true},{path:'/tmp/document.pdf',isCodexImage:false},{path:'/tmp/그림 2.jpeg',isCodexImage:true}];
+    const {args}=buildCodex({previousSessionID,prompt:'첨부를 분석해줘',attachments});
+    const images=args.flatMap((v,i)=>v==='-i'?[args[i+1]]:[]);
+    assert.deepEqual(images,['/tmp/그림 1.png','/tmp/그림 2.jpeg']);
+    assert.equal(args.at(-1),'첨부를 분석해줘');
+    // Codex --image accepts multiple values; a following flag must delimit it
+    // so the final prompt cannot be consumed as another image filename.
+    assert.equal(args[args.lastIndexOf('-i')+2],'-c');
+  }
+});
+
 test('PTY executable is absolute and never resolved through relative PATH entries',()=>{
   assert.equal(localTerminalExecutable('/test/codex',{}),'/test/codex');
   assert.equal(localTerminalExecutable('true',{PATH:'.:/usr/bin'}),'/usr/bin/true');

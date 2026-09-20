@@ -1,6 +1,7 @@
 // 이 파일은 캐릭터 설정과 CLI 대화 기록 및 RAG 저장 API를 제공한다.
 
 import { createServer } from "node:http";
+import { ReplyDeliveryService, cancelPendingReplyDelivery, readReplyRoutes, saveReplyRoute } from './reply-delivery.mjs';
 import { randomUUID } from "node:crypto";
 import { LocalProviderService, normalizeLocalDefinition, localProfileTitle, localProfileReasoningOptions, localProfileDefaultReasoning, LOCAL_TURN_EFFORT_SQL } from './local-provider-service.mjs';
 import { selectLocalProfile, setLocalReasoning, setLocalHostAddress, assignedLocalDefinition, controlLocalModel } from './local-profile-selection.mjs';
@@ -125,6 +126,7 @@ const webSocketServer = new WebSocketServer({ noServer: true });
 let runtime;
 let terminalSessions;
 let localProviders;
+let replyDeliveries;
 let pricingCatalogService;
 let modelCatalogService;
 let shuttingDown = false;
@@ -1024,6 +1026,7 @@ async function listWorkRecords(response, url) {
   );
   send(response, 200, {
     records: result.rows[0].records,
+    lifecycleStateMeaning: '기록의 보존 상태입니다. active는 실행 중이라는 뜻이 아닙니다. 직원 실행 상태는 GET /api/agent-jobs로 조회하세요.',
     total: result.rows[0].total,
     limit: filters.limit,
     offset: filters.offset,
@@ -1360,8 +1363,19 @@ async function queryTurnFeed({
       liveFeedMinimumTurnsPerCharacter,
     ],
   );
+  const deliveries=await pool.query(`SELECT delivery.source_turn_id AS "sourceTurnId",
+    delivery.recipient_character_id AS "recipientId", recipient.name AS "recipientName",
+    delivery.status, delivery.error_message AS error
+    FROM reply_deliveries delivery JOIN characters recipient ON recipient.id=delivery.recipient_character_id
+    WHERE delivery.source_turn_id=ANY($1::uuid[])`,[result.rows.map(t=>t.id)]);
+  const deliveryByTurn=new Map();
+  for(const delivery of deliveries.rows) {
+    const list=deliveryByTurn.get(delivery.sourceTurnId)??[];
+    list.push(delivery);deliveryByTurn.set(delivery.sourceTurnId,list);
+  }
   return result.rows.map((turn) =>
-    withSessionContext(withArtifactPreviews(turn)),
+    withSessionContext(withArtifactPreviews({...turn,replyDeliveries:deliveryByTurn.get(turn.id)??[],
+      replyDelivery:deliveryByTurn.get(turn.id)?.[0]??null})),
   );
 }
 
@@ -1574,6 +1588,13 @@ async function startAgentJob(response, body) {
     return;
   }
 
+  if (body.replyRecipientId != null) {
+    if (typeof body.replyRecipientId !== 'string' || body.replyRecipientId === body.characterId) {
+      send(response,400,{error:'답변을 받을 다른 직원을 선택하세요.'});return;
+    }
+    const recipient=await pool.query('SELECT id FROM characters WHERE id=$1',[body.replyRecipientId]);
+    if(!recipient.rowCount){send(response,400,{error:'답변을 받을 직원을 찾을 수 없습니다.'});return;}
+  }
   if (body.senderCharacterId != null) {
     const sender = await pool.query('SELECT id FROM characters WHERE id = $1', [String(body.senderCharacterId)]);
     if (!sender.rowCount) {
@@ -1588,6 +1609,7 @@ async function startAgentJob(response, body) {
       conversationID: body.conversationId,
       attachmentPaths: body.attachmentPaths,
       senderCharacterID: body.senderCharacterId ?? null,
+      replyRecipientID: body.replyRecipientId ?? null,
     });
     send(response, 202, job);
   } catch (error) {
@@ -1600,7 +1622,12 @@ async function startAgentJob(response, body) {
       return;
     }
     if (error instanceof AgentBusyError || error instanceof GitWorkspaceError) {
-      send(response, 409, { error: error.message });
+      send(response, 409, {
+        error: error.message,
+        characterId: String(body.characterId ?? ''),
+        statusURL: `/api/agent-jobs?characterId=${encodeURIComponent(String(body.characterId ?? ''))}`,
+        hint: '수신 직원의 실행 상태를 확인하세요. work-records의 active는 원인이 아닙니다. DELETE /api/agent-jobs는 기록 정리가 아니라 업무 중단이므로 접수 오류 해결에 사용하지 마세요.',
+      });
       return;
     }
     throw error;
@@ -2521,6 +2548,47 @@ const server = createServer(async (request, response) => {
         terminalSessionRoute.characterID,
       );
     } else if (
+      request.method === "GET" && url.pathname === "/api/reply-routes"
+    ) {
+      send(response,200,{routes:await readReplyRoutes(pool)});
+    } else if (
+      request.method === "PUT" && /^\/api\/reply-routes\/[^/]+$/.test(url.pathname)
+    ) {
+      if(!trustedJSONMutation(request,response))return;
+      const characterID=decodeURIComponent(url.pathname.split('/')[3]);
+      const body=await readJSON(request);
+      try {
+        const route=await withTransaction(client=>saveReplyRoute(client,characterID,body));
+        broadcast({type:'reply-routes.changed',characterId:characterID});
+        broadcast({type:'feed.changed',characterId:characterID});
+        send(response,200,route);
+      } catch(error) {
+        if(error instanceof TypeError)send(response,400,{error:error.message});
+        else throw error;
+      }
+    } else if (
+      request.method === "POST" && /^\/api\/reply-deliveries\/[^/]+\/cancel$/.test(url.pathname)
+    ) {
+      if (!trustedJSONMutation(request,response)) return;
+      await readJSON(request);
+      const sourceTurnID=url.pathname.split('/')[3];
+      if(!isUUID(sourceTurnID)){send(response,400,{error:'올바른 대화 ID가 필요합니다.'});return;}
+      if(await cancelPendingReplyDelivery(pool,sourceTurnID)) {
+        broadcast({type:'feed.changed',turnId:sourceTurnID});send(response,200,{cancelled:true});
+      } else send(response,409,{error:'이미 전달을 시작했거나 종료된 예약입니다.'});
+    } else if (
+      request.method === "GET" &&
+      url.pathname === "/api/agent-jobs"
+    ) {
+      if (!runtime) {
+        send(response, 503, { error: "CLI 실행기가 준비되지 않았습니다." });
+      } else {
+        const characterID = url.searchParams.get('characterId');
+        const employees = await runtime.messageAvailability(characterID);
+        if (characterID && employees.length === 0) send(response, 404, {error:'수신 직원을 찾을 수 없습니다.'});
+        else send(response, 200, {employees, note:'현재 시점의 접수 가능 여부입니다. 실제 접수는 POST 응답으로 확인하세요. 기록·세션의 active는 실행 상태가 아닙니다.'});
+      }
+    } else if (
       request.method === "POST" &&
       url.pathname === "/api/agent-jobs"
     ) {
@@ -2647,6 +2715,7 @@ async function shutdown(signal) {
   console.log(`${signal} 신호를 받아 사무실 백엔드를 종료합니다.`);
   modelCatalogService?.stop();
   pricingCatalogService?.stop();
+  await replyDeliveries?.stop();
   await terminalSessions?.shutdown();
   await localProviders?.shutdown();
   runtime?.shutdown();
@@ -2758,6 +2827,8 @@ try {
   });
   runtime.setTerminalSessionRegistry(terminalSessions);
   await runtime.recoverInterruptedJobs();
+  replyDeliveries = new ReplyDeliveryService({pool,runtime,broadcast});
+  replyDeliveries.start();
   server.listen(port, "127.0.0.1", () => {
     console.log(`사무실 백엔드 실행 중 http://127.0.0.1:${port}`);
     void startSlackBridge({

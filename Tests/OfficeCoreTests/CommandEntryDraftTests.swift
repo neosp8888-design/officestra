@@ -1,12 +1,128 @@
 // 이 파일은 명령 입력 초안의 전송 가능 여부와 초기화 규칙을 검증한다.
 
 import AppKit
+import OfficeCore
 import SwiftUI
 import XCTest
 @testable import OfficeGame
 
 @MainActor
 final class CommandEntryDraftTests: XCTestCase {
+    func testMentionCompletionSelectsRecipientBeforeReturnCanSubmit() throws {
+        let textView = CommandComposerTextView()
+        textView.mentionCandidates = [EmployeeMention(id: .rightWoman, name: "코대리"), EmployeeMention(id: .leftWoman, name: "로과장")]
+        var selected: Set<OfficeCharacter> = []
+        var submissions = 0
+        textView.onMention = { selected.insert($0) }
+        textView.onSubmit = { _ in submissions += 1; return true }
+        textView.string = "검토해줘 @코"
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        textView.refreshMentionSuggestions()
+        XCTAssertEqual(textView.mentionMatches.map(\.id), [.rightWoman])
+        textView.keyDown(with: try makeReturnEvent())
+        XCTAssertEqual(textView.string, "검토해줘 @코대리 ")
+        XCTAssertEqual(selected, [.rightWoman])
+        XCTAssertEqual(submissions, 0)
+        textView.insertMention(EmployeeMention(id: .leftWoman, name: "로과장"), replacing: textView.selectedRange())
+        XCTAssertEqual(selected, [.rightWoman, .leftWoman])
+        textView.keyDown(with: try makeReturnEvent())
+        XCTAssertEqual(submissions, 1)
+        XCTAssertEqual(textView.string, "")
+        XCTAssertEqual(selected, [.rightWoman, .leftWoman], "Sending does not clear saved recipients")
+    }
+
+    func testMentionQueryExcludesEmailsAndPastMentionsAndPreservesUTF16Ranges() {
+        for text in ["mail@example.com", "@코대리 안녕", "그냥 문장", "코드@코"] {
+            XCTAssertNil(EmployeeMentionQuery.atCaret(in: text, selection: NSRange(location: (text as NSString).length, length: 0)))
+        }
+        let text = "😀 안녕 @코"
+        let query = EmployeeMentionQuery.atCaret(in: text, selection: NSRange(location: (text as NSString).length, length: 0))
+        XCTAssertEqual(query?.text, "코")
+        XCTAssertEqual(query.map { (text as NSString).substring(with: $0.range) }, "@코")
+    }
+
+    func testFullyTypedMentionsAtSendSupportMultipleNamesButNotEmailsOrAmbiguousNames() {
+        let candidates = [EmployeeMention(id: .rightWoman, name: "코대리"), EmployeeMention(id: .leftWoman, name: "로과장")]
+        XCTAssertEqual(EmployeeMention.recipients(in: "이 답변은 @코대리 @로과장", candidates: candidates), [.rightWoman, .leftWoman])
+        XCTAssertEqual(EmployeeMention.recipients(in: "mail@코대리.com @로과장님", candidates: candidates), [])
+        XCTAssertEqual(EmployeeMention.recipients(in: "@코대리", candidates: candidates + [EmployeeMention(id: .boss, name: "코대리")]), [])
+    }
+
+    func testCharacterDragPayloadAndDropResolveByIDWithoutChangingTheSpeaker() async throws {
+        let provider = EmployeeMention.dragProvider(for: .rightWoman)
+        let payload: Data = try await withCheckedThrowingContinuation { continuation in
+            provider.loadDataRepresentation(forTypeIdentifier: EmployeeMention.pasteboardType.rawValue) { data, error in
+                if let data { continuation.resume(returning: data) }
+                else { continuation.resume(throwing: error ?? NSError(domain: "missing-drag-data", code: 1)) }
+            }
+        }
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        board.setData(payload, forType: EmployeeMention.pasteboardType)
+        let textView = CommandComposerTextView()
+        let recipient = EmployeeMention(id: .rightWoman, name: "코대리")
+        textView.mentionCandidates = [recipient]
+        XCTAssertEqual(textView.droppedMention(from: board), recipient)
+        var selected: OfficeCharacter?
+        textView.onMention = { selected = $0 }
+        textView.string = "답변해줘"
+        textView.insertMention(recipient, replacing: NSRange(location: 0, length: 0))
+        XCTAssertEqual(textView.string, "@코대리 답변해줘")
+        XCTAssertEqual(selected, .rightWoman)
+        textView.mentionCandidates = []
+        XCTAssertNil(textView.droppedMention(from: board), "Self or unknown employees cannot be dropped")
+    }
+
+    func testKoreanMarkedMentionCommitsWithoutSendingOrLosingTheLastSyllable() async throws {
+        let textView = CommandComposerTextView()
+        textView.mentionCandidates = [EmployeeMention(id: .rightWoman, name: "코대리")]
+        textView.string = "@코대"
+        textView.setSelectedRange(NSRange(location: 3, length: 0))
+        textView.setMarkedText("리", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        var selected: OfficeCharacter?
+        var submissions = 0
+        textView.onMention = { selected = $0 }
+        textView.onSubmit = { _ in submissions += 1; return true }
+        textView.keyDown(with: try makeReturnEvent())
+        await Task.yield()
+        // AppKit commits marked text on the next main-queue pass.
+        await withCheckedContinuation { continuation in DispatchQueue.main.async { continuation.resume() } }
+        XCTAssertEqual(textView.string, "@코대리 ")
+        XCTAssertEqual(selected, .rightWoman)
+        XCTAssertEqual(submissions, 0)
+    }
+
+    func testReplyTagsRenderAtCompactWidthWithoutStartingAgents() throws {
+        let director = AgentDirector(startBackgroundTasks: false)
+        director.selectedCharacterID = .leftWoman
+        director.replyRecipients[.leftWoman] = [.rightWoman, .boss]
+        for scheme in [ColorScheme.light, .dark] {
+            let host = NSHostingView(rootView: VStack(alignment: .leading, spacing: 16) {
+              ReplyRoutingControl(director: director)
+              CommandEntryRow(
+                director: director, placeholder: "자연스럽게 대화를 이어가세요",
+                attachmentCount: 0, isPreparingAttachments: false,
+                onChooseAttachments: {}, onSubmit: { _ in false }
+              )
+            }.padding(12).environment(\.colorScheme, scheme)
+                .frame(width: 500, height: 140, alignment: .topLeading)
+                .background(scheme == .dark ? Color(white: 0.13) : Color(white: 0.96)))
+            host.frame = NSRect(x: 0, y: 0, width: 500, height: 140)
+            host.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+            host.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            XCTAssertGreaterThan(bitmap.pixelsWide, 0)
+            if let directory = ProcessInfo.processInfo.environment["OFFICESTRA_REPLY_PREVIEW_DIR"] {
+                let url = URL(fileURLWithPath: directory).appendingPathComponent("reply-tags-\(scheme == .dark ? "dark" : "light").png")
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: url)
+            }
+        }
+        XCTAssertEqual(director.replyRecipients[.leftWoman], [.rightWoman, .boss])
+        director.selectedCharacterID = .boss
+        XCTAssertNil(director.replyRecipients[.boss], "Recipient choices belong to the sending employee")
+    }
+
     func testAvailabilityAllowsReadyIdleSelectedCharacter() {
         let availability = CommandEntryAvailability(
             isReady: true,

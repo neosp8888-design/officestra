@@ -142,7 +142,7 @@ function localCodexOptions(args, profile, character, mode, catalogPath, workdir)
   return [...result,...overrides,prompt];
 }
 
-export function createLocalAgentLaunch({profile,character,mode='gui',prompt='',
+export function createLocalAgentLaunch({profile,character,mode='gui',prompt='',attachments=[],
   previousSessionID=null,workdir,baseEnvironment=process.env,hookPath,nodePath,catalogPath,
   executable=locateExecutable(character)}) {
   const p=normalizeLocalAgentProfile(profile);
@@ -189,7 +189,7 @@ export function createLocalAgentLaunch({profile,character,mode='gui',prompt='',
   const args=mode==='terminal'
     ? terminalArguments({character,previousSessionID,workdir,hookPath,nodePath})
     : mode==='persistent' ? claudePersistentArguments(character,previousSessionID)
-    : buildArguments({character,prompt,previousSessionID,workdir});
+    : buildArguments({character,prompt,previousSessionID,attachments,workdir});
   const normalizedArgs=p.backend==='codex'
     ? localCodexOptions(args,p,character,mode,catalogPath,workdir)
     : localClaudeOptions(args,mode);

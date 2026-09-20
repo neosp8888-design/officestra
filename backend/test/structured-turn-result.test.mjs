@@ -32,6 +32,10 @@ const WORK_RECORD_ID = "22222222-2222-4222-8222-222222222222";
 test('직원 API 발신자 안내는 실제 직원 ID를 사용하고 중복되지 않는다', () => {
   const once = identityPromptWithStructuredResult('업무 지침', 'right-man');
   assert.match(once, /senderCharacterId: "right-man"/);
+  assert.match(once, /현재 실행 직원의 ID는 "right-man"/);
+  assert.match(once, /lifecycleState: active는 보존 중인 기록이며 실행 상태가 아니다/);
+  assert.match(once, /GET \/api\/agent-jobs\?characterId=수신직원ID의 canReceive/);
+  assert.match(once, /DELETE는 기록 정리가 아니라 실제 업무 중단/);
   assert.equal(identityPromptWithStructuredResult(once, 'right-man'), once);
   assert.doesNotMatch(identityPromptWithStructuredResult('사용자 지침'), /senderCharacterId/);
 });

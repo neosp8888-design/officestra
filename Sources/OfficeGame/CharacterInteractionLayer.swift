@@ -116,6 +116,13 @@ struct CharacterInteractionLayer: View, Equatable {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .onDrag {
+                        EmployeeMention.dragProvider(for: character.id)
+                    } preview: {
+                        Label(presentation.displayNames[character.id] ?? character.name, systemImage: "at")
+                            .padding(10)
+                            .background(.regularMaterial, in: Capsule())
+                    }
                     .frame(
                         width: hitbox.width * scale,
                         height: hitbox.height * scale

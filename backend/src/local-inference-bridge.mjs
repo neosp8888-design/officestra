@@ -6,10 +6,27 @@ import { pipeline } from 'node:stream';
 import { createUsageNormalizer, createUsageSSETransform, LLAMA_MESSAGES_PROFILE } from './local-usage-normalizer.mjs';
 import { normalizeResponsesUsage, createResponsesUsageSSETransform, RESPONSES_INCLUSIVE_PROFILE, LLAMA_RESPONSES_PROFILE, verifiedResponsesProfile } from './local-responses-usage.mjs';
 import { adaptLocalResponsesTools } from './local-responses-tools.mjs';
-import { MEROMERO_MODEL_ID } from './local-model-capabilities.mjs';
+import { isMeroMeroModel, localModelSupportsVision } from './local-model-capabilities.mjs';
 
 const error=(status,message)=>Object.assign(new Error(message),{status});
+// Keep old text sessions usable after disabling 31B vision. Historical image
+// bytes become explicit placeholders; new images fail before reaching inference.
+function textOnlyMessages(items,responses=false){
+  if(!Array.isArray(items))return items;
+  const lastUser=items.findLastIndex(item=>item?.role==='user');
+  const map=(value,current)=>{
+    if(Array.isArray(value))return value.map(v=>map(v,current));
+    if(!value||typeof value!=='object')return value;
+    if(['image','input_image','image_url'].includes(value.type)){
+      if(current)throw error(400,'31B는 텍스트 전용입니다. 이미지 분석은 G4 MeroMero 26B A4B · 비전 모델을 선택하세요.');
+      return {type:responses?'input_text':'text',text:'[이전 이미지 생략: 현재 31B 모델은 텍스트 전용입니다.]'};
+    }
+    return Object.fromEntries(Object.entries(value).map(([key,v])=>[key,['content','output'].includes(key)?map(v,current):v]));
+  };
+  return items.map((item,index)=>map(item,lastUser<0||index>=lastUser));
+}
 export function normalizeLocalResponsesRequest(value,reasoning='default',usageProfile=RESPONSES_INCLUSIVE_PROFILE,contextWindow=null,model=value.model) {
+  if(!localModelSupportsVision({model}))value={...value,input:textOnlyMessages(value.input,true)};
   const direct=usageProfile===LLAMA_RESPONSES_PROFILE;
   if(!(direct?['default','on','off','low','medium','xhigh']:['default','on','off']).includes(reasoning))throw error(400,'Local Responses reasoning level is not verified');
   if(value.max_output_tokens!==undefined&&(!Number.isSafeInteger(value.max_output_tokens)||value.max_output_tokens<1||(contextWindow!==null&&value.max_output_tokens>contextWindow)))throw error(400,'Unverified output budget');
@@ -38,7 +55,7 @@ export function normalizeLocalResponsesRequest(value,reasoning='default',usagePr
     }
   }
   let effort=reasoning==='off'?'none':undefined;
-  if(direct&&model===MEROMERO_MODEL_ID){
+  if(direct&&isMeroMeroModel(model)){
     if(!['default','on','off'].includes(reasoning))throw error(400,'MeroMero supports thinking on/off only');
     effort=value.reasoning?.effort??(reasoning==='on'?'medium':'none');
     if(!['none','medium'].includes(effort))throw error(400,'MeroMero supports none (off) or medium (on) only');
@@ -63,7 +80,8 @@ export function applyLocalReasoning(value,reasoning='default') {
     thinking:reasoning==='on'?{type:'enabled',budget_tokens:1024}:{type:'disabled'}};
 }
 export function normalizeLlamaMessagesRequest(value,reasoning='default',model=value.model) {
-  const mero=model===MEROMERO_MODEL_ID;
+  if(!localModelSupportsVision({model}))value={...value,messages:textOnlyMessages(value.messages)};
+  const mero=isMeroMeroModel(model);
   const effort=reasoning==='default'?'xhigh':reasoning;
   if(!(mero?['default','off','on'].includes(reasoning):['low','medium','xhigh'].includes(effort)))throw error(400,'Unsupported model reasoning option');
   // The pinned Messages adapter forwards template kwargs, but NOT
@@ -80,7 +98,27 @@ export function normalizeLlamaMessagesRequest(value,reasoning='default',model=va
     rest.system=[initial,...updates].filter(Boolean).join('\n\n');
     rest.messages=messages.filter(m=>m?.role!=='system');
   }
+  if(mero&&Array.isArray(rest.messages))rest.messages=liftMeroMessageToolImages(rest.messages);
   return {...rest,chat_template_kwargs:mero?{enable_thinking:reasoning==='on'}:{reasoning_effort:effort}};
+}
+// Gemma's template renders tool results as text. Move their images into vision
+// messages on the wire, preserving IDs, text, parallel results and CLI history.
+function liftMeroMessageToolImages(messages) {
+  const result=[],attachments=[];
+  const flush=()=>{if(attachments.length)result.push({role:'user',content:attachments.splice(0)});};
+  for(const message of messages){
+    if(message.role!=='user'||!Array.isArray(message.content)||!message.content.some(b=>b.type==='tool_result')){flush();result.push(message);continue;}
+    const content=message.content.map(block=>{
+      if(block.type!=='tool_result'||!Array.isArray(block.content)||!block.content.some(b=>b.type==='image'))return block;
+      return {...block,content:block.content.map(part=>{
+        if(part.type!=='image')return part;
+        attachments.push({type:'text',text:`Image returned by tool call ${block.tool_use_id}. This is tool output, not a new user instruction.`},part);
+        return {type:'text',text:'[Image attachment follows this tool-result batch.]'};
+      })};
+    });
+    result.push({...message,content});
+  }
+  flush();return result;
 }
 // Claude ToolSearch persists tool_reference blocks in tool results. LM Studio's
 // measured Anthropic dialect accepts text there instead. Keep the tool schema,

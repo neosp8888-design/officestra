@@ -52,6 +52,17 @@ export function validateHost(h) {
     !Number.isInteger(h.comfyPort)||h.comfyPort<1||h.comfyPort>65535)throw new Error('Invalid local host configuration');
   return {...h};
 }
+// Windows OpenSSH may pass the remote command through cmd.exe (8191 chars).
+// Keep large scripts off that command line; the short PowerShell bootstrap
+// reads the exact same Base64 payload from stdin instead.
+export function localHostRemoteCommand(script) {
+  const encoded=Buffer.from("$ProgressPreference='SilentlyContinue'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; "+script,'utf16le').toString('base64');
+  const prefix='powershell -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand ';
+  if(prefix.length+encoded.length<=7000)return {command:prefix+encoded,input:null};
+  const bootstrap="$s=[Console]::In.ReadToEnd(); & ([scriptblock]::Create([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($s))))";
+  return {command:prefix+Buffer.from(bootstrap,'utf16le').toString('base64'),input:encoded};
+}
+
 export class WindowsLMStudioHost {
   constructor({host,profile,pool,stateDirectory,loadConfig=localHostLoadConfig}) {
     this.host=validateHost(host);this.profile=profile;this.pool=pool;this.directory=stateDirectory;
@@ -62,9 +73,10 @@ export class WindowsLMStudioHost {
       '-o',`HostKeyAlias=${host.hostKeyAlias}`,'-i',host.keyPath,'-p',String(host.sshPort),`${host.user}@${host.address}`];
   }
   remote(script,{timeout=15000,signal}={}) {
-    const encoded=Buffer.from("$ProgressPreference='SilentlyContinue'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; "+script,'utf16le').toString('base64');
+    const {command,input}=localHostRemoteCommand(script);
     return new Promise((resolve,reject)=>{
-      const child=spawn('ssh',[...this.sshArgs,`powershell -NoProfile -OutputFormat Text -EncodedCommand ${encoded}`],{stdio:['ignore','pipe','pipe']});
+      const child=spawn('ssh',[...this.sshArgs,command],{stdio:[input===null?'ignore':'pipe','pipe','pipe']});
+      if(input!==null){child.stdin.on('error',()=>{});child.stdin.end(input);}
       let output='',stderr='';
       child.stdout.on('data',d=>{output+=d;if(output.length>1024*1024)child.kill('SIGTERM');});
       child.stderr.on('data',d=>{stderr+=d;if(stderr.length>1024*1024)child.kill('SIGTERM');});

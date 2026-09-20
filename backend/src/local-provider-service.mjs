@@ -12,7 +12,7 @@ import { RESPONSES_INCLUSIVE_PROFILE, LLAMA_RESPONSES_PROFILE } from './local-re
 import { WindowsLlamaCppHost } from './local-llama-host.mjs';
 import { WindowsLMStudioHost, LocalHostBusyError, validateHost, LOCAL_HOST_MEMORY_BUDGET, LOCAL_HOST_RESOURCE_SAMPLE_TIMEOUT_MS } from './local-provider-host.mjs';
 import { normalizeLocalAgentProfile, createLocalAgentLaunch } from './local-agent-profile.mjs';
-import { isMeroMero, MEROMERO_MODEL_ID, directReasoningOptions, directDefaultReasoning, directCodexReasoning } from './local-model-capabilities.mjs';
+import { isMeroMero, MEROMERO_MODEL_ID, MEROMERO_26B_MODEL_ID, directReasoningOptions, directDefaultReasoning, directCodexReasoning, localModelSupportsVision } from './local-model-capabilities.mjs';
 import { isQwen38LMStudioModelKey } from './local-provider-host.mjs';
 import { LocalModelPool, localModelPoolKey } from './local-model-pool.mjs';
 
@@ -22,7 +22,7 @@ export const LOCAL_TURN_EFFORT_SQL = `CASE
   WHEN t.provider_kind = 'local' AND t.effort = 'default'
     AND t.provider_snapshot->'profile'->>'runtime' = 'llama-cpp-b10982'
   THEN CASE
-    WHEN t.provider_snapshot->'profile'->>'model' = '${MEROMERO_MODEL_ID}'
+    WHEN t.provider_snapshot->'profile'->>'model' IN ('${MEROMERO_MODEL_ID}','${MEROMERO_26B_MODEL_ID}')
       THEN CASE WHEN t.provider_snapshot->'profile'->>'reasoning' = 'on' THEN 'on' ELSE 'off' END
     WHEN t.provider_snapshot->'profile'->>'reasoning' IN ('low','medium','xhigh')
       THEN t.provider_snapshot->'profile'->>'reasoning'
@@ -35,7 +35,7 @@ export function normalizeLocalDefinition(value) {
   return {profile:normalizeLocalAgentProfile(value?.profile),host:validateHost(value?.host)};
 }
 export function localProfileTitle({profile,host}) {
-  if(isMeroMero(profile))return 'G4 MeroMero 31B Uncensored Heretic · llama.cpp';
+  if(isMeroMero(profile))return `G4 MeroMero ${profile.model===MEROMERO_26B_MODEL_ID?'26B A4B · 비전':'31B · 텍스트 전용'} Uncensored Heretic · llama.cpp`;
   // The host key is a routing identifier, not necessarily the loaded model.
   const name=profile.model==='officestra-qwen38-27b-uncensored-q4km'
     ? 'qwen3.8-27b-uncensored' : host.modelKey.split('/').at(-1);
@@ -62,7 +62,7 @@ export function localCodexModelCatalog(profile) {
     truncation_policy:{mode:'tokens',limit:10000},supports_image_detail_original:false,
     context_window:profile.contextWindow,max_context_window:profile.contextWindow,
     effective_context_window_percent:100,experimental_supported_tools:[],
-    input_modalities:isMeroMero(profile)?['text']:['text','image'],supports_search_tool:true,supports_experimental_context:false,
+    input_modalities:localModelSupportsVision(profile)?['text','image']:['text'],supports_search_tool:true,supports_experimental_context:false,
   }]};
 }
 export async function resolveLocalCharacter(client,character) {
@@ -165,6 +165,7 @@ export class LocalProviderService {
   async launch({character,...options}) {
     if(this.closed)throw new Error('Local service is shutting down');
     const definition=normalizeLocalDefinition(character.localProfile);
+    if(!localModelSupportsVision(definition.profile)&&options.attachments?.some(a=>a.isCodexImage||/\.(png|jpe?g|gif|webp|bmp|heic)$/i.test(a.path??'')))throw new Error('31B는 텍스트 전용입니다. 이미지 분석은 G4 MeroMero 26B A4B · 비전 모델을 선택하세요.');
     if(this.models.group(definition).paused)throw new Error('로컬 모델이 중지되어 있습니다. 모델 실행 버튼을 눌러주세요.');
     const id=`${definition.profile.id}:${definition.profile.reasoning??'default'}`;
     let e=this.entries.get(id);

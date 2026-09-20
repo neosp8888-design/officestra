@@ -2,7 +2,7 @@ import {spawn} from 'node:child_process';
 import {createServer} from 'node:net';
 import {mkdir,readFile,writeFile,unlink} from 'node:fs/promises';
 import {WindowsLMStudioHost,LocalHostBusyError,localHostMemoryExceeded,validateHost} from './local-provider-host.mjs';
-import { isMeroMero, MEROMERO_ARTIFACT, MEROMERO_HOST_KEY } from './local-model-capabilities.mjs';
+import { isMeroMero, MEROMERO_26B_MODEL_ID, meroRuntimeArtifacts, localModelSupportsVision } from './local-model-capabilities.mjs';
 
 // Pinned, separately installed runtime. Never substitutes for LM Studio files.
 export const LLAMA_SERVER_PATH='G:\\llm\\officestra-probes\\llama-b10982-cuda124\\bin\\llama-server.exe';
@@ -39,8 +39,11 @@ const artifactPath=file=>LLAMA_MODEL_ROOT+'\\'+file;
 const artifactCheck=(file,size,sha,label)=>`if(!(Test-Path -LiteralPath ${ps(artifactPath(file))})){throw '${label} is not installed'};$f=Get-Item -LiteralPath ${ps(artifactPath(file))};if($f.Length -ne ${size}){throw '${label} size changed; revalidation required'};if((Get-FileHash -LiteralPath ${ps(artifactPath(file))} -Algorithm SHA256).Hash -ne '${sha}'){throw '${label} changed; revalidation required'}`;
 export function llamaArtifactVerificationScript(profile) {
  if(isMeroMero(profile)){
-  const a=MEROMERO_ARTIFACT,p=ps(a.root+'\\'+a.file);
-  return `if(!(Test-Path -LiteralPath ${p})){throw 'Pinned MeroMero model is not installed'};$f=Get-Item -LiteralPath ${p};if($f.Length -ne ${a.size}){throw 'Pinned model size changed; revalidation required'};if((Get-FileHash -LiteralPath ${p} -Algorithm SHA256).Hash -ne '${a.sha256}'){throw 'Pinned model changed; revalidation required'}`;
+  const artifacts=meroRuntimeArtifacts(profile);
+  return [artifacts.model,artifacts.vision].filter(Boolean).map(a=>{
+   const p=ps(a.root+'\\'+a.file);
+   return `if(!(Test-Path -LiteralPath ${p})){throw 'Pinned MeroMero artifact is not installed'};$f=Get-Item -LiteralPath ${p};if($f.Length -ne ${a.size}){throw 'Pinned artifact size changed; revalidation required'};if((Get-FileHash -LiteralPath ${p} -Algorithm SHA256).Hash -ne '${a.sha256}'){throw 'Pinned artifact changed; revalidation required'}`;
+  }).join(';');
  }
  return [artifactCheck(LLAMA_MODEL_FILE,LLAMA_MODEL_SIZE,LLAMA_MODEL_SHA256,'Pinned model'),artifactCheck(LLAMA_MMPROJ_FILE,LLAMA_MMPROJ_SIZE,LLAMA_MMPROJ_SHA256,'Pinned mmproj')].join(';');
 }
@@ -48,16 +51,20 @@ export function llamaArtifactVerificationScript(profile) {
 // metadata, avoiding a complete read of the 18 GB model before loading it.
 export function llamaStartupArtifactScript(profile) {
  const files=isMeroMero(profile)
-  ? [[MEROMERO_ARTIFACT.root+'\\'+MEROMERO_ARTIFACT.file,MEROMERO_ARTIFACT.size]]
+  ? [meroRuntimeArtifacts(profile).model,meroRuntimeArtifacts(profile).vision].filter(Boolean).map(a=>[a.root+'\\'+a.file,a.size])
   : [[artifactPath(LLAMA_MODEL_FILE),LLAMA_MODEL_SIZE],[artifactPath(LLAMA_MMPROJ_FILE),LLAMA_MMPROJ_SIZE]];
  return `if(!(Test-Path -LiteralPath ${ps(LLAMA_SERVER_PATH)})){throw 'llama.cpp runtime is not installed'};`+files.map(([path,size])=>`$f=Get-Item -LiteralPath ${ps(path)} -ErrorAction Stop;if($f.Length -ne ${size}){throw 'Model file size mismatch'}`).join(';');
 }
 export function llamaServerArguments(profile) {
  if(isMeroMero(profile)){
   if(!['codex','claude'].includes(profile.backend)||![32768,65536].includes(profile.contextWindow)||profile.kvCacheQuantization!=='q8_0')throw Error('Unsupported MeroMero runtime configuration');
-  // Text-only 64K/KV8 is measured through 61K input on the 4090. Retain 32K
-  // compatibility for historical snapshots; Gemma4 has no native MTP head.
-  return ['-m',MEROMERO_ARTIFACT.root+'\\'+MEROMERO_ARTIFACT.file,'-c',String(profile.contextWindow),'-ctk','q8_0','-ctv','q8_0','-ngl','all','-fa','on','-np','1','-b','512','-ub','128','--jinja','--host','127.0.0.1','--port','18181','--alias',profile.model,'--load-mode','none','--fit','off'];
+  const {model,vision}=meroRuntimeArtifacts(profile),moe=profile.model===MEROMERO_26B_MODEL_ID;
+  // 26B uses GPU vision exclusively; limit CPU coordination after the prior
+  // CPU-projector thermal incident. 31B is explicitly text-only: no projector.
+  const visionOptions=vision?['--mmproj',vision.root+'\\'+vision.file,'--mmproj-offload','-t','4','-tb','4','--poll','0','--poll-batch','0']:[];
+  // Gemma image chunks use non-causal attention: the microbatch must hold
+  // the entire decode batch. Qwen's 128-token microbatch is not transferable.
+  return ['-m',model.root+'\\'+model.file,...visionOptions,'-c',String(profile.contextWindow),'-ctk','q8_0','-ctv','q8_0','-ngl','all','-fa','on','-np','1','-b',moe?'1024':'512','-ub',moe?'1024':'128','--jinja','--host','127.0.0.1','--port','18181','--alias',profile.model,'--load-mode','none','--fit','off'];
  }
  if(profile.runtime!=='llama-cpp-b10982'||!['codex','claude'].includes(profile.backend)||profile.contextWindow!==65536||profile.kvCacheQuantization!=='q8_0'||profile.model!==LLAMA_MODEL_ID)throw Error('Unsupported direct runtime configuration');
  // Measured with the same 64K/KV8/vision profile: native MTP accelerates
@@ -88,7 +95,7 @@ export function llamaDirectPortGuardScript() {
  return `$listener=netstat -ano -p TCP | Select-String -Pattern '^\\s*TCP\\s+\\S+:18181\\s+\\S+\\s+LISTENING\\s+\\d+\\s*$' | Select-Object -First 1;if($listener){throw 'Direct port occupied'}`;
 }
 export class WindowsLlamaCppHost extends WindowsLMStudioHost {
- constructor(options){super(options);llamaServerArguments(this.profile);if(this.host.modelKey!==(isMeroMero(this.profile)?MEROMERO_HOST_KEY:'qwen3.8-27b'))throw Error('Unsupported model key');this.statePath=this.statePath.replace(/\.json$/,'.llama.json');}
+ constructor(options){super(options);llamaServerArguments(this.profile);if(this.host.modelKey!==(isMeroMero(this.profile)?meroRuntimeArtifacts(this.profile).hostKey:'qwen3.8-27b'))throw Error('Unsupported model key');this.statePath=this.statePath.replace(/\.json$/,'.llama.json');}
  async cleanupOwned(){
   if(!this.owned)return;
   const r=this.owned;
@@ -134,6 +141,7 @@ export class WindowsLlamaCppHost extends WindowsLMStudioHost {
    if(!ready||controller.signal.aborted||exited)throw Error('Direct server readiness or memory guard failed');
    const props=await fetch(base+'/props',{signal:AbortSignal.timeout(3000)}).then(r=>r.json());
    if(props.default_generation_settings?.n_ctx!==this.profile.contextWindow||props.total_slots!==1)throw Error('Direct server context mismatch');
+   if((props.modalities?.vision===true)!==localModelSupportsVision(this.profile))throw Error('Direct server vision capability mismatch');
    const finalSample=await this.sample();
    if(finalSample.busy||localHostMemoryExceeded(finalSample)||controller.signal.aborted)throw Error('Direct server memory guard failed');
    return {upstream:base,sample:()=>this.sample(),alive:()=>!exited,waitForIdle:()=>waitForLlamaIdle(base,{alive:()=>!exited}),release:()=>this.release(),reconnectAddress:address=>{this.host=validateHost({...this.host,address});this.sshArgs[this.sshArgs.length-1]=`${this.host.user}@${address}`;}};

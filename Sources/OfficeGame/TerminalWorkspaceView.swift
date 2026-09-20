@@ -124,11 +124,13 @@ struct TerminalWorkspaceCachePolicy: Equatable {
 
 struct CachedTerminalWorkspaces: NSViewRepresentable {
     @ObservedObject private var director: AgentDirector
+    @ObservedObject private var conversationLayout: ConversationLayoutStore
     @ObservedObject private var characterSelectionStore:
         CharacterSelectionStore
 
     init(director: AgentDirector) {
         self.director = director
+        _conversationLayout = ObservedObject(wrappedValue: director.conversationLayout)
         _characterSelectionStore = ObservedObject(
             wrappedValue: director.characterSelectionStore
         )
@@ -162,7 +164,8 @@ struct CachedTerminalWorkspaces: NSViewRepresentable {
             characterSelectionStore: characterSelectionStore,
             databaseBaseURL: director.databaseBaseURL,
             sessionRevision: director.terminalSessionRevision,
-            restartRequest: director.terminalRestartRequest
+            restartRequest: director.terminalRestartRequest,
+            workspaceLayout: conversationLayout
         )
     }
 }
@@ -177,6 +180,10 @@ final class CachedTerminalWorkspacesNSView: NSView {
     private weak var characterSelectionStore: CharacterSelectionStore?
     private var lastFocusRequest: OfficeCharacter?
     private weak var inputSinkOwner: AgentDirector?
+    private weak var workspaceLayout: ConversationLayoutStore?
+    private var inputMonitor: Any?
+    override var isFlipped: Bool { true }
+    var visibleCharactersForTesting: Set<OfficeCharacter> { Set(entries.filter { !$0.value.isHidden }.map(\.key)) }
 
     var startsProcesses = true
 
@@ -208,6 +215,21 @@ final class CachedTerminalWorkspacesNSView: NSView {
     func attachInputSink(to director: AgentDirector) {
         inputSinkOwner = director
         director.terminalInputSink = self
+        if inputMonitor == nil {
+            inputMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                MainActor.assumeIsolated {
+                    guard let self, !event.modifierFlags.contains(.command),
+                          let window = self.window, event.window === window,
+                          let responder = window.firstResponder as? NSView else { return }
+                    for (character, entry) in self.entries where !entry.isHidden && responder.isDescendant(of: entry) {
+                        if character != self.selectedCharacterID, let layout = self.workspaceLayout {
+                            self.inputSinkOwner?.chooseConversationCharacter(character, in: layout.state.left == character ? .left : .right)
+                        }
+                    }
+                }
+                return event
+            }
+        }
     }
 
     func configure(
@@ -215,14 +237,17 @@ final class CachedTerminalWorkspacesNSView: NSView {
         characterSelectionStore: CharacterSelectionStore,
         databaseBaseURL: URL,
         sessionRevision: Int,
-        restartRequest: TerminalRestartRequest?
+        restartRequest: TerminalRestartRequest?,
+        workspaceLayout: ConversationLayoutStore? = nil
     ) {
         self.characterSelectionStore = characterSelectionStore
         self.databaseBaseURL = databaseBaseURL
         self.sessionRevision = sessionRevision
+        self.workspaceLayout = workspaceLayout
         if self.selectedCharacterID != selectedCharacterID {
             selectionWillChange(to: selectedCharacterID)
         }
+        updateVisibleEntries()
         if
             let restartRequest,
             cachePolicy.shouldRestart(
@@ -237,31 +262,32 @@ final class CachedTerminalWorkspacesNSView: NSView {
     private func selectionWillChange(to character: OfficeCharacter?) {
         selectedCharacterID = character
         _ = cachePolicy.select(character)
-        for (id, entry) in entries {
-            entry.isHidden = id != character
-        }
         guard let character else { return }
-        if entries[character] == nil {
-            guard let databaseBaseURL else { return }
-            let entry = TerminalProcessHostView(
-                character: character,
-                databaseBaseURL: databaseBaseURL
-            )
-            entry.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(entry)
-            NSLayoutConstraint.activate([
-                entry.leadingAnchor.constraint(equalTo: leadingAnchor),
-                entry.trailingAnchor.constraint(equalTo: trailingAnchor),
-                entry.topAnchor.constraint(equalTo: topAnchor),
-                entry.bottomAnchor.constraint(equalTo: bottomAnchor),
-            ])
-            entries[character] = entry
-            if startsProcesses {
-                entry.start()
-            }
-        }
+        updateVisibleEntries()
         focusSelectedTerminal(character)
         completeSelectionLoading(for: character)
+    }
+
+    private func updateVisibleEntries() {
+        let visible = workspaceLayout?.visible ?? Set([selectedCharacterID].compactMap { $0 })
+        for (id, entry) in entries { entry.isHidden = !visible.contains(id) }
+        for character in visible where entries[character] == nil {
+            guard let databaseBaseURL else { continue }
+            let entry = TerminalProcessHostView(character: character, databaseBaseURL: databaseBaseURL)
+            entry.shouldFocus = { [weak self] in self?.selectedCharacterID == character }
+            entries[character] = entry
+            addSubview(entry)
+            entry.frame = workspaceLayout?.frames(in: bounds)[character] ?? bounds
+            if startsProcesses { entry.start() }
+        }
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        for (character, entry) in entries where !entry.isHidden {
+            entry.frame = workspaceLayout?.frames(in: bounds)[character] ?? bounds
+        }
     }
 
     // 직원을 바꾸면 그 직원의 터미널로 키보드 포커스를 옮겨, 곧바로 커서에
@@ -297,6 +323,8 @@ final class CachedTerminalWorkspacesNSView: NSView {
     }
 
     func tearDown() {
+        if let inputMonitor { NSEvent.removeMonitor(inputMonitor) }
+        inputMonitor = nil
         if inputSinkOwner?.terminalInputSink === self {
             inputSinkOwner?.terminalInputSink = nil
         }
@@ -330,6 +358,7 @@ private final class TerminalProcessHostView:
     NSView,
     @preconcurrency LocalProcessTerminalViewDelegate
 {
+    var shouldFocus: () -> Bool = { true }
     private let character: OfficeCharacter
     private let database: OfficeDatabaseClient
     private var terminal: APIProcessTerminalView?
@@ -337,6 +366,7 @@ private final class TerminalProcessHostView:
     private var launchTask: Task<Void, Never>?
     private var generation = 0
     private var isTerminating = false
+    private var didRequestSession = false
     private var applicationTerminationObserver: NSObjectProtocol?
 
     private lazy var statusLabel: NSTextField = {
@@ -399,6 +429,7 @@ private final class TerminalProcessHostView:
     }
 
     func start() {
+        didRequestSession = true
         generation &+= 1
         let requestedGeneration = generation
         launchTask?.cancel()
@@ -467,8 +498,10 @@ private final class TerminalProcessHostView:
         terminal?.processDelegate = nil
         terminal?.terminate()
         terminal = nil
-        Task { [database, character] in
-            try? await database.closeTerminalSession(character: character)
+        if didRequestSession {
+            Task { [database, character] in
+                try? await database.closeTerminalSession(character: character)
+            }
         }
     }
 
@@ -512,12 +545,13 @@ private final class TerminalProcessHostView:
         // 시작이 끝났을 때 이 호스트가 숨어 있으면(그 사이 다른 직원으로
         // 넘어갔다면) 포커스를 뺏지 않는다.
         if !isHidden {
-            window?.makeFirstResponder(terminal)
+            if shouldFocus() { window?.makeFirstResponder(terminal) }
         }
     }
 
     // 이미 프로세스가 붙어 있는 터미널로 키보드 포커스를 옮긴다.
     func focusTerminal() {
+        guard shouldFocus() else { return }
         guard let terminal else { return }
         window?.makeFirstResponder(terminal)
     }

@@ -59,11 +59,45 @@ The final owner must verify coworkers' findings against source and tests, then p
 Only delete, deploy, restart services, or expand permissions when the user has authorized it.
 ```
 
+Use the **split button beside LIVE** to view two coworkers side by side in chat
+or terminal mode. Choose the right coworker on first use; later splits restore
+the last right coworker. Click a pane's content to select that coworker and
+target the shared composer, then use the bottom coworker selector to change coworkers. Drafts and
+attachments stay with each coworker; hovering and scrolling do not change the
+input target. A thin gradient line with a moving highlight along the bottom identifies
+the focused pane; Reduce Motion uses a static gradient. While a
+new conversation loads, a loading indicator is shown and further coworker
+switches are temporarily blocked. Drag the inner divider to
+adjust widths. Merging keeps the current input target's conversation and leaves
+running work intact. The outer office/conversation width stays under your control.
+
+Type `@` and choose a teammate, or drag an office character or teammate selector
+into the composer. Multiple recipients are saved per employee and remain selected
+after sending, switching views, or restarting. Manage recipients and pause forwarding
+from **Auto-forward** in the conversation header. Pausing holds pending deliveries;
+replies already started continue. The app forwards final replies with the correct
+sender, without model API calls. Replies to other employees use the responding
+employee's own saved recipients, so reciprocal selections continue the conversation.
+GUI, terminal, and queued turns use the same settings. No selection means no forwarding.
+Pending deliveries wait while the recipient is busy and can be cancelled without
+stopping either employee. Failed, interrupted, or confirmation-required replies
+are not sent. Unsent pending deliveries survive backend restarts; an uncertain
+receipt is shown for review rather than automatically replayed.
+
 At launch, OFFICESTRA automatically adds the exact `senderCharacterId` guidance
 for that coworker. It is display attribution for the message bubble, not proof
 of authority. A delegated request must also name the **coworker ID that should
 receive the reply**. Prefer one result-bearing reply over an endless exchange of
 acknowledgements.
+
+Check `canReceive` at `GET /api/agent-jobs?characterId=RECIPIENT_ID` for the
+recipient's current availability. A work record's `lifecycleState: active` means
+the record is retained; an active session means the conversation is open. Neither
+means a turn is running. Running, pending, preparing, and compacting work still
+blocks another execution. Preserve completed records. The sender is the current
+employee and the recipient is the other employee. Never use DELETE to resolve a
+409: `DELETE /api/agent-jobs/{characterId}` interrupts real work, rather than
+cleaning up records. This distinction is also included in employee launch guidance.
 
 ## New models arrive automatically. You choose.
 

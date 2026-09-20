@@ -2,6 +2,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { resolveLocalCharacter, snapshotLocalTurn, validateLocalResume } from './local-provider-service.mjs';
+import { recordReplyDelivery, replyRoutingPrompt } from './reply-delivery.mjs';
 import { once } from "node:events";
 import {
   accessSync,
@@ -433,6 +434,40 @@ export class AgentRuntime {
     return result.rowCount;
   }
 
+  // Read-only preflight for employee messages. Record lifecycle and an open CLI
+  // session do not reserve an execution slot. POST remains authoritative because
+  // another request may start between this snapshot and message submission.
+  async messageAvailability(characterID = null) {
+    const result = await this.pool.query(`
+      SELECT character.id AS "characterId", character.name,
+        EXISTS (SELECT 1 FROM active_cli_sessions active
+          JOIN cli_sessions session ON session.id = active.cli_session_id
+          WHERE active.character_id = character.id AND session.ended_at IS NULL) AS "sessionOpen",
+        busy.id AS "turnId", busy.status AS "turnStatus"
+      FROM characters character
+      LEFT JOIN LATERAL (
+        SELECT turn.id, turn.status FROM turns turn
+        JOIN cli_sessions session ON session.id = turn.cli_session_id
+        WHERE session.character_id = character.id AND turn.status IN ('pending', 'running')
+        ORDER BY turn.started_at DESC, turn.id DESC LIMIT 1
+      ) busy ON true
+      WHERE ($1::text IS NULL OR character.id = $1)
+      ORDER BY character.id
+    `, [characterID]);
+    return result.rows.map(row => {
+      const id = row.characterId;
+      const terminal = this.terminalSessionRegistry?.sessions?.get(id);
+      let state = 'ready';
+      if (this.draining) state = 'draining';
+      else if (this.compactingCharacters.has(id)) state = 'compacting';
+      else if (this.running.has(id) || terminal?.runningTurnID || row.turnStatus === 'running') state = 'running';
+      else if (this.preparingCharacters.has(id) || this.terminalSessionRegistry?.opening?.has(id)) state = 'preparing';
+      else if (terminal?.closed || terminal?.closing) state = 'closing';
+      else if (terminal?.dispatch || row.turnStatus === 'pending') state = 'pending';
+      return {...row, state, canReceive:state === 'ready'};
+    });
+  }
+
   async start(options) {
     if (this.draining) {
       throw new AgentDrainingError(
@@ -472,6 +507,8 @@ export class AgentRuntime {
     conversationID,
     attachmentPaths = [],
     senderCharacterID = null,
+    replyRecipientID = null,
+    deliveryID = null,
   }) {
     const cleanPrompt = String(prompt ?? "").trim();
     if (!cleanPrompt && attachmentPaths.length === 0) {
@@ -495,6 +532,8 @@ export class AgentRuntime {
         conversationID: conversationID || randomUUID(),
         isolateGitWorkdir: false,
         senderCharacterID,
+        replyRecipientID,
+        deliveryID,
       });
       const recordPrompt = cleanPrompt || "첨부 파일을 확인해줘.";
       attachments = stageAttachments({
@@ -512,7 +551,8 @@ export class AgentRuntime {
         ...prepared,
         prompt: effectivePrompt,
         recordPrompt: effectivePrompt,
-        executionPrompt: effectivePrompt,
+        executionPrompt: replyRoutingPrompt(effectivePrompt,{characterID,replyRecipientID,
+          replyRecipientIDs:prepared.replyRecipientIDs??[],deliveryID,senderCharacterID}),
         workspace: null,
         workspaceID: null,
         workdir: this.workdir,
@@ -1027,6 +1067,8 @@ export class AgentRuntime {
     conversationID,
     isolateGitWorkdir = false,
     senderCharacterID = null,
+    replyRecipientID = null,
+    deliveryID = null,
   }) {
     return this.withTransaction(async (client) => {
       await client.query(
@@ -1260,9 +1302,11 @@ export class AgentRuntime {
       );
 
       await snapshotLocalTurn(client, turnID, character);
+      const replyRecipientIDs=await recordReplyDelivery(client, {turnID,characterID,replyRecipientID,deliveryID});
 
       return {
         turnID,
+        replyRecipientIDs,
         sessionID,
         conversationID: effectiveConversationID,
         externalSessionID,
@@ -1282,7 +1326,7 @@ export class AgentRuntime {
     if (state.character.localProfile) {
       if (!this.localProviders) throw new Error('Local provider service unavailable');
       if (state.character.backend === 'claude' && state.externalSessionID) prepareClaudeSessionResume({sessionID:state.externalSessionID,workdir:state.workdir,previousWorkdir:state.resumeExecutionWorkdir});
-      const spec = await this.localProviders.launch({character:state.character,mode:'gui',prompt:state.executionPrompt ?? state.prompt,previousSessionID:state.externalSessionID,workdir:state.workdir});
+      const spec = await this.localProviders.launch({character:state.character,mode:'gui',prompt:state.executionPrompt ?? state.prompt,previousSessionID:state.externalSessionID,attachments:state.attachments,workdir:state.workdir});
       try { await this.executeSingleProcess(state, spec); }
       finally { await spec.release(); }
       return;
@@ -1708,6 +1752,8 @@ export class AgentRuntime {
     startedAt = new Date(),
     execution = null,
     senderCharacterID = null,
+    replyRecipientID = null,
+    deliveryID = null,
   }) {
     const cleanPrompt = String(prompt ?? "").trim();
     if (!cleanPrompt) throw new Error("터미널 프롬프트가 비어 있습니다.");
@@ -1774,6 +1820,7 @@ export class AgentRuntime {
         [turnID, cleanPrompt],
       );
       await snapshotLocalTurn(client, turnID, settings);
+      await recordReplyDelivery(client, {turnID,characterID,replyRecipientID,deliveryID});
       return settings;
     });
     this.broadcast({ type: "feed.changed", turnId: turnID, characterId: characterID });

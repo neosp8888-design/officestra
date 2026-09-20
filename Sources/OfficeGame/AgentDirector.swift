@@ -231,6 +231,7 @@ final class LiveFeedStore: ObservableObject {
     private var characterStores: [String: CharacterLiveFeedStore] = [:]
     private var responseAnimations: [String: ResponseAnimationState] = [:]
     private(set) var selectedCharacterFeedID: String?
+    private(set) var visibleCharacterFeedIDs: Set<String> = []
 
     static let minimumTurnsPerCharacter = 10
 
@@ -355,26 +356,25 @@ final class LiveFeedStore: ObservableObject {
     }
 
     func selectCharacterFeed(_ characterID: String?) {
-        guard selectedCharacterFeedID != characterID else {
-            return
-        }
-        if let selectedCharacterFeedID {
-            discardTerminalResponseAnimations(
-                forCharacterID: selectedCharacterFeedID
-            )
-            characterStore(for: selectedCharacterFeedID)
-                .setPresented(false)
+        presentCharacterFeeds(Set([characterID].compactMap { $0 }), selected: characterID)
+    }
+
+    func presentCharacterFeeds(_ characterIDs: Set<String>, selected characterID: String?) {
+        for hidden in visibleCharacterFeedIDs.subtracting(characterIDs) {
+            discardTerminalResponseAnimations(forCharacterID: hidden)
+            characterStore(for: hidden).setPresented(false)
         }
         selectedCharacterFeedID = characterID
-        if let characterID {
-            characterStore(for: characterID).setPresented(true)
+        for visible in characterIDs.subtracting(visibleCharacterFeedIDs) {
+            characterStore(for: visible).setPresented(true)
         }
+        visibleCharacterFeedIDs = characterIDs
     }
 
     func refreshSelectedCharacterFeedAfterMount(
         _ characterID: String
     ) {
-        guard selectedCharacterFeedID == characterID else {
+        guard visibleCharacterFeedIDs.contains(characterID) else {
             return
         }
         characterStores[characterID]?.refreshPresentation()
@@ -570,7 +570,7 @@ final class LiveFeedStore: ObservableObject {
             }
             if turn.status != .completed
                 || turn.response.isEmpty
-                || animation.characterID != selectedCharacterFeedID
+                || !visibleCharacterFeedIDs.contains(animation.characterID)
             {
                 return turnID
             }
@@ -591,7 +591,7 @@ final class LiveFeedStore: ObservableObject {
             let (turnID, animation) = element
             guard
                 animation.animatesInitialSource,
-                animation.characterID != selectedCharacterFeedID,
+                !visibleCharacterFeedIDs.contains(animation.characterID),
                 let turn = turnsByID[turnID],
                 turn.status.isRunning,
                 !restoredTurnAnimatesInitialSource(turn)
@@ -774,6 +774,15 @@ final class AgentDirector: ObservableObject {
     /// 응답 생성 중에 미리 걸어 둔 다음 업무다. 직원마다 최대 3개.
     @Published private(set) var queuedCommands:
         [OfficeCharacter: QueuedCommandQueue] = [:]
+    @Published var replyRecipients: [OfficeCharacter: Set<OfficeCharacter>] = [:]
+    @Published private(set) var pausedReplyRoutes: Set<OfficeCharacter> = []
+    @Published private(set) var savingReplyRoutes: Set<OfficeCharacter> = []
+    @Published private(set) var replyRouteError: String?
+    private var replyRouteSaveTasks: [OfficeCharacter: Task<Void, Never>] = [:]
+    private var replyRouteRevisions: [OfficeCharacter: UUID] = [:]
+    private var confirmedReplyRoutes: [OfficeCharacter: ReplyRoute] = [:]
+    private var failedReplyRouteSaves: Set<OfficeCharacter> = []
+    private var replyRouteRefreshID = UUID()
     @Published private(set) var failedCharacters:
         [OfficeCharacter: String] = [:]
     @Published private(set) var offDutyCharacters:
@@ -810,17 +819,20 @@ final class AgentDirector: ObservableObject {
     let archiveFeedStore = ArchiveFeedStore()
     let speechBubbleStore = SpeechBubbleStore()
     let characterSelectionStore = CharacterSelectionStore()
+    let conversationLayout: ConversationLayoutStore
+    let employeeComposerStore = EmployeeComposerStore()
 
     var selectedCharacterID: OfficeCharacter? {
         get {
             characterSelectionStore.selectedCharacterID
         }
         set {
+            conversationLayout.select(newValue)
+            liveFeedStore.presentCharacterFeeds(Set(conversationLayout.visible.map(\.rawValue)), selected: newValue?.rawValue)
             guard characterSelectionStore.selectedCharacterID != newValue
             else {
                 return
             }
-            liveFeedStore.selectCharacterFeed(newValue?.rawValue)
             characterSelectionStore.select(newValue)
         }
     }
@@ -1122,8 +1134,10 @@ final class AgentDirector: ObservableObject {
         startBackgroundTasks: Bool = true,
         workspaceDirectory: String? = nil,
         availableBackends: Set<AgentBackend>? = nil,
-        executablePaths: [AgentBackend: String] = [:]
+        executablePaths: [AgentBackend: String] = [:],
+        conversationDefaults: UserDefaults? = .standard
     ) {
+        conversationLayout = ConversationLayoutStore(defaults: conversationDefaults)
         do {
             let loadedConfiguration = try CharacterConfigurationAsset.load()
             if let workspaceDirectory {
@@ -1351,10 +1365,23 @@ final class AgentDirector: ObservableObject {
         speechBubbleStore.remove(for: character)
     }
 
-    func select(_ character: CharacterConfiguration) {
+    func toggleConversationSplit() {
+        conversationLayout.toggle(current: selectedCharacterID)
+        liveFeedStore.presentCharacterFeeds(Set(conversationLayout.visible.map(\.rawValue)), selected: selectedCharacterID?.rawValue)
+    }
+
+    func chooseConversationCharacter(_ characterID: OfficeCharacter, in pane: ConversationPane, focusesComposer: Bool = true) {
+        guard characterSelectionStore.canSelect(characterID),
+              let character = characters.first(where: { $0.id == characterID }) else { return }
+        conversationLayout.choose(characterID, in: pane)
+        select(character, focusesComposer: focusesComposer)
+    }
+
+    func select(_ character: CharacterConfiguration, focusesComposer: Bool = true) {
         guard characterSelectionStore.canSelect(character.id) else {
             return
         }
+        employeeComposerStore.focusesComposerOnSelection = focusesComposer
         hasUserChosenCharacter = true
         var remainingCompletedCharacters =
             unreviewedCompletedCharacters
@@ -1365,7 +1392,9 @@ final class AgentDirector: ObservableObject {
         if remainingCompletedCharacters != unreviewedCompletedCharacters {
             unreviewedCompletedCharacters = remainingCompletedCharacters
         }
-        contextCompactionNotices[character.id] = nil
+        if contextCompactionNotices[character.id] != nil {
+            contextCompactionNotices[character.id] = nil
+        }
         selectedCharacterID = character.id
         let shouldShowReadyBubble =
             pendingQuestions[character.id] == nil
@@ -1386,6 +1415,7 @@ final class AgentDirector: ObservableObject {
         _ prompt: String,
         attachmentPaths: [String] = [],
         to requestedCharacter: OfficeCharacter? = nil,
+        replyRecipient: OfficeCharacter? = nil,
         onRequestFinished: (() -> Void)? = nil,
         onSubmissionFailed: (() -> Void)? = nil
     ) {
@@ -1479,7 +1509,8 @@ final class AgentDirector: ObservableObject {
                     character: character.id,
                     prompt: prompt,
                     conversationID: conversationID,
-                    attachmentPaths: attachmentPaths
+                    attachmentPaths: attachmentPaths,
+                    replyRecipient: replyRecipient
                 )
                 conversationIDs[character.id] = started.conversationId
                 await synchronizeActiveSession(for: character.id)
@@ -1640,6 +1671,7 @@ final class AgentDirector: ObservableObject {
     func enqueueCommand(
         _ prompt: String,
         attachments: [PendingAttachment] = [],
+        replyRecipient: OfficeCharacter? = nil,
         for character: OfficeCharacter
     ) -> Bool {
         let trimmed = prompt.trimmingCharacters(
@@ -1657,13 +1689,24 @@ final class AgentDirector: ObservableObject {
         var queue = queuedCommands[character] ?? QueuedCommandQueue()
         guard
             queue.enqueue(
-                QueuedCommand(prompt: trimmed, attachments: attachments)
+                QueuedCommand(prompt: trimmed, attachments: attachments, replyRecipient: replyRecipient)
             )
         else {
             return false
         }
         queuedCommands[character] = queue
         return true
+    }
+
+    func cancelReplyDelivery(sourceTurnID: String) {
+        Task {
+            do {
+                try await database.cancelReplyDelivery(sourceTurnID: sourceTurnID)
+                scheduleRealtimeFeedRefresh(turnID: sourceTurnID)
+            } catch {
+                realtimeConnectionError = error.localizedDescription
+            }
+        }
     }
 
     func cancelQueuedCommand(
@@ -1715,7 +1758,7 @@ final class AgentDirector: ObservableObject {
             return
         }
         queuedCommands[character] = queue
-        if let sink = terminalInputSink {
+        if let sink = terminalInputSink, next.replyRecipient == nil {
             // 터미널 모드에서는 예약을 CLI에 타이핑한 것처럼 보낸다. 첨부는
             // 경로를 이어 적어 CLI가 직접 읽게 한다. 그 직원의 터미널이 없어
             // 전달이 안 되면 예약을 되돌려 적어 둔 업무가 사라지지 않게 한다.
@@ -1732,6 +1775,7 @@ final class AgentDirector: ObservableObject {
             next.prompt,
             attachmentPaths: next.attachments.map(\.stagedURL.path),
             to: character,
+            replyRecipient: next.replyRecipient,
             onRequestFinished: { [weak self] in
                 self?.releaseStagedAttachments(next.attachments)
             },
@@ -2358,6 +2402,7 @@ final class AgentDirector: ObservableObject {
                     )
                 }
                 autoCompactPercents = restoredAutoCompactPercents
+                await refreshReplyRoutes()
 
                 if let snapshot = try? await database.fetchModelCatalog() {
                     applyModelCatalogSnapshot(snapshot)
@@ -2496,6 +2541,7 @@ final class AgentDirector: ObservableObject {
         switch event.type {
         case "ready":
             Task { [weak self] in
+                await self?.refreshReplyRoutes()
                 await self?.refreshLocalProviderStatuses()
                 try? await self?.refreshModelCatalog()
             }
@@ -2591,6 +2637,10 @@ final class AgentDirector: ObservableObject {
             terminalSessionRevision &+= 1
             return true
 
+        case "reply-routes.changed":
+            Task { [weak self] in await self?.refreshReplyRoutes() }
+            return true
+
         case "local.changed":
             Task { [weak self] in await self?.refreshLocalProviderStatuses() }
             return true
@@ -2606,16 +2656,105 @@ final class AgentDirector: ObservableObject {
         }
     }
 
+    func refreshReplyRoutes() async {
+        let refreshID = UUID()
+        replyRouteRefreshID = refreshID
+        let revisions = replyRouteRevisions
+        do {
+            let routes = try await database.fetchReplyRoutes()
+            guard replyRouteRefreshID == refreshID else { return }
+            if failedReplyRouteSaves.isEmpty { replyRouteError = nil }
+            for route in routes {
+                guard let character = OfficeCharacter(rawValue: route.characterId),
+                      !savingReplyRoutes.contains(character),
+                      revisions[character] == replyRouteRevisions[character] else { continue }
+                confirmedReplyRoutes[character] = route
+                applyReplyRoute(route, for: character)
+            }
+        } catch {
+            guard replyRouteRefreshID == refreshID else { return }
+            replyRouteError = OfficeLocalization.string("자동 전달 설정을 불러오지 못했습니다. 백엔드를 재시작한 뒤 다시 확인하세요.")
+        }
+    }
+
+    private func applyReplyRoute(_ route: ReplyRoute, for character: OfficeCharacter) {
+        replyRecipients[character] = Set(route.recipientIds.compactMap(OfficeCharacter.init(rawValue:)))
+        if route.paused { pausedReplyRoutes.insert(character) }
+        else { pausedReplyRoutes.remove(character) }
+    }
+
+    func setReplyRecipient(_ recipient: OfficeCharacter, selected: Bool, for source: OfficeCharacter) {
+        guard recipient != source else { return }
+        var recipients = replyRecipients[source] ?? []
+        if selected { recipients.insert(recipient) } else { recipients.remove(recipient) }
+        guard recipients != replyRecipients[source] ?? [] else { return }
+        replyRecipients[source] = recipients
+        saveReplyRoute(for: source)
+    }
+
+    func toggleReplyRoutePause(for source: OfficeCharacter) {
+        if pausedReplyRoutes.contains(source) { pausedReplyRoutes.remove(source) }
+        else { pausedReplyRoutes.insert(source) }
+        saveReplyRoute(for: source)
+    }
+
+    func waitForReplyRouteSave(for source: OfficeCharacter) async -> Bool {
+        while let task = replyRouteSaveTasks[source] { await task.value }
+        return !failedReplyRouteSaves.contains(source)
+    }
+
+    private func saveReplyRoute(for source: OfficeCharacter) {
+        let route = ReplyRoute(characterId: source.rawValue,
+            recipientIds: (replyRecipients[source] ?? []).map(\.rawValue).sorted(),
+            paused: pausedReplyRoutes.contains(source))
+        let revision = UUID()
+        replyRouteRevisions[source] = revision
+        savingReplyRoutes.insert(source)
+        failedReplyRouteSaves.remove(source)
+        replyRouteError = nil
+        let previous = replyRouteSaveTasks[source]
+        replyRouteSaveTasks[source] = Task { [weak self] in
+            await previous?.value
+            guard let self else { return }
+            do {
+                let saved = try await database.saveReplyRoute(route)
+                confirmedReplyRoutes[source] = saved
+            }
+            catch {
+                if replyRouteRevisions[source] == revision {
+                    replyRouteError = error.localizedDescription
+                    failedReplyRouteSaves.insert(source)
+                    applyReplyRoute(confirmedReplyRoutes[source] ?? ReplyRoute(characterId: source.rawValue, recipientIds: [], paused: false), for: source)
+                }
+            }
+            if replyRouteRevisions[source] == revision {
+                savingReplyRoutes.remove(source)
+                replyRouteSaveTasks[source] = nil
+                await refreshReplyRoutes()
+            }
+        }
+    }
+
     func refreshLocalProviderStatuses() async {
         if let catalog = try? await database.fetchLocalProviderCatalog() {
-            localProviderStatuses = catalog.statuses
-            localModelOptions = (catalog.profiles ?? []).filter(\.enabled)
-            localProfileAssignments = Dictionary((catalog.assignments ?? []).map { ($0.characterId, $0.profileId) }, uniquingKeysWith: { _, last in last })
-            localReasoningSelections = Dictionary((catalog.assignments ?? []).map { ($0.characterId, $0.reasoning ?? "default") }, uniquingKeysWith: { _, last in last })
-            localHostAddresses = Dictionary((catalog.assignments ?? []).compactMap { assignment in
-                assignment.address.map { (assignment.characterId, $0) }
-            }, uniquingKeysWith: { _, last in last })
+            applyLocalProviderCatalog(catalog)
         }
+    }
+
+    func applyLocalProviderCatalog(_ catalog: LocalProviderList) {
+        // Repeated status responses must not invalidate the entire office when
+        // only a local-model poll has completed and its values are unchanged.
+        if localProviderStatuses != catalog.statuses { localProviderStatuses = catalog.statuses }
+        let options = (catalog.profiles ?? []).filter(\.enabled)
+        if localModelOptions != options { localModelOptions = options }
+        let assignments = Dictionary((catalog.assignments ?? []).map { ($0.characterId, $0.profileId) }, uniquingKeysWith: { _, last in last })
+        if localProfileAssignments != assignments { localProfileAssignments = assignments }
+        let reasoning = Dictionary((catalog.assignments ?? []).map { ($0.characterId, $0.reasoning ?? "default") }, uniquingKeysWith: { _, last in last })
+        if localReasoningSelections != reasoning { localReasoningSelections = reasoning }
+        let addresses = Dictionary((catalog.assignments ?? []).compactMap { assignment in
+            assignment.address.map { (assignment.characterId, $0) }
+        }, uniquingKeysWith: { _, last in last })
+        if localHostAddresses != addresses { localHostAddresses = addresses }
     }
 
     func localProfileID(for character: OfficeCharacter) -> String? {

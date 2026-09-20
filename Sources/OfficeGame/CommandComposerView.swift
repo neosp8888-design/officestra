@@ -148,6 +148,7 @@ enum CommandComposerLayout {
 
 struct CommandEntryRow: View {
     @ObservedObject var director: AgentDirector
+    @ObservedObject private var composerStore: EmployeeDraftStore
     let placeholder: String
     let attachmentCount: Int
     let isPreparingAttachments: Bool
@@ -156,8 +157,26 @@ struct CommandEntryRow: View {
     let onChooseAttachments: () -> Void
     let onSubmit: (String) -> Bool
 
-    @State private var draft = CommandEntryDraft()
     @State private var composerHeight = CommandComposerLayout.minimumHeight
+    @State private var isSubmittingMentions = false
+
+    init(director: AgentDirector, placeholder: String, attachmentCount: Int,
+         isPreparingAttachments: Bool, supportsAttachments: Bool = true,
+         onChooseAttachments: @escaping () -> Void, onSubmit: @escaping (String) -> Bool) {
+        self.director = director
+        self.placeholder = placeholder
+        self.attachmentCount = attachmentCount
+        self.isPreparingAttachments = isPreparingAttachments
+        self.supportsAttachments = supportsAttachments
+        self.onChooseAttachments = onChooseAttachments
+        self.onSubmit = onSubmit
+        _composerStore = ObservedObject(wrappedValue: director.employeeComposerStore.draftStore)
+    }
+
+    private var draft: CommandEntryDraft {
+        get { composerStore.drafts[director.selectedCharacterID ?? .boss] ?? CommandEntryDraft() }
+        nonmutating set { composerStore.drafts[director.selectedCharacterID ?? .boss] = newValue }
+    }
 
     private var availability: CommandEntryAvailability {
         CommandEntryAvailability(
@@ -176,7 +195,8 @@ struct CommandEntryRow: View {
         draft.submissionPrompt(
             hasAttachments: attachmentCount > 0,
             isSubmissionAllowed:
-                availability.acceptsInput && !isPreparingAttachments
+                availability.acceptsInput && !isPreparingAttachments && !isSubmittingMentions
+                    && !director.savingReplyRoutes.contains(director.selectedCharacterID ?? .boss)
         )
     }
 
@@ -208,7 +228,9 @@ struct CommandEntryRow: View {
 
     var body: some View {
         let canSubmit = submissionPrompt != nil
+        let inputCharacter = director.selectedCharacterID ?? .boss
 
+        VStack(alignment: .leading, spacing: 7) {
         HStack(spacing: 9) {
             if supportsAttachments {
                 Button(action: onChooseAttachments) {
@@ -236,14 +258,29 @@ struct CommandEntryRow: View {
             }
 
             CommandComposerView(
-                text: $draft.text,
+                text: Binding(
+                    get: { composerStore.drafts[inputCharacter]?.text ?? "" },
+                    set: { composerStore.drafts[inputCharacter, default: CommandEntryDraft()].text = $0 }
+                ),
                 measuredHeight: $composerHeight,
                 placeholder: placeholder,
                 isEnabled:
                     director.isReadyForSubmissions
                         && !director.isUpdatingConfiguration,
-                onSubmit: submitDraft
+                mentions: director.characters.filter { $0.id != director.selectedCharacterID }.map {
+                    EmployeeMention(id: $0.id, name: director.displayName(for: $0.id))
+                },
+                onMention: { recipient in
+                    guard let source = director.selectedCharacterID, source == inputCharacter else { return }
+                    director.setReplyRecipient(recipient, selected: true, for: source)
+                },
+                focusOnMount: supportsAttachments && director.employeeComposerStore.focusesComposerOnSelection,
+                onSubmit: {
+                    guard director.selectedCharacterID == inputCharacter else { return false }
+                    return submitDraft()
+                }
             )
+            .id(director.selectedCharacterID)
             .frame(height: composerHeight)
 
             if director.isSelectedCharacterRunning {
@@ -318,6 +355,7 @@ struct CommandEntryRow: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(Color.primary.opacity(0.07))
         }
+        }
     }
 
     @discardableResult
@@ -325,9 +363,69 @@ struct CommandEntryRow: View {
         guard let submissionPrompt else {
             return false
         }
+        if let source = director.selectedCharacterID {
+            let candidates = director.characters.filter { $0.id != source }.map {
+                EmployeeMention(id: $0.id, name: director.displayName(for: $0.id))
+            }
+            let recipients = EmployeeMention.recipients(in: submissionPrompt, candidates: candidates)
+            let additions = recipients.subtracting(director.replyRecipients[source] ?? [])
+            if !additions.isEmpty {
+                let originalDraft = draft.text
+                isSubmittingMentions = true
+                for recipient in additions { director.setReplyRecipient(recipient, selected: true, for: source) }
+                Task { @MainActor in
+                    let saved = await director.waitForReplyRouteSave(for: source)
+                    isSubmittingMentions = false
+                    guard saved, director.selectedCharacterID == source, draft.text == originalDraft,
+                          (director.replyRecipients[source] ?? []).isSuperset(of: recipients) else { return }
+                    draft.clearAfterSubmission(accepted: onSubmit(submissionPrompt))
+                }
+                return false
+            }
+        }
         let accepted = onSubmit(submissionPrompt)
         draft.clearAfterSubmission(accepted: accepted)
         return accepted
+    }
+}
+
+struct ReplyDeliveryStatusView: View {
+    @ObservedObject var store: LiveFeedStore
+    let character: OfficeCharacter
+    let onCancel: (String) -> Void
+
+    private var displayedTurn: LiveFeedTurn? {
+        let turns = store.turns(for: character.rawValue).filter { !deliveries(for: $0).isEmpty }
+        return turns.first { deliveries(for: $0).contains { ["pending", "sending", "uncertain"].contains($0.status) } }
+            ?? turns.first
+    }
+
+    private func deliveries(for turn: LiveFeedTurn) -> [ReplyDelivery] {
+        turn.replyDeliveries ?? turn.replyDelivery.map { [$0] } ?? []
+    }
+
+    var body: some View {
+        if let turn = displayedTurn {
+          ForEach(deliveries(for: turn), id: \.recipientId) { delivery in
+            let status = delivery.status == "delivered" ? "전달 완료"
+                : delivery.status == "uncertain" ? "전달 확인 필요"
+                : delivery.status == "failed" ? "전달 실패"
+                : delivery.status == "cancelled" ? "전달 취소"
+                : delivery.status == "sending" ? "전달 중"
+                : turn.status == .running ? "답변 후 전달" : "전달 대기"
+            HStack(spacing: 6) {
+            Label("\(OfficeLocalization.string(status)) · @\(delivery.recipientName)",
+                  systemImage: delivery.status == "delivered" ? "checkmark.circle" : "paperplane")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(delivery.status == "failed" ? Color.red : Color.secondary)
+                .help(delivery.error ?? OfficeLocalization.string("상대 직원이 바쁘면 자동으로 기다립니다"))
+            }
+          }
+          if deliveries(for: turn).contains(where: { $0.status == "pending" }) {
+              Button(OfficeLocalization.string("이 답변의 대기 중인 전달 모두 취소")) { onCancel(turn.id) }
+                  .font(.caption)
+          }
+        }
     }
 }
 
@@ -444,6 +542,9 @@ struct CommandComposerView: NSViewRepresentable {
     @Binding var measuredHeight: CGFloat
     let placeholder: String
     let isEnabled: Bool
+    var mentions: [EmployeeMention] = []
+    var onMention: ((OfficeCharacter) -> Void)? = nil
+    var focusOnMount = false
     let onSubmit: () -> Bool
 
     func makeCoordinator() -> Coordinator {
@@ -495,9 +596,16 @@ struct CommandComposerView: NSViewRepresentable {
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
         textView.setAccessibilityLabel(OfficeLocalization.string("업무 입력"))
+        textView.registerForDraggedTypes(textView.registeredDraggedTypes + [EmployeeMention.pasteboardType])
         scrollView.documentView = textView
 
         updateTextView(textView)
+        if focusOnMount {
+            DispatchQueue.main.async { [weak textView] in
+                guard let textView, textView.isEditable else { return }
+                textView.window?.makeFirstResponder(textView)
+            }
+        }
         return scrollView
     }
 
@@ -517,6 +625,8 @@ struct CommandComposerView: NSViewRepresentable {
 
     @discardableResult
     func updateTextView(_ textView: CommandComposerTextView) -> Bool {
+        textView.mentionCandidates = mentions
+        textView.onMention = onMention
         let textBinding = _text
         textView.onSubmit = { submittedText in
             if textBinding.wrappedValue != submittedText {
@@ -579,6 +689,7 @@ struct CommandComposerView: NSViewRepresentable {
                 return
             }
             (textView as? CommandComposerTextView)?.reportMeasuredHeight()
+            (textView as? CommandComposerTextView)?.refreshMentionSuggestions()
             guard parent.text != textView.string else {
                 return
             }
@@ -596,6 +707,10 @@ struct CommandComposerView: NSViewRepresentable {
             }
             parent.measuredHeight = newHeight
         }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            (notification.object as? CommandComposerTextView)?.refreshMentionSuggestions()
+        }
     }
 }
 
@@ -609,6 +724,12 @@ final class CommandComposerTextView: NSTextView {
     }
     var onSubmit: ((String) -> Bool)?
     var onMeasuredHeightChange: ((CGFloat) -> Void)?
+    var mentionCandidates: [EmployeeMention] = []
+    var onMention: ((OfficeCharacter) -> Void)?
+    var mentionPopover: NSPopover?
+    var mentionMatches: [EmployeeMention] = []
+    var mentionRange: NSRange?
+    var mentionIndex = 0
     private var discardsTextChangesUntilNextUserEdit = false
 
     func reportMeasuredHeight() {
@@ -618,6 +739,7 @@ final class CommandComposerTextView: NSTextView {
     }
 
     override func keyDown(with event: NSEvent) {
+        if handleMentionKey(event) { return }
         let isReturn = event.keyCode == 36 || event.keyCode == 76
         guard isReturn else {
             beginNextUserEdit()
@@ -668,6 +790,39 @@ final class CommandComposerTextView: NSTextView {
         // 이전 조합의 늦은 변경으로 오인해 즉시 지우게 된다.
         beginNextUserEdit()
         return super.readSelection(from: pasteboard, type: type)
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if sender.draggingPasteboard.types?.contains(EmployeeMention.pasteboardType) == true {
+            return isEditable && droppedMention(from: sender.draggingPasteboard) != nil ? .copy : []
+        }
+        return super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if sender.draggingPasteboard.types?.contains(EmployeeMention.pasteboardType) == true {
+            return draggingEntered(sender)
+        }
+        return super.draggingUpdated(sender)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        if sender.draggingPasteboard.types?.contains(EmployeeMention.pasteboardType) == true {
+            return isEditable && droppedMention(from: sender.draggingPasteboard) != nil
+        }
+        return super.prepareForDragOperation(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard sender.draggingPasteboard.types?.contains(EmployeeMention.pasteboardType) == true else {
+            return super.performDragOperation(sender)
+        }
+        guard isEditable, let mention = droppedMention(from: sender.draggingPasteboard) else { return false }
+        beginNextUserEdit()
+        let location = characterIndexForInsertion(at: convert(sender.draggingLocation, from: nil))
+        insertMention(mention, replacing: NSRange(location: location, length: 0))
+        window?.makeFirstResponder(self)
+        return true
     }
 
     /// 전송 성공 뒤 원격 입력기가 이전 조합의 마지막 음절을 다시 보내는

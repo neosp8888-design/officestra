@@ -4,6 +4,101 @@ import AppKit
 import QuartzCore
 import SwiftUI
 
+struct CoreAnimationFocusLine: NSViewRepresentable {
+    let isAnimated: Bool
+
+    func makeNSView(context: Context) -> CoreAnimationFocusLineNSView {
+        let view = CoreAnimationFocusLineNSView()
+        view.setAnimated(isAnimated)
+        return view
+    }
+
+    func updateNSView(_ view: CoreAnimationFocusLineNSView, context: Context) {
+        view.setAnimated(isAnimated)
+    }
+
+    static func dismantleNSView(_ view: CoreAnimationFocusLineNSView, coordinator: ()) {
+        view.setAnimated(false)
+    }
+}
+
+/// Only the two-pixel indicator animates; no timer or SwiftUI state drives frames.
+final class CoreAnimationFocusLineNSView: NSView {
+    private let track = CAGradientLayer()
+    private let shimmer = CAGradientLayer()
+    private var isAnimated = true
+    private var laidOutSize = CGSize.zero
+    private(set) var animationStarts = 0
+    var isShimmering: Bool { shimmer.animation(forKey: "officestra.focusFlow") != nil }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = true
+        let accent = NSColor(DashboardPalette.accent)
+        track.colors = [accent.withAlphaComponent(0.65).cgColor,
+                        NSColor.systemCyan.withAlphaComponent(0.75).cgColor,
+                        NSColor.systemPurple.withAlphaComponent(0.55).cgColor,
+                        accent.withAlphaComponent(0.65).cgColor]
+        shimmer.colors = [NSColor.clear.cgColor, NSColor.systemCyan.withAlphaComponent(0.8).cgColor,
+                          NSColor.white.cgColor, NSColor.systemCyan.withAlphaComponent(0.8).cgColor,
+                          NSColor.clear.cgColor]
+        for gradient in [track, shimmer] {
+            gradient.startPoint = CGPoint(x: 0, y: 0.5)
+            gradient.endPoint = CGPoint(x: 1, y: 0.5)
+            layer?.addSublayer(gradient)
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func layout() {
+        super.layout()
+        guard laidOutSize != bounds.size else { return }
+        laidOutSize = bounds.size
+        let bandWidth = min(160, max(48, bounds.width * 0.23))
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        track.frame = bounds
+        shimmer.frame = CGRect(x: -bandWidth, y: 0, width: bandWidth, height: bounds.height)
+        CATransaction.commit()
+        updateAnimation()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateAnimation()
+    }
+
+    func setAnimated(_ animated: Bool) {
+        guard isAnimated != animated else { return }
+        isAnimated = animated
+        updateAnimation()
+    }
+
+    private func updateAnimation() {
+        shimmer.removeAllAnimations()
+        guard isAnimated, window != nil, bounds.width > 0, shimmer.bounds.width > 0 else { return }
+        let travel = CABasicAnimation(keyPath: "transform.translation.x")
+        travel.fromValue = 0
+        travel.toValue = bounds.width + shimmer.bounds.width
+        let brightness = CAKeyframeAnimation(keyPath: "opacity")
+        brightness.values = [0.25, 1, 0.25]
+        brightness.keyTimes = [0, 0.5, 1]
+        let flow = CAAnimationGroup()
+        flow.duration = 2.4
+        travel.duration = flow.duration
+        brightness.duration = flow.duration
+        flow.animations = [travel, brightness]
+        flow.repeatCount = .infinity
+        flow.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        shimmer.add(flow, forKey: "officestra.focusFlow")
+        animationStarts += 1
+    }
+}
+
 struct CoreAnimationDotsView: NSViewRepresentable {
     let dotSize: CGFloat
     let spacing: CGFloat

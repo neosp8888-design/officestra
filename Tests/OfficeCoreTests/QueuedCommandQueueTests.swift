@@ -6,6 +6,17 @@ import XCTest
 
 @MainActor
 final class QueuedCommandQueueTests: XCTestCase {
+    func testReplyRecipientIsKeptWithItsQueuedPrompt() {
+        var queue = QueuedCommandQueue()
+        let command = QueuedCommand(prompt: "대화 이어가기", replyRecipient: .rightWoman)
+        XCTAssertTrue(queue.enqueue(command))
+        let taken = queue.removeFirst()!
+        XCTAssertEqual(taken.replyRecipient, .rightWoman)
+        queue.restoreToFront(taken)
+        XCTAssertEqual(queue.removeFirst()?.replyRecipient, .rightWoman)
+        XCTAssertNil(QueuedCommand(prompt: "내게만 답변").replyRecipient)
+    }
+
     func testQueueAcceptsAtMostThreeReservations() {
         var queue = QueuedCommandQueue()
 

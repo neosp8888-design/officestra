@@ -618,20 +618,11 @@ private struct OfficeGameView: View {
                 director: director,
                 conversationMode: conversationMode
             )
-            .task { await director.refreshLocalProviderStatuses() }
-
-            LocalModelControlBar(director: director, selection: director.characterSelectionStore)
 
             Divider()
                 .opacity(0.55)
 
-            Group {
-                if conversationMode == .terminal {
-                    CachedTerminalWorkspaces(director: director)
-                } else {
-                    CachedLiveWorkspaceFeeds(director: director)
-                }
-            }
+            ConversationWorkspaceView(director: director, layout: director.conversationLayout, mode: conversationMode)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             CharacterTurnCostFooter(
@@ -1024,77 +1015,164 @@ private struct OfficeGameView: View {
 
 }
 
-private struct LocalModelControlBar: View {
-    @ObservedObject var director: AgentDirector
-    @ObservedObject var selection: CharacterSelectionStore
-    @State private var failure: String?
+private enum LocalModelStateTint {
+    static let error = Color(red: 0.79, green: 0.26, blue: 0.24)
+    static let busy = Color(red: 0.80, green: 0.55, blue: 0.12)
+    static let ready = Color(red: 0.17, green: 0.60, blue: 0.35)
+    static let neutral = Color(nsColor: .secondaryLabelColor)
+}
+
+private struct LocalModelStatusChip: View {
+    let status: LocalProviderStatus?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var dotPulse = false
+
+    private var state: String {
+        status?.state ?? "idle"
+    }
+
+    private var isActive: Bool {
+        ["starting", "stopping", "waiting"].contains(state)
+    }
+
+    private var shortLabel: String {
+        switch state {
+        case "error":
+            return OfficeLocalization.string("오류")
+        case "starting":
+            return OfficeLocalization.string("준비 중")
+        case "stopping":
+            return OfficeLocalization.string("중지 중")
+        case "stopped":
+            return OfficeLocalization.string("중지됨")
+        case "ready":
+            return OfficeLocalization.string("준비됨")
+        case "waiting":
+            return OfficeLocalization.string("작업 대기")
+        default:
+            return OfficeLocalization.string("대기")
+        }
+    }
+
+    private var tint: Color {
+        switch state {
+        case "error":
+            LocalModelStateTint.error
+        case "starting", "stopping", "waiting":
+            LocalModelStateTint.busy
+        case "ready":
+            LocalModelStateTint.ready
+        default:
+            LocalModelStateTint.neutral
+        }
+    }
 
     var body: some View {
-        if let character = selection.selectedCharacterID,
-           let profileID = director.localProfileID(for: character) {
-            let status = LocalProviderStatus.selected(from: director.localProviderStatuses,
-                characterID: character.rawValue, profileID: profileID)
-            HStack(spacing: 8) {
-                Text(status?.displayText ?? OfficeLocalization.string("로컬 AI · 실행 대기"))
-                    .foregroundStyle(status?.state == "error" ? Color.orange : Color.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .help(status?.error ?? status?.displayText ?? "")
-                    .accessibilityIdentifier("localProviderStatus")
-                Spacer(minLength: 0)
-                Button {
-                    run("start", for: character)
-                } label: {
-                    Label(OfficeLocalization.string("모델 실행"), systemImage: "play.fill")
-                }
-                .disabled(status?.isLoaded == true || busy(status))
-                .accessibilityIdentifier("localModelStart")
-                Button {
-                    run("stop", for: character)
-                } label: {
-                    Label(OfficeLocalization.string("모델 중지"), systemImage: "stop.fill")
-                }
-                .disabled(status?.state == "stopped" || busy(status))
-                .help(OfficeLocalization.string("같은 모델을 사용하는 모든 직원의 생성을 중지하고 GPU 메모리를 해제합니다."))
-                .accessibilityIdentifier("localModelStop")
-            }
-            .font(.caption)
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 4)
-            .task {
-                while !Task.isCancelled {
-                    await director.refreshLocalProviderStatuses()
-                    do { try await Task.sleep(for: .seconds(5)) }
-                    catch { break }
-                }
-            }
-            .alert(OfficeLocalization.string("로컬 모델 제어"), isPresented: Binding(
-                get: { failure != nil }, set: { if !$0 { failure = nil } }
-            )) {
-                Button(OfficeLocalization.string("확인"), role: .cancel) { failure = nil }
-            } message: { Text(failure ?? "") }
+        HStack(spacing: 6) {
+            Circle()
+                .fill(tint)
+                .frame(width: 6, height: 6)
+                .scaleEffect(dotPulse ? 1.25 : 0.75)
+                .opacity(dotPulse ? 1.0 : 0.55)
+            Text(shortLabel)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(tint)
+                .lineLimit(1)
+                .fixedSize()
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 4)
+        .background(tint.opacity(0.10), in: Capsule())
+        .overlay(
+            Capsule()
+                .strokeBorder(tint.opacity(0.28), lineWidth: 1)
+        )
+        .help(status?.error ?? status?.displayText ?? shortLabel)
+        .accessibilityIdentifier("localProviderStatus")
+        .onAppear(perform: refreshPulse)
+        .onChange(of: state) { _, _ in
+            refreshPulse()
         }
     }
 
-    private func busy(_ status: LocalProviderStatus?) -> Bool {
-        director.isControllingLocalModel || status?.isChangingModel == true || !director.isReadyForSubmissions
+    private func refreshPulse() {
+        if isActive && !reduceMotion {
+            dotPulse = false
+            withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+                dotPulse = true
+            }
+        } else {
+            withAnimation(.easeOut(duration: 0.15)) {
+                dotPulse = false
+            }
+        }
+    }
+}
+
+private struct LocalModelIconButtonStyle: ButtonStyle {
+    enum Kind {
+        case start
+        case stop
     }
 
-    private func run(_ action: String, for character: OfficeCharacter) {
-        Task {
-            do { try await director.controlLocalModel(action, for: character) }
-            catch { failure = error.localizedDescription }
+    var kind: Kind
+    @Environment(\.isEnabled) private var isEnabled
+
+    private var fill: Color {
+        if !isEnabled {
+            return Color(nsColor: .tertiaryLabelColor).opacity(0.18)
         }
+        switch kind {
+        case .start:
+            return DashboardPalette.accent
+        case .stop:
+            return LocalModelStateTint.error.opacity(0.10)
+        }
+    }
+
+    private var foreground: Color {
+        if !isEnabled {
+            return Color(nsColor: .secondaryLabelColor)
+        }
+        switch kind {
+        case .start:
+            return .white
+        case .stop:
+            return LocalModelStateTint.error
+        }
+    }
+
+    private var stroke: Color {
+        kind == .stop && isEnabled
+            ? foreground.opacity(0.30)
+            : Color.clear
+    }
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 10, weight: .bold, design: .rounded))
+            .foregroundStyle(foreground)
+            .frame(width: 22, height: 22)
+            .background(fill, in: Circle())
+            .overlay(
+                Circle()
+                    .strokeBorder(stroke, lineWidth: 1)
+            )
+            .scaleEffect(configuration.isPressed ? 0.92 : 1)
+            .animation(
+                .spring(response: 0.22, dampingFraction: 0.72),
+                value: configuration.isPressed
+            )
     }
 }
 
 private struct LiveWorkspaceHeader: View {
     @ObservedObject private var director: AgentDirector
+    @ObservedObject private var conversationLayout: ConversationLayoutStore
     @ObservedObject private var characterSelectionStore:
         CharacterSelectionStore
     let conversationMode: OfficeConversationMode
+    @State private var localModelFailure: String?
 
     init(
         director: AgentDirector,
@@ -1102,6 +1180,7 @@ private struct LiveWorkspaceHeader: View {
     ) {
         self.director = director
         self.conversationMode = conversationMode
+        _conversationLayout = ObservedObject(wrappedValue: director.conversationLayout)
         _characterSelectionStore = ObservedObject(
             wrappedValue: director.characterSelectionStore
         )
@@ -1135,26 +1214,126 @@ private struct LiveWorkspaceHeader: View {
 
                 Spacer()
 
+                ReplyRoutingControl(director: director)
+
+                if let target = localModelTarget {
+                    HStack(spacing: 6) {
+                        LocalModelStatusChip(status: localModelStatus)
+                        Button {
+                            runLocalModelAction("start")
+                        } label: {
+                            Image(systemName: "play.fill")
+                        }
+                        .buttonStyle(LocalModelIconButtonStyle(kind: .start))
+                        .disabled(localModelStartDisabled)
+                        .help(OfficeLocalization.string("모델 실행"))
+                        .accessibilityIdentifier("localModelStart")
+                        Button {
+                            runLocalModelAction("stop")
+                        } label: {
+                            Image(systemName: "stop.fill")
+                        }
+                        .buttonStyle(LocalModelIconButtonStyle(kind: .stop))
+                        .disabled(
+                            localModelStatus?.state == "stopped"
+                                || localModelBusy
+                        )
+                        .help(OfficeLocalization.string("같은 모델을 사용하는 모든 직원의 생성을 중지하고 GPU 메모리를 해제합니다."))
+                        .accessibilityIdentifier("localModelStop")
+                    }
+                }
+
                 HStack(spacing: 5) {
                     Circle()
-                        .fill(
-                            director.isRealtimeConnected
-                                ? Color.green
-                                : Color.orange
-                        )
-                        .frame(width: 7, height: 7)
+                        .fill(liveBadgeColor)
+                        .frame(width: 6, height: 6)
                     Text(director.isRealtimeConnected ? "LIVE" : OfficeLocalization.string("연결 중"))
                 }
                 .font(.system(size: 10, weight: .bold, design: .rounded))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(liveBadgeColor)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .background(liveBadgeColor.opacity(0.10), in: Capsule())
+                .overlay(
+                    Capsule()
+                        .strokeBorder(liveBadgeColor.opacity(0.30), lineWidth: 1)
+                )
                 .help(
                     director.realtimeConnectionError
                         ?? OfficeLocalization.string("백엔드 WebSocket 실시간 연결")
                 )
+                Button { director.toggleConversationSplit() } label: {
+                    Image(systemName: conversationLayout.state.isSplit ? "rectangle" : "rectangle.split.2x1")
+                        .font(.system(size: 15, weight: .medium))
+                        .frame(width: 30, height: 30)
+                }
+                .buttonStyle(.plain)
+                .help(OfficeLocalization.string(conversationLayout.state.isSplit ? "대화 분할 해제" : "대화 좌우 분할"))
+                .accessibilityLabel(OfficeLocalization.string(conversationLayout.state.isSplit ? "대화 분할 해제" : "대화 좌우 분할"))
+                .accessibilityIdentifier("conversationSplitToggle")
             }
             .padding(.horizontal, 17)
             .padding(.vertical, 13)
+            .task {
+                while !Task.isCancelled {
+                    await director.refreshLocalProviderStatuses()
+                    do { try await Task.sleep(for: .seconds(5)) }
+                    catch { break }
+                }
+            }
+            .alert(OfficeLocalization.string("로컬 모델 제어"), isPresented: Binding(
+                get: { localModelFailure != nil },
+                set: { if !$0 { localModelFailure = nil } }
+            )) {
+                Button(OfficeLocalization.string("확인"), role: .cancel) {
+                    localModelFailure = nil
+                }
+            } message: { Text(localModelFailure ?? "") }
         }
+
+    private var liveBadgeColor: Color {
+        director.isRealtimeConnected
+            ? LocalModelStateTint.ready
+            : LocalModelStateTint.busy
+    }
+
+    private var localModelTarget: (character: OfficeCharacter, profileID: String)? {
+        guard
+            let character = characterSelectionStore.selectedCharacterID,
+            let profileID = director.localProfileID(for: character)
+        else {
+            return nil
+        }
+        return (character, profileID)
+    }
+
+    private var localModelStatus: LocalProviderStatus? {
+        guard let target = localModelTarget else { return nil }
+        return LocalProviderStatus.selected(
+            from: director.localProviderStatuses,
+            characterID: target.character.rawValue,
+            profileID: target.profileID
+        )
+    }
+
+    private var localModelBusy: Bool {
+        director.isControllingLocalModel
+            || localModelStatus?.isChangingModel == true
+            || !director.isReadyForSubmissions
+    }
+
+    private var localModelStartDisabled: Bool {
+        localModelStatus?.isLoaded == true || localModelBusy
+    }
+
+    private func runLocalModelAction(_ action: String) {
+        guard let target = localModelTarget else { return }
+        let character = target.character
+        Task {
+            do { try await director.controlLocalModel(action, for: character) }
+            catch { localModelFailure = error.localizedDescription }
+        }
+    }
 
     private var selectedName: String {
         guard
@@ -1181,11 +1360,19 @@ private struct LiveWorkspaceHeader: View {
 
 private struct LiveWorkspaceCommandBar: View {
     @ObservedObject private var director: AgentDirector
+    @ObservedObject private var composerStore: EmployeeComposerStore
     @ObservedObject private var characterSelectionStore:
         CharacterSelectionStore
-    @State private var attachments: [PendingAttachment] = []
-    @State private var attachmentSelectionError: String?
-    @State private var isPreparingAttachments = false
+    private var composerCharacter: OfficeCharacter { selectedCharacterID ?? .boss }
+    private var attachments: [PendingAttachment] {
+        get { composerStore.attachments[composerCharacter] ?? [] }
+        nonmutating set { composerStore.attachments[composerCharacter] = newValue }
+    }
+    private var attachmentSelectionError: String? {
+        get { composerStore.attachmentErrors[composerCharacter] }
+        nonmutating set { composerStore.attachmentErrors[composerCharacter] = newValue }
+    }
+    private var isPreparingAttachments: Bool { composerStore.preparing.contains(composerCharacter) }
     @State private var identitySettingsCharacter: OfficeCharacter?
     @State private var contextCompactionAlert: ContextCompactionAlert?
     @State private var terminalRestartRequiredCharacters:
@@ -1204,6 +1391,7 @@ private struct LiveWorkspaceCommandBar: View {
         self.director = director
         self.conversationMode = conversationMode
         self.onShowProfile = onShowProfile
+        _composerStore = ObservedObject(wrappedValue: director.employeeComposerStore)
         _characterSelectionStore = ObservedObject(
             wrappedValue: director.characterSelectionStore
         )
@@ -1216,11 +1404,12 @@ private struct LiveWorkspaceCommandBar: View {
                 characterSelectionStore.isConversationLoading ? 0.52 : 1
             )
             .task {
+                let retainedAttachments = composerStore.allAttachments + director.queuedAttachments
                 await Task.detached(priority: .utility) {
                     guard let inbox = try? AttachmentInbox.live() else {
                         return
                     }
-                    inbox.removeStaleItems()
+                    inbox.removeStaleItems(excluding: retainedAttachments)
                 }.value
             }
             .sheet(item: $identitySettingsCharacter) { character in
@@ -1605,6 +1794,7 @@ private struct LiveWorkspaceCommandBar: View {
                     )
                     }
                     .buttonStyle(.plain)
+                    .onDrag { EmployeeMention.dragProvider(for: character.id) }
                     .help(OfficeLocalization.format("%@ 선택", name))
                     .accessibilityLabel(
                         OfficeLocalization.format("%@ 선택", name)
@@ -1758,6 +1948,7 @@ private extension LiveWorkspaceCommandBar {
         else {
             return false
         }
+        guard !director.savingReplyRoutes.contains(selectedCharacterID) else { return false }
 
         // 응답 생성 중이면 같은 입력을 다음 턴 예약으로 넘긴다.
         // 첨부는 예약이 실제로 제출될 때까지 director가 들고 있다가
@@ -1798,6 +1989,7 @@ private extension LiveWorkspaceCommandBar {
     }
 
     private func chooseAttachments() {
+        let targetCharacter = composerCharacter
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
@@ -1824,8 +2016,8 @@ private extension LiveWorkspaceCommandBar {
         }
         // 예약에 실려 아직 제출되지 않은 첨부도 살아 있어야 한다.
         let activeAttachments =
-            attachments + director.queuedAttachments
-        isPreparingAttachments = true
+            composerStore.allAttachments + director.queuedAttachments
+        composerStore.preparing.insert(targetCharacter)
         Task {
             let batch = await Task.detached(priority: .userInitiated) {
                 do {
@@ -1841,9 +2033,9 @@ private extension LiveWorkspaceCommandBar {
                     )
                 }
             }.value
-            attachments.append(contentsOf: batch.attachments)
-            attachmentSelectionError = batch.errorDescriptions.first
-            isPreparingAttachments = false
+            composerStore.attachments[targetCharacter, default: []].append(contentsOf: batch.attachments)
+            composerStore.attachmentErrors[targetCharacter] = batch.errorDescriptions.first
+            composerStore.preparing.remove(targetCharacter)
         }
     }
 

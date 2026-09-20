@@ -866,11 +866,38 @@ struct OfficeDatabaseClient: Sendable {
         return try JSONDecoder().decode(DeletedTurnResponse.self, from: data)
     }
 
+    func fetchReplyRoutes() async throws -> [ReplyRoute] {
+        let (data, response) = try await URLSession.shared.data(from: baseURL.appending(path: "api/reply-routes"))
+        try validate(response, data: data)
+        return try JSONDecoder().decode(ReplyRoutesResponse.self, from: data).routes
+    }
+
+    func saveReplyRoute(_ route: ReplyRoute) async throws -> ReplyRoute {
+        var request = URLRequest(url: baseURL.appending(path: "api/reply-routes/\(route.characterId)"))
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(route)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response, data: data)
+        return try JSONDecoder().decode(ReplyRoute.self, from: data)
+    }
+
+    func cancelReplyDelivery(sourceTurnID: String) async throws {
+        let url = baseURL.appending(path: "api/reply-deliveries/\(sourceTurnID)/cancel")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data("{}".utf8)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response, data: data)
+    }
+
     func startAgentJob(
         character: OfficeCharacter,
         prompt: String,
         conversationID: UUID,
-        attachmentPaths: [String]
+        attachmentPaths: [String],
+        replyRecipient: OfficeCharacter? = nil
     ) async throws -> StartedAgentJob {
         let url = baseURL
             .appending(path: "api")
@@ -886,7 +913,8 @@ struct OfficeDatabaseClient: Sendable {
                 characterId: character.rawValue,
                 prompt: prompt,
                 conversationId: conversationID,
-                attachmentPaths: attachmentPaths
+                attachmentPaths: attachmentPaths,
+                replyRecipientId: replyRecipient?.rawValue
             )
         )
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -1698,7 +1726,24 @@ struct LiveFeedSource: Decodable, Identifiable, Equatable, Sendable {
     }
 }
 
+struct ReplyRoute: Codable, Equatable, Sendable {
+    let characterId: String
+    var recipientIds: [String]
+    var paused: Bool
+}
+
+private struct ReplyRoutesResponse: Decodable { let routes: [ReplyRoute] }
+
+struct ReplyDelivery: Decodable, Equatable, Sendable {
+    let recipientId: String
+    let recipientName: String
+    let status: String
+    let error: String?
+}
+
 struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
+    let replyDeliveries: [ReplyDelivery]?
+    let replyDelivery: ReplyDelivery?
     let promptSender: EmployeeMessageSender?
     let providerKind: String?
     let id: String
@@ -1741,6 +1786,8 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
         origin: String? = nil,
         providerKind: String? = nil,
         promptSender: EmployeeMessageSender? = nil,
+        replyDelivery: ReplyDelivery? = nil,
+        replyDeliveries: [ReplyDelivery]? = nil,
         externalSessionId: String?,
         conversationWorkdir: String?,
         prompt: String,
@@ -1771,6 +1818,8 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
         self.origin = origin
         self.providerKind = providerKind
         self.promptSender = promptSender
+        self.replyDelivery = replyDelivery
+        self.replyDeliveries = replyDeliveries
         self.externalSessionId = externalSessionId
         self.conversationWorkdir = conversationWorkdir
         self.prompt = prompt
@@ -1808,6 +1857,8 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
             origin: origin,
             providerKind: providerKind,
             promptSender: promptSender,
+            replyDelivery: replyDelivery,
+            replyDeliveries: replyDeliveries,
             externalSessionId: externalSessionId,
             conversationWorkdir: conversationWorkdir,
             prompt: prompt,
@@ -1844,6 +1895,8 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
             origin: origin,
             providerKind: providerKind,
             promptSender: promptSender,
+            replyDelivery: replyDelivery,
+            replyDeliveries: replyDeliveries,
             externalSessionId: externalSessionId,
             conversationWorkdir: conversationWorkdir,
             prompt: prompt,
@@ -1923,6 +1976,7 @@ private struct StartAgentJobRequest: Encodable {
     let prompt: String
     let conversationId: UUID
     let attachmentPaths: [String]
+    let replyRecipientId: String?
 }
 
 struct StartedAgentJob: Decodable, Sendable {

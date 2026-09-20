@@ -2014,7 +2014,7 @@ final class CachedLiveWorkspaceFeedsNSView: NSView {
                 isPresented: true
             )
             self.presentationStore = presentationStore
-            hostingView = NSHostingView(
+            let host = NSHostingView(
                 rootView: HostedLiveWorkspaceFeed(
                     director: director,
                     characterID: characterID,
@@ -2023,6 +2023,10 @@ final class CachedLiveWorkspaceFeedsNSView: NSView {
                     onMountReady: onMountReady
                 )
             )
+            // This host is explicitly framed by its viewport. Intrinsic/min/max
+            // sizing would remeasure long transcripts at unrelated proposals.
+            host.sizingOptions = []
+            hostingView = host
         }
 
         func updateMetadata(_ metadata: LiveWorkspaceFeedMetadata) {
@@ -2032,6 +2036,8 @@ final class CachedLiveWorkspaceFeedsNSView: NSView {
 
     private weak var director: AgentDirector?
     private var selectionWillChangeCancellable: AnyCancellable?
+    private var followsGlobalSelection = true
+    private var workspaceVisible = true
     private var activeEntry: Entry?
     private var pendingEntry: Entry?
     private var transitionLoadingGateView: LiveWorkspaceFeedLoadingGateView?
@@ -2229,11 +2235,15 @@ final class CachedLiveWorkspaceFeedsNSView: NSView {
 
     func configure(
         director: AgentDirector,
-        selectedCharacterID: OfficeCharacter?
+        selectedCharacterID: OfficeCharacter?,
+        followsGlobalSelection: Bool = true,
+        showsInitialLoadingGate: Bool = false
     ) {
-        if self.director !== director {
+        if self.director !== director || self.followsGlobalSelection != followsGlobalSelection {
             tearDown()
             self.director = director
+            self.followsGlobalSelection = followsGlobalSelection
+            if followsGlobalSelection {
             selectionWillChangeCancellable = director
                 .characterSelectionStore
                 .selectionWillChange
@@ -2253,6 +2263,7 @@ final class CachedLiveWorkspaceFeedsNSView: NSView {
                         selectedCharacterID: characterID
                     )
                 }
+            }
         }
 
         let previousCharacterID = self.selectedCharacterID
@@ -2263,6 +2274,13 @@ final class CachedLiveWorkspaceFeedsNSView: NSView {
         guard didChangeSelection else {
             if activeEntry?.characterID == selectedCharacterID {
                 activeEntry?.updateMetadata(metadata)
+                if let selectedCharacterID,
+                   director.characterSelectionStore.selectedCharacterID == selectedCharacterID,
+                   director.characterSelectionStore.isConversationLoading {
+                    DispatchQueue.main.async { [weak director] in
+                        director?.characterSelectionStore.completeConversationLoading(for: selectedCharacterID)
+                    }
+                }
             }
             if pendingEntry?.characterID == selectedCharacterID {
                 pendingEntry?.updateMetadata(metadata)
@@ -2277,7 +2295,7 @@ final class CachedLiveWorkspaceFeedsNSView: NSView {
         // 같은 직원의 컨테이너 재생성에는 전환 아이콘을 만들지 않는다.
         let isEmployeeToEmployeeTransition =
             previousCharacterID != nil && selectedCharacterID != nil
-        if isEmployeeToEmployeeTransition {
+        if isEmployeeToEmployeeTransition || (showsInitialLoadingGate && selectedCharacterID != nil) {
             if !Self.isTransitionGateDisabled {
             installTransitionLoadingGate()
         }
@@ -2323,6 +2341,21 @@ final class CachedLiveWorkspaceFeedsNSView: NSView {
         removeTransitionLoadingGate()
         selectedCharacterID = nil
         director = nil
+    }
+
+    func setWorkspaceVisible(_ visible: Bool) {
+        guard workspaceVisible != visible else { return }
+        workspaceVisible = visible
+        activeEntry?.presentationStore.setPresented(visible)
+        pendingEntry?.presentationStore.setPresented(visible)
+        if visible {
+            if let activeEntry { observeBlankScreen(for: activeEntry) }
+            if pendingEntry != nil { startTransitionWatchdog() }
+            needsLayout = true
+        } else {
+            stopObservingBlankScreen()
+            finishGateWatchdog()
+        }
     }
 
     private func releaseActiveEntry() {

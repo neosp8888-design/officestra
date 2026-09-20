@@ -1,6 +1,7 @@
 // 앱이 소유한 PTY의 실행 명세, 직원 잠금, CLI 턴 기록을 관리한다.
 
 import { randomUUID, randomBytes, timingSafeEqual } from "node:crypto";
+import { replyRoutingPrompt } from './reply-delivery.mjs';
 import { createRequire } from "node:module";
 import {
   closeSync,
@@ -717,7 +718,7 @@ export class TerminalSessionManager {
 
   // Not a queue: a busy session rejects immediately. A successful PTY write
   // is not acceptance; only the existing CLI hook/watcher can confirm a turn.
-  async dispatch({ characterID, prompt, conversationID, attachmentPaths = [], senderCharacterID = null }) {
+  async dispatch({ characterID, prompt, conversationID, attachmentPaths = [], senderCharacterID = null, replyRecipientID = null, deliveryID = null }) {
     const state = this.sessions.get(String(characterID));
     if (this.runtime.draining) throw new AgentDrainingError('백엔드가 재시작 준비 중입니다.');
     if (!state || state.closed || state.closing || this.opening.has(String(characterID))) throw new AgentBusyError('터미널이 아직 준비되지 않았습니다.');
@@ -734,7 +735,8 @@ export class TerminalSessionManager {
     const result = new Promise((yes, no) => { resolve = yes; reject = no; });
     result.catch(() => {}); // The timeout may fire while the DB preflight awaits.
     // Install the lock before the first await, including the DB busy check.
-    const pending = { id, text, senderCharacterID, wire: `[OFFICESTRA_REQUEST:${id}]\n${text}`, claimed: false, resolve, reject, expiresAt: Date.now() + this.dispatchTimeoutMs };
+    const executionText=replyRoutingPrompt(text,{characterID,replyRecipientID,deliveryID,senderCharacterID});
+    const pending = { id, text, senderCharacterID, replyRecipientID, deliveryID, wire: `[OFFICESTRA_REQUEST:${id}]\n${executionText}`, claimed: false, resolve, reject, expiresAt: Date.now() + this.dispatchTimeoutMs };
     state.dispatch = pending;
     pending.timer = setTimeout(() => {
       if (state.dispatch !== pending) return;
@@ -742,7 +744,7 @@ export class TerminalSessionManager {
       // Once claimed the app might already have written to the PTY. Preserve
       // the lock until a matching hook, explicit interrupt, or session close.
       if (!pending.claimed) state.dispatch = null;
-      reject(new AgentBusyError('터미널의 접수를 확인하지 못했습니다. 자동 재전송하지 않았습니다. 터미널을 확인하세요.'));
+      reject(Object.assign(new AgentBusyError('터미널의 접수를 확인하지 못했습니다. 자동 재전송하지 않았습니다. 터미널을 확인하세요.'),{deliveryMayHaveStarted:pending.claimed}));
     }, this.dispatchTimeoutMs);
     void (async () => { try {
       const busy = await this.runtime.pool.query("SELECT t.id FROM turns t JOIN cli_sessions s ON s.id=t.cli_session_id WHERE s.character_id=$1 AND t.status IN ('pending','running') LIMIT 1", [characterID]);
@@ -784,7 +786,7 @@ export class TerminalSessionManager {
   async beginDispatchedTurn(state, options) {
     const pending = state.dispatch;
     const matches = pending?.claimed && String(options.prompt ?? '').trim() === pending.wire;
-    const turn = await this.runtime.beginTerminalTurn({ ...options, prompt: matches ? pending.text : options.prompt, senderCharacterID: matches ? pending.senderCharacterID : null });
+    const turn = await this.runtime.beginTerminalTurn({ ...options, prompt: matches ? pending.text : options.prompt, senderCharacterID: matches ? pending.senderCharacterID : null, replyRecipientID:matches?pending.replyRecipientID:null, deliveryID:matches?pending.deliveryID:null });
     state.runningTurnID = turn.turnID;
     if (matches) {
       clearTimeout(pending.timer);
