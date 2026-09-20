@@ -795,6 +795,7 @@ final class AgentDirector: ObservableObject {
     @Published private(set) var realtimeConnectionError: String?
     @Published private(set) var terminalSessionRevision = 0
     @Published private(set) var localProviderStatuses: [LocalProviderStatus] = []
+    @Published private(set) var isControllingLocalModel = false
     @Published private(set) var localModelOptions: [LocalModelOption] = []
     @Published private(set) var localProfileAssignments: [String: String] = [:]
     @Published private(set) var localHostAddresses: [String: String] = [:]
@@ -2030,7 +2031,7 @@ final class AgentDirector: ObservableObject {
     }
 
     func autoCompactPercent(for character: OfficeCharacter) -> Int {
-        min(95, max(20, autoCompactPercents[character] ?? 90))
+        min(100, max(20, autoCompactPercents[character] ?? 90))
     }
 
     func hasActiveSession(for character: OfficeCharacter) -> Bool {
@@ -2080,7 +2081,7 @@ final class AgentDirector: ObservableObject {
         guard !isUpdatingConfiguration else {
             throw AgentContextCompactionError.configurationBusy
         }
-        let normalized = min(95, max(20, percent))
+        let normalized = min(localProfileID(for: character) == nil ? 95 : 100, max(20, percent))
         isUpdatingConfiguration = true
         defer { isUpdatingConfiguration = false }
         let stored = try await database.updateAutoCompactPercent(
@@ -2147,6 +2148,10 @@ final class AgentDirector: ObservableObject {
             limit: limit,
             offset: offset
         )
+    }
+
+    func deleteArchivedTurn(_ turnID: String) async throws {
+        _ = try await database.deleteTurn(turnID)
     }
 
     private func showBubble(
@@ -2348,7 +2353,7 @@ final class AgentDirector: ObservableObject {
                         to: character
                     )
                     restoredAutoCompactPercents[character] = min(
-                        95,
+                        100,
                         max(20, stored.autoCompactPercent ?? 90)
                     )
                 }
@@ -2615,6 +2620,19 @@ final class AgentDirector: ObservableObject {
 
     func localProfileID(for character: OfficeCharacter) -> String? {
         localProfileAssignments[character.rawValue]
+    }
+
+    func controlLocalModel(_ action: String, for character: OfficeCharacter) async throws {
+        guard !isControllingLocalModel else { return }
+        isControllingLocalModel = true
+        defer { isControllingLocalModel = false }
+        do {
+            try await database.controlLocalModel(action, for: character)
+            await refreshLocalProviderStatuses()
+        } catch {
+            await refreshLocalProviderStatuses()
+            throw error
+        }
     }
 
     func localModelOption(for character: OfficeCharacter) -> LocalModelOption? {

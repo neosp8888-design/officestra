@@ -119,6 +119,16 @@ struct OfficeDatabaseClient: Sendable {
         try validate(response, data: data)
     }
 
+    func controlLocalModel(_ action: String, for character: OfficeCharacter) async throws {
+        var request = URLRequest(url: baseURL.appending(path: "api/characters/\(character.rawValue)/local-model"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 360
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["action": action])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response, data: data)
+    }
+
     func setLocalReasoning(_ reasoning: String, for character: OfficeCharacter) async throws {
         var request = URLRequest(url: baseURL.appending(path: "api/characters/\(character.rawValue)/local-reasoning"))
         request.httpMethod = "PUT"
@@ -839,6 +849,23 @@ struct OfficeDatabaseClient: Sendable {
         return try historyDecoder().decode(ArchiveFeedPage.self, from: data)
     }
 
+    func deleteTurn(_ turnID: String) async throws -> DeletedTurnResponse {
+        let url = baseURL
+            .appending(path: "api")
+            .appending(path: "turns")
+            .appending(path: turnID)
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "content-type"
+        )
+        request.httpBody = Data("{}".utf8)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response, data: data)
+        return try JSONDecoder().decode(DeletedTurnResponse.self, from: data)
+    }
+
     func startAgentJob(
         character: OfficeCharacter,
         prompt: String,
@@ -1031,6 +1058,7 @@ struct LocalModelOption: Decodable, Identifiable, Equatable, Sendable {
     let contextWindow: Int
     let kvCacheQuantization: String?
     var reasoningOptions: [String]? = nil
+    var defaultReasoning: String? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id
@@ -1041,6 +1069,7 @@ struct LocalModelOption: Decodable, Identifiable, Equatable, Sendable {
         case contextWindow
         case kvCacheQuantization
         case reasoningOptions
+        case defaultReasoning
     }
 
     init(from decoder: Decoder) throws {
@@ -1055,6 +1084,7 @@ struct LocalModelOption: Decodable, Identifiable, Equatable, Sendable {
         contextWindow = try container.decode(Int.self, forKey: .contextWindow)
         kvCacheQuantization = try container.decodeIfPresent(String.self, forKey: .kvCacheQuantization)
         reasoningOptions = try container.decodeIfPresent([String].self, forKey: .reasoningOptions)
+        defaultReasoning = try container.decodeIfPresent(String.self, forKey: .defaultReasoning)
     }
 
     var displayTitle: String {
@@ -1064,7 +1094,10 @@ struct LocalModelOption: Decodable, Identifiable, Equatable, Sendable {
         reasoningOptions?.contains("low") == true && reasoningOptions?.contains("xhigh") == true
     }
     var reasoningHelp: String {
-        OfficeLocalization.string(supportsReasoningLevels
+        if defaultReasoning == "off" {
+            return OfficeLocalization.string("다음 요청부터 적용됩니다. 기본은 추론 끄기이며, 이 모델은 켜기·끄기를 지원합니다.")
+        }
+        return OfficeLocalization.string(supportsReasoningLevels
             ? "다음 요청부터 적용됩니다. 기본 추론은 xhigh입니다."
             : "다음 요청부터 적용됩니다. 강도 단계는 현재 엔진에서 지원되지 않습니다.")
     }
@@ -1096,14 +1129,39 @@ struct LocalProviderStatus: Decodable, Identifiable, Equatable, Sendable {
     let id: String
     let state: String
     let error: String?
+    var profileId: String? = nil
+    var characterId: String? = nil
+    var loaded: Bool? = nil
+
+    var isLoaded: Bool { loaded ?? (state == "ready") }
+    var isChangingModel: Bool { ["starting", "stopping"].contains(state) }
+
+    static func selected(from statuses: [Self], characterID: String, profileID: String) -> Self? {
+        if let exact = statuses.first(where: { $0.characterId == characterID }) { return exact }
+        return statuses.filter { $0.characterId == nil && ($0.profileId == profileID || $0.id == profileID || $0.id.hasPrefix(profileID + ":")) }
+            .sorted { statusPriority($0.state) > statusPriority($1.state) }.first
+    }
+
+    private static func statusPriority(_ state: String) -> Int {
+        switch state {
+        case "error": return 6
+        case "stopping": return 5
+        case "starting": return 4
+        case "waiting": return 3
+        case "ready": return 2
+        default: return 1
+        }
+    }
 
     var displayText: String {
         switch state {
         case "waiting": return OfficeLocalization.string("로컬 AI · ComfyUI 또는 다른 작업 종료 대기")
         case "starting": return OfficeLocalization.string("로컬 AI · 연결 및 모델 준비 중")
+        case "stopping": return OfficeLocalization.string("로컬 AI · 중지 및 메모리 해제 중")
+        case "stopped": return OfficeLocalization.string("로컬 AI · 중지됨 · 메모리 해제 완료")
         case "ready": return OfficeLocalization.string("로컬 AI · 준비됨")
-        case "error": return OfficeLocalization.string("로컬 AI · 연결 실패, 다음 요청에서 재연결")
-        default: return OfficeLocalization.string("로컬 AI · 유휴, 다음 요청에서 모델 준비")
+        case "error": return OfficeLocalization.string("로컬 AI · 오류 · 상태 확인 필요")
+        default: return OfficeLocalization.string("로컬 AI · 실행 대기")
         }
     }
 }
@@ -1811,6 +1869,14 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
 struct ArchiveFeedPage: Decodable, Sendable {
     let turns: [LiveFeedTurn]
     let total: Int
+}
+
+struct DeletedTurnResponse: Decodable, Sendable {
+    let deleted: Bool
+    let id: String
+    let characterId: String
+    let deletedWorkRecordCount: Int
+    let sessionReset: Bool
 }
 
 func agentExecutionModeTitle(_ fastMode: Bool?) -> String {

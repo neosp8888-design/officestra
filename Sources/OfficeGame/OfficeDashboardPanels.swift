@@ -197,11 +197,14 @@ private struct ArchiveShelfContent: View {
     let director: AgentDirector
     @State private var searchText = ""
     @State private var selectedTurnID: String?
+    @State private var isBookPresented = false
     @State private var turns: [LiveFeedTurn] = []
     @State private var totalTurnCount = 0
     @State private var errorMessage: String?
     @State private var isLoading = true
     @State private var isLoadingMore = false
+    @State private var isDeletingTurn = false
+    @State private var deleteErrorMessage: String?
 
     private static let pageSize = 12
 
@@ -240,6 +243,7 @@ private struct ArchiveShelfContent: View {
                     VStack(spacing: 10) {
                         ArchiveRecordGrid(turns: turns) { turn in
                             selectedTurnID = turn.id
+                            isBookPresented = true
                         }
 
                         if turns.count < totalTurnCount {
@@ -261,26 +265,52 @@ private struct ArchiveShelfContent: View {
                     navigation: ArchiveBookNavigation(
                         index: selectedIndex,
                         total: totalTurnCount,
-                        canGoPrevious: ArchiveBookPaging.canGoPrevious(
-                            index: selectedIndex
-                        ),
-                        canGoNext: !isLoadingMore
+                        canGoPrevious: !isDeletingTurn && !isLoadingMore
+                            && ArchiveBookPaging.canGoPrevious(index: selectedIndex),
+                        canGoNext: !isDeletingTurn && !isLoadingMore
                             && ArchiveBookPaging.canGoNext(
                                 index: selectedIndex,
                                 loadedCount: turns.count,
                                 totalCount: totalTurnCount
                             )
                     ),
+                    isDeleting: isDeletingTurn || isLoadingMore,
                     onPrevious: showPreviousTurn,
                     onNext: {
                         Task {
                             await showNextTurn()
                         }
                     },
+                    onDelete: {
+                        Task {
+                            await delete(selectedTurn)
+                        }
+                    },
                     onClose: {
+                        isBookPresented = false
+                        selectedTurnID = nil
+                    },
+                    deleteErrorMessage: $deleteErrorMessage
+                )
+                .frame(
+                    minWidth: ArchiveBookSheetLayout.minimumWidth,
+                    idealWidth: ArchiveBookSheetLayout.idealWidth,
+                    minHeight: ArchiveBookSheetLayout.minimumHeight,
+                    idealHeight: ArchiveBookSheetLayout.idealHeight
+                )
+            } else {
+                VStack(spacing: 16) {
+                    ContentUnavailableView(
+                        OfficeLocalization.string("조건에 맞는 대화가 없습니다"),
+                        systemImage: "tray"
+                    )
+                    Button(OfficeLocalization.string("닫기")) {
+                        isBookPresented = false
                         selectedTurnID = nil
                     }
-                )
+                    .keyboardShortcut(.cancelAction)
+                    .padding(.bottom, 20)
+                }
                 .frame(
                     minWidth: ArchiveBookSheetLayout.minimumWidth,
                     idealWidth: ArchiveBookSheetLayout.idealWidth,
@@ -409,8 +439,9 @@ private struct ArchiveShelfContent: View {
 
     private var isShowingBook: Binding<Bool> {
         Binding(
-            get: { selectedTurn != nil },
+            get: { isBookPresented },
             set: { isShowing in
+                isBookPresented = isShowing
                 if !isShowing {
                     selectedTurnID = nil
                 }
@@ -419,7 +450,7 @@ private struct ArchiveShelfContent: View {
     }
 
     private func showPreviousTurn() {
-        guard let selectedIndex, selectedIndex > 0 else {
+        guard !isDeletingTurn, !isLoadingMore, let selectedIndex, selectedIndex > 0 else {
             return
         }
         selectedTurnID = turns[selectedIndex - 1].id
@@ -427,7 +458,7 @@ private struct ArchiveShelfContent: View {
 
     // 불러온 목록의 끝이면 다음 12건을 받아 온 뒤에 넘어간다.
     private func showNextTurn() async {
-        guard let selectedIndex else {
+        guard !isDeletingTurn, !isLoadingMore, let selectedIndex else {
             return
         }
         if selectedIndex + 1 >= turns.count {
@@ -497,6 +528,46 @@ private struct ArchiveShelfContent: View {
                 return
             }
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func delete(_ turn: LiveFeedTurn) async {
+        guard !isDeletingTurn, !isLoadingMore,
+              let index = turns.firstIndex(where: { $0.id == turn.id }) else {
+            return
+        }
+        isDeletingTurn = true
+        defer {
+            isDeletingTurn = false
+        }
+        let query = normalizedSearchText
+        // Match the right-arrow destination, including a page boundary. Fetch
+        // before deleting so a failed fetch leaves the current conversation intact.
+        if index + 1 == turns.count && turns.count < totalTurnCount {
+            let loadedCount = turns.count
+            await loadMore()
+            guard query == normalizedSearchText else { return }
+            guard turns.count > loadedCount || turns.count >= totalTurnCount else {
+                deleteErrorMessage = errorMessage ?? OfficeLocalization.string("기록을 불러오지 못했습니다")
+                return
+            }
+        }
+        let adjacentID = index + 1 < turns.count
+            ? turns[index + 1].id
+            : (index > 0 ? turns[index - 1].id : nil)
+        do {
+            try await director.deleteArchivedTurn(turn.id)
+            guard query == normalizedSearchText else {
+                await reload()
+                return
+            }
+            if selectedTurnID == turn.id {
+                selectedTurnID = adjacentID
+            }
+            turns.removeAll { $0.id == turn.id }
+            totalTurnCount = max(0, totalTurnCount - 1)
+        } catch {
+            deleteErrorMessage = error.localizedDescription
         }
     }
 }

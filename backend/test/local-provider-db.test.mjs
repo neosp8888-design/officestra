@@ -72,6 +72,38 @@ test('PostgreSQL: GUI/terminal tokens retained, local reported prices audited/ex
     assert.equal((await client.query("SELECT ended_at IS NOT NULL AS ended FROM cli_sessions WHERE id=$1",[claudeSessionID])).rows[0].ended,true);
     assert.equal((await client.query("SELECT ended_at IS NULL AS active FROM cli_sessions WHERE id=$1",[workspaceSessionID])).rows[0].active,true);
     assert.equal((await client.query('SELECT count(*)::int AS count FROM active_cli_sessions')).rows[0].count,1);
+    const claudeDirectMigration=await readFile(new URL('../../database/migrations/047_local_llama_claude.sql',import.meta.url),'utf8');
+    await client.query(claudeDirectMigration);await client.query(claudeDirectMigration);
+    const newProfile=(await client.query("SELECT definition,enabled FROM local_agent_profiles WHERE id='local-4090-qwen38-claude-llamacpp'")).rows[0];
+    assert.equal(newProfile.enabled,true);
+    assert.deepEqual(newProfile.definition.host,profiles[1].definition.host);
+    assert.deepEqual(newProfile.definition.profile,{...profiles[1].definition.profile,id:'local-4090-qwen38-claude-llamacpp',backend:'claude',usageProtocol:'anthropic-normalized-v1',reasoning:'default'});
+    assert.equal((await client.query('SELECT count(*)::int AS count FROM active_cli_sessions')).rows[0].count,1);
+    assert.deepEqual((await client.query("SELECT id,definition FROM local_agent_profiles WHERE id <> 'local-4090-qwen38-claude-llamacpp' ORDER BY id")).rows,profiles);
+    for(const id of ['local-4090','local-4090-qwen38-codex'])await client.query('INSERT INTO local_agent_profiles(id,definition,enabled) VALUES($1,$2,true)',[id,legacy]);
+    const disableLegacy=await readFile(new URL('../../database/migrations/048_disable_legacy_local_models.sql',import.meta.url),'utf8');
+    await client.query(disableLegacy);await client.query(disableLegacy);
+    assert.deepEqual((await client.query('SELECT id FROM local_agent_profiles WHERE enabled=true ORDER BY id')).rows.map(r=>r.id),['local-4090-qwen38-claude-llamacpp','local-4090-qwen38-llamacpp']);
+    assert.equal((await client.query('SELECT count(*)::int AS count FROM active_cli_sessions')).rows[0].count,1);
+    assert.equal((await client.query('SELECT count(*)::int AS count FROM local_agent_profiles')).rows[0].count,5);
+    const meroMigration=await readFile(new URL('../../database/migrations/049_local_meromero.sql',import.meta.url),'utf8');
+    const beforeMero=(await client.query('SELECT * FROM characters ORDER BY id')).rows;
+    await client.query(meroMigration);await client.query(meroMigration);
+    const mero=(await client.query("SELECT definition,enabled FROM local_agent_profiles WHERE id LIKE 'local-4090-meromero-%' ORDER BY id")).rows;
+    assert.equal(mero.length,2);assert.ok(mero.every(r=>r.enabled&&r.definition.profile.contextWindow===32768&&r.definition.profile.reasoning==='default'&&r.definition.host.modelKey==='g4-meromero-31b-uncensored-heretic'));
+    assert.deepEqual(mero.map(r=>r.definition.profile.backend),['claude','codex']);
+    assert.deepEqual((await client.query('SELECT * FROM characters ORDER BY id')).rows,beforeMero);
+    assert.equal((await client.query('SELECT count(*)::int AS count FROM active_cli_sessions')).rows[0].count,1);
+    for(const selected of ['default','off','on']){
+      const r=await client.query(`SELECT ${LOCAL_TURN_EFFORT_SQL} AS effort FROM (SELECT 'local'::text provider_kind,'default'::text effort,$1::jsonb provider_snapshot) t`,[{profile:{runtime:'llama-cpp-b10982',model:'officestra-meromero-31b-uncensored-heretic-q4km',reasoning:selected}}]);
+      assert.equal(r.rows[0].effort,selected==='on'?'on':'off');
+    }
+    const expandMero=await readFile(new URL('../../database/migrations/050_meromero_64k.sql',import.meta.url),'utf8');
+    await client.query(expandMero);await client.query(expandMero);
+    const expandedMero=(await client.query("SELECT definition,enabled FROM local_agent_profiles WHERE id LIKE 'local-4090-meromero-%' ORDER BY id")).rows;
+    assert.deepEqual(expandedMero,mero.map(r=>({...r,definition:{...r.definition,profile:{...r.definition.profile,contextWindow:65536}}})));
+    assert.deepEqual((await client.query('SELECT * FROM characters ORDER BY id')).rows,beforeMero);
+    assert.equal((await client.query('SELECT count(*)::int AS count FROM active_cli_sessions')).rows[0].count,1);
     for(const origin of ['gui','terminal']) {
       const id=randomUUID();await client.query("INSERT INTO turns(id,origin,provider_kind,provider_snapshot) VALUES($1,$2,'local',$3::jsonb)",[id,origin,JSON.stringify({profile:{id:'local-test',contextWindow:32768}})]);
       await client.query('INSERT INTO usage_records(turn_id,cost_usd,input_tokens,output_tokens,cached_input_tokens) VALUES($1,0.0372725,3300,12,100)',[id]);

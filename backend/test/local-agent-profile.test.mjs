@@ -27,6 +27,20 @@ test('PTY executable is absolute and never resolved through relative PATH entrie
   assert.equal(localTerminalExecutable('true',{PATH:'.:/usr/bin'}),'/usr/bin/true');
   assert.throws(()=>localTerminalExecutable('codex',{PATH:'.:relative'}),/not found/);
 });
+test('direct Claude supports the pinned server in GUI and terminal without changing legacy profiles',()=>{
+ const direct={...profile,id:'claude-direct',runtime:'llama-cpp-b10982',model:'officestra-qwen38-27b-uncensored-q4km',contextWindow:65536,kvCacheQuantization:'q8_0'};
+ for(const mode of ['gui','terminal'])for(const reasoning of ['low','medium','xhigh']){
+  const r=build({mode,profile:{...direct,reasoning},character:{...character,model:direct.model}});
+  assert.equal(r.profile.reasoning,reasoning);
+  assert.equal(r.profile.backend,'claude');
+  assert.equal(r.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS,'65536');
+  assert.equal(r.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS,'4096');
+  assert.equal(r.args.includes('--effort'),false);
+  assert.ok(r.args.includes('--setting-sources'));
+ }
+ assert.throws(()=>normalizeLocalAgentProfile({...direct,contextWindow:32768}),/Direct runtime/);
+ assert.throws(()=>normalizeLocalAgentProfile({...direct,kvCacheQuantization:'q4_0'}),/Direct runtime/);
+});
 
 test('explicit 64K KV8 is preserved for both Codex launch modes; KV4 is rejected',()=>{
   const kv4={...codexProfile,contextWindow:65536,kvCacheQuantization:'q8_0'};
@@ -95,7 +109,7 @@ test('64K launch uses the measured window for GUI and terminal without disabling
     assert.equal(larger.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS,'65536');
     assert.equal(larger.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS,'4096');
     assert.equal(larger.env.DISABLE_AUTO_COMPACT,undefined);
-    assert.equal(larger.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE,undefined);
+    assert.equal(larger.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE,'30');
     assert.deepEqual(larger.args,original.args);
     assert.notEqual(larger.signature,original.signature);
   }
@@ -179,7 +193,7 @@ for(const mode of ['gui','persistent','terminal']) for(const previousSessionID o
     assert.equal(result.env.API_TIMEOUT_MS,'2147483647');
     assert.equal(result.env.CLAUDE_ENABLE_BYTE_WATCHDOG,'0');
     assert.equal(result.env.CLAUDE_ENABLE_STREAM_WATCHDOG,'0');
-    assert.equal(result.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE,undefined);
+    assert.equal(result.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE,'30');
     assert.equal(result.env.DISABLE_AUTO_COMPACT,undefined);
     assert.equal(result.env.DISABLE_COMPACT,undefined);
     assert.equal(result.args.includes('--effort'),false);

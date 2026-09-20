@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readFile, access } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
-import { LocalProviderService, resolveLocalCharacter, snapshotLocalTurn, validateLocalResume, localResumeCompatible, LOCAL_PROVIDER_SAMPLE_TIMEOUT_MS } from '../src/local-provider-service.mjs';
+import { LocalProviderService, localProfileTitle, resolveLocalCharacter, snapshotLocalTurn, validateLocalResume, localResumeCompatible, LOCAL_PROVIDER_SAMPLE_TIMEOUT_MS } from '../src/local-provider-service.mjs';
 import { LocalHostBusyError, WindowsLMStudioHost, verifyLocalRuntimeVersion, LOCAL_HOST_LOAD_CONFIG, LOCAL_HOST_MEMORY_BUDGET, LOCAL_HOST_RESOURCE_SAMPLE_TIMEOUT_MS, localHostResourceSampleScript, localHostListenerPIDScript, localHostMemoryExceeded, localHostLoadConfig } from '../src/local-provider-host.mjs';
 import { characterSettingsRequireNewSession } from '../src/configuration.mjs';
 import { AgentRuntime } from '../src/agent-runtime.mjs';
@@ -11,6 +11,31 @@ import { TerminalSessionManager } from '../src/terminal-sessions.mjs';
 
 const definition={profile:{id:'local-test',providerKind:'local',backend:'claude',model:'test-model',endpoint:'http://127.0.0.1:41235',credentialEnv:'OFFICESTRA_LOCAL_TEST_TOKEN',credentialVersion:'v1',contextWindow:32768,maxOutputTokens:4096,usageProtocol:'anthropic-normalized-v1'},host:{address:'127.0.0.1',user:'test',sshPort:2222,keyPath:'/tmp/test-key',hostKeyAlias:'test-host',modelKey:'test/model',comfyPort:8188}};
 const character={id:'isolated-validation',backend:'claude',model:definition.profile.model,effort:'default',fastMode:false,permission:'plan',localProfile:definition};
+test('local titles identify the pinned Uncensored model independently of host routing keys',()=>{
+ for(const backend of ['claude','codex']) {
+  const d={...definition,profile:{...definition.profile,backend,model:'officestra-qwen38-27b-uncensored-q4km',runtime:'llama-cpp-b10982'}};
+  assert.equal(localProfileTitle(d),'qwen3.8-27b-uncensored · llama.cpp · MTP');
+  assert.equal(d.host.modelKey,'test/model');
+ }
+ assert.equal(localProfileTitle({...definition,profile:{...definition.profile,model:'officestra-qwen38-27b-uncensored-q4km'}}),'qwen3.8-27b-uncensored · LM Studio');
+ assert.equal(localProfileTitle(definition),'model · LM Studio');
+});
+test('direct Claude front door uses Messages cache semantics in GUI and terminal',async t=>{
+ const p={...definition.profile,id:'claude-direct',runtime:'llama-cpp-b10982',model:'officestra-qwen38-27b-uncensored-q4km',contextWindow:65536,kvCacheQuantization:'q8_0',reasoning:'medium'};
+ const requests=[];
+ const upstream=createServer(async(req,res)=>{let body='';for await(const chunk of req)body+=chunk;requests.push(JSON.parse(body));res.setHeader('content-type','application/json');res.end(JSON.stringify({type:'message',stop_reason:'end_turn',content:[{type:'text',text:'ok'}],usage:{input_tokens:4,cache_read_input_tokens:53,output_tokens:20}}));});
+ await new Promise(r=>upstream.listen(0,'127.0.0.1',r));
+ const service=new LocalProviderService({pool:{},stateDirectory:'/tmp/unused',hostFactory:()=>({start:async()=>({upstream:`http://127.0.0.1:${upstream.address().port}`,sample:async()=>({vramPct:70,ramPct:30,sampledAt:Date.now(),busy:false}),alive:()=>true,release:async()=>{}})})});
+ t.after(async()=>{await service.shutdown();upstream.closeAllConnections();await new Promise(r=>upstream.close(r));});
+ for(const mode of ['gui','terminal']){
+  const spec=await service.launch({character:{...character,model:p.model,localProfile:{...definition,profile:p}},mode,workdir:'/tmp',executable:'/test/claude',prompt:'hi',hookPath:'/tmp/test-hook',nodePath:process.execPath});
+  const r=await fetch(spec.env.ANTHROPIC_BASE_URL+'/v1/messages',{method:'POST',headers:{'x-api-key':spec.env.ANTHROPIC_AUTH_TOKEN},body:JSON.stringify({model:p.model,messages:[{role:'user',content:'hi'}],max_tokens:512})});
+  assert.equal(r.status,200);const reply=await r.json();assert.equal(reply.usage.input_tokens,4);assert.equal(reply.usage.cache_read_input_tokens,53);
+  assert.deepEqual(requests.at(-1).chat_template_kwargs,{reasoning_effort:'medium'});
+  await spec.release();
+ }
+ assert.equal(localResumeCompatible(definition,{...definition,profile:p}),false);
+});
 test('local Codex uses authenticated Responses front door, preserves cancellation and never resumes Claude identity',async t=>{
   const codexDefinition={...definition,profile:{...definition.profile,id:'local-codex-test',backend:'codex',usageProtocol:'openai-responses-v1'}};
   const codexCharacter={...character,backend:'codex',permission:'read-only',localProfile:codexDefinition,config:{localProfileId:codexDefinition.profile.id}};
@@ -100,7 +125,7 @@ test('a live 32K entry cannot silently be reused as a 64K model',async t=>{
   const s=await setup(t);
   await assert.rejects(()=>s.service.launch({character:{...character,localProfile:{...definition,profile:{...definition.profile,contextWindow:65536}}},mode:'gui',workdir:'/tmp',executable:'/test/claude'}),/Close existing/);
 });
-async function setup(t,{busy=0,fail=false,idleMs=10000,vramPct=70,onRequest,onRelease,cleanupWaitMs=15000,mode='terminal'}={}) {
+async function setup(t,{busy=0,fail=false,idleMs=10000,vramPct=70,onRequest,onRelease,cleanupWaitMs=15000,mode='terminal',cleanupError}={}) {
   let starts=0,releases=0,requests=0;
   const server=createServer(async(req,res)=>{for await(const _ of req){} requests++;if(onRequest?.(req,res,requests)===false)return;if(fail){fail=false;res.destroy();return;}res.setHeader('content-type','application/json');res.end(JSON.stringify({type:'message',content:[{type:'text',text:'ok'}],usage:{input_tokens:100,cache_read_input_tokens:20,output_tokens:2}}));});
   await new Promise(r=>server.listen(0,'127.0.0.1',r));
@@ -110,17 +135,24 @@ async function setup(t,{busy=0,fail=false,idleMs=10000,vramPct=70,onRequest,onRe
     return {upstream:`http://127.0.0.1:${server.address().port}`,sample:async()=>({vramPct,ramPct:55,busy:false,sampledAt:Date.now()}),alive:()=>true,release:async()=>{releases++;await onRelease?.();}};
   }})});
   const spec=await service.launch({character,mode,workdir:'/tmp',executable:'/test/claude',prompt:'hello'});
-  t.after(async()=>{await spec.release();await service.shutdown();server.closeAllConnections();await new Promise(r=>server.close(r));});
+  t.after(async()=>{
+    try{
+      if(cleanupError){await assert.rejects(spec.release(),cleanupError);await assert.rejects(service.shutdown(),cleanupError);}
+      else{await spec.release();await service.shutdown();}
+    }finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
+  });
   const post=(headers={},signal)=>fetch(spec.env.ANTHROPIC_BASE_URL+'/v1/messages',{method:'POST',signal,headers:{'x-api-key':spec.env.ANTHROPIC_API_KEY,...headers},body:JSON.stringify({model:character.model,max_tokens:32,messages:[{role:'user',content:'hello'}]})});
   return {service,spec,post,events,counts:()=>({starts,releases,requests})};
 }
 const deferred=()=>{let resolve;const promise=new Promise(r=>{resolve=r;});return {promise,resolve};};
-test('terminal cancel then immediate input waits for cleanup; concurrent input still 409',async t=>{
+test('terminal cancel then immediate input waits for cleanup; queued input can cancel independently',async t=>{
   const received=deferred(),cleaning=deferred(),release=deferred();
   t.after(()=>release.resolve());
   const s=await setup(t,{onRequest:(_q,_r,n)=>{if(n===1){received.resolve();return false;}},onRelease:async()=>{cleaning.resolve();await release.promise;}});
   const controller=new AbortController();const first=s.post({},controller.signal).catch(()=>null);
-  await received.promise;assert.equal((await s.post()).status,409);
+  await received.promise;
+  const queuedController=new AbortController();const queued=s.post({},queuedController.signal).catch(()=>null);
+  await delay(20);assert.equal(s.counts().requests,1);queuedController.abort();await queued;
   controller.abort();await first;await cleaning.promise;
   const next=s.post();await delay(20);assert.equal(s.counts().requests,1);
   release.resolve();assert.equal((await next).status,200);
@@ -144,7 +176,7 @@ test('cleanup wait timeout and cancelled waiter do not start a new inference',as
 });
 test('unconfirmed resource release fails closed rather than provisioning again',async t=>{
   const received=deferred();let broken=true;
-  const s=await setup(t,{onRequest:(_q,_r,n)=>{if(n===1){received.resolve();return false;}},onRelease:()=>{if(broken)throw new Error('release failed');}});
+  const s=await setup(t,{cleanupError:/release failed/,onRequest:(_q,_r,n)=>{if(n===1){received.resolve();return false;}},onRelease:()=>{if(broken)throw new Error('release failed');}});
   const c=new AbortController();const first=s.post({},c.signal).catch(()=>null);await received.promise;c.abort();await first;await delay(30);
   assert.equal((await s.post()).status,503);assert.equal(s.counts().starts,1);broken=false;
 });

@@ -1,10 +1,46 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { LocalInferenceBridge, LOCAL_INFERENCE_REQUEST_TIMEOUT_MS, normalizeLocalMessageRequest, applyLocalReasoning, normalizeLocalResponsesRequest } from '../src/local-inference-bridge.mjs';
-import { INCLUSIVE_INPUT_PROFILE } from '../src/local-usage-normalizer.mjs';
+import { LocalInferenceBridge, LOCAL_INFERENCE_REQUEST_TIMEOUT_MS, normalizeLocalMessageRequest, applyLocalReasoning, normalizeLocalResponsesRequest, normalizeLlamaMessagesRequest } from '../src/local-inference-bridge.mjs';
+import { INCLUSIVE_INPUT_PROFILE, LLAMA_MESSAGES_PROFILE, createUsageNormalizer, createUsageSSETransform } from '../src/local-usage-normalizer.mjs';
 import { RESPONSES_INCLUSIVE_PROFILE, LLAMA_RESPONSES_PROFILE } from '../src/local-responses-usage.mjs';
 const token='isolated-bridge-test-token-32bytes';
+test('pinned Messages keeps exclusive cache accounting distinct from LM Studio',()=>{
+ const audits=[];const normalize=createUsageNormalizer({profile:LLAMA_MESSAGES_PROFILE,onUsage:r=>audits.push(r)});
+ const reply={type:'message',id:'live-warm',usage:{input_tokens:4,cache_read_input_tokens:53,output_tokens:20}};
+ assert.deepEqual(normalize(reply),reply);assert.equal(audits[0].totalInputTokens,57);
+ assert.throws(()=>createUsageNormalizer({profile:INCLUSIVE_INPUT_PROFILE})(reply),/inclusive/);
+ assert.throws(()=>normalize({...reply,usage:{input_tokens:-1}}),/Invalid/);
+ assert.throws(()=>normalize({...reply,usage:{input_tokens:1,cache_creation_input_tokens:1}}),/Unverified/);
+});
+test('pinned Messages forwards only verified effort kwargs and preserves tool/image history',()=>{
+ const tool={role:'user',content:[{type:'tool_result',tool_use_id:'a',content:[{type:'image',source:{type:'base64',data:'AA=='}}]}]};
+ const request={messages:[{role:'system',content:'initial'},tool,{role:'system',content:'later'}],thinking:{type:'disabled'},output_config:{effort:'low'},chat_template_kwargs:{enable_thinking:false},max_tokens:4096};
+ const before=structuredClone(request);
+ for(const reasoning of ['low','medium','xhigh','default']){
+  const out=normalizeLlamaMessagesRequest(request,reasoning);
+  assert.deepEqual(out.chat_template_kwargs,{reasoning_effort:reasoning==='default'?'xhigh':reasoning});
+  assert.deepEqual(out.messages,[tool]);assert.match(out.system,/initial\n\nlater/);
+  assert.equal(out.thinking,undefined);assert.equal(out.output_config,undefined);assert.equal(out.max_tokens,4096);
+ }
+ assert.deepEqual(request,before);assert.throws(()=>normalizeLlamaMessagesRequest(request,'on'));
+});
+test('Messages completion is observed before forwarding and truncated streams fail',async()=>{
+ let completed=0;const s=createUsageSSETransform({profile:LLAMA_MESSAGES_PROFILE,onCompleted:()=>completed++});
+ const chunks=[];s.on('data',c=>{if(String(c).includes('message_stop'))assert.equal(completed,1);chunks.push(String(c));});
+ const done=new Promise((resolve,reject)=>{s.on('end',resolve);s.on('error',reject);});
+ const raw='data: {"type":"message_start","message":{"id":"x","usage":{"input_tokens":4,"cache_read_input_tokens":11,"output_tokens":0}}}\n\ndata: {"type":"message_delta","usage":{"output_tokens":23}}\n\ndata: {"type":"message_stop"}\n\n';
+ s.end(raw);await done;assert.equal(chunks.join(''),raw);
+ const broken=createUsageSSETransform({profile:LLAMA_MESSAGES_PROFILE});broken.resume();
+ const error=new Promise(resolve=>broken.once('error',resolve));broken.end(raw.split('data: {"type":"message_stop"}')[0]);
+ assert.match((await error).message,/Incomplete/);
+});
+test('direct Claude HTTP bridge preserves usage and routes selected effort',async t=>{
+ const s=await setup(t,(req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify({type:'message',stop_reason:'end_turn',content:[{type:'text',text:'ok'}],usage:{input_tokens:4,cache_read_input_tokens:53,output_tokens:20}}));},{usageProfile:LLAMA_MESSAGES_PROFILE,reasoning:'medium'});
+ const res=await s.post({messages:[{role:'user',content:'hi'}],max_tokens:512});
+ assert.equal(res.status,200);assert.equal((await res.json()).usage.input_tokens,4);
+ assert.deepEqual(JSON.parse(s.seen[0].body).chat_template_kwargs,{reasoning_effort:'medium'});
+});
 const responsesOptions={usageProtocol:'openai-responses-v1',usageProfile:RESPONSES_INCLUSIVE_PROFILE};
 const responsesReply=(req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify({id:'resp-test',object:'response',status:'completed',output:[],usage:{input_tokens:100,output_tokens:12,total_tokens:112,input_tokens_details:{cached_tokens:80},output_tokens_details:{reasoning_tokens:10}}}));};
 test('only pinned llama bridge exposes emitted reasoning through the Codex summary lane',async t=>{

@@ -3,12 +3,13 @@
 import { createServer, request } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import { pipeline } from 'node:stream';
-import { createUsageNormalizer, createUsageSSETransform } from './local-usage-normalizer.mjs';
+import { createUsageNormalizer, createUsageSSETransform, LLAMA_MESSAGES_PROFILE } from './local-usage-normalizer.mjs';
 import { normalizeResponsesUsage, createResponsesUsageSSETransform, RESPONSES_INCLUSIVE_PROFILE, LLAMA_RESPONSES_PROFILE, verifiedResponsesProfile } from './local-responses-usage.mjs';
 import { adaptLocalResponsesTools } from './local-responses-tools.mjs';
+import { MEROMERO_MODEL_ID } from './local-model-capabilities.mjs';
 
 const error=(status,message)=>Object.assign(new Error(message),{status});
-export function normalizeLocalResponsesRequest(value,reasoning='default',usageProfile=RESPONSES_INCLUSIVE_PROFILE,contextWindow=null) {
+export function normalizeLocalResponsesRequest(value,reasoning='default',usageProfile=RESPONSES_INCLUSIVE_PROFILE,contextWindow=null,model=value.model) {
   const direct=usageProfile===LLAMA_RESPONSES_PROFILE;
   if(!(direct?['default','on','off','low','medium','xhigh']:['default','on','off']).includes(reasoning))throw error(400,'Local Responses reasoning level is not verified');
   if(value.max_output_tokens!==undefined&&(!Number.isSafeInteger(value.max_output_tokens)||value.max_output_tokens<1||(contextWindow!==null&&value.max_output_tokens>contextWindow)))throw error(400,'Unverified output budget');
@@ -37,6 +38,13 @@ export function normalizeLocalResponsesRequest(value,reasoning='default',usagePr
     }
   }
   let effort=reasoning==='off'?'none':undefined;
+  if(direct&&model===MEROMERO_MODEL_ID){
+    if(!['default','on','off'].includes(reasoning))throw error(400,'MeroMero supports thinking on/off only');
+    effort=value.reasoning?.effort??(reasoning==='on'?'medium':'none');
+    if(!['none','medium'].includes(effort))throw error(400,'MeroMero supports none (off) or medium (on) only');
+    delete request.chat_template_kwargs;
+    return {...request,reasoning:{effort},chat_template_kwargs:{enable_thinking:effort==='medium'}};
+  }
   if(direct){
     effort=value.reasoning?.effort??reasoning;
     if(['default','on'].includes(effort))effort='xhigh';
@@ -53,6 +61,26 @@ export function applyLocalReasoning(value,reasoning='default') {
   // prompt, but thinking enabled/disabled does. Never advertise ignored levels.
   return {...rest,...(output_config?{output_config:Object.fromEntries(Object.entries(output_config).filter(([k])=>k!=='effort'))}:{}),
     thinking:reasoning==='on'?{type:'enabled',budget_tokens:1024}:{type:'disabled'}};
+}
+export function normalizeLlamaMessagesRequest(value,reasoning='default',model=value.model) {
+  const mero=model===MEROMERO_MODEL_ID;
+  const effort=reasoning==='default'?'xhigh':reasoning;
+  if(!(mero?['default','off','on'].includes(reasoning):['low','medium','xhigh'].includes(effort)))throw error(400,'Unsupported model reasoning option');
+  // The pinned Messages adapter forwards template kwargs, but NOT
+  // output_config.effort/reasoning_effort. Its thinking budget would truncate
+  // differently from Responses, so the selected profile owns this control.
+  const {thinking,output_config,reasoning_effort,chat_template_kwargs,...rest}=normalizeLocalMessageRequest(value);
+  const messages=rest.messages??[];
+  const systemMessages=messages.filter(m=>m?.role==='system');
+  if(systemMessages.length){
+    const textOf=v=>typeof v==='string'?v:Array.isArray(v)&&v.every(b=>b.type==='text'&&typeof b.text==='string')?v.map(b=>b.text).join('\n'):null;
+    const initial=rest.system===undefined?'':textOf(rest.system);
+    const updates=systemMessages.map(m=>textOf(m.content));
+    if(initial===null||updates.some(v=>v===null))throw error(400,'Unsupported local system content');
+    rest.system=[initial,...updates].filter(Boolean).join('\n\n');
+    rest.messages=messages.filter(m=>m?.role!=='system');
+  }
+  return {...rest,chat_template_kwargs:mero?{enable_thinking:reasoning==='on'}:{reasoning_effort:effort}};
 }
 // Claude ToolSearch persists tool_reference blocks in tool results. LM Studio's
 // measured Anthropic dialect accepts text there instead. Keep the tool schema,
@@ -121,7 +149,7 @@ export class LocalInferenceBridge {
     if(usageProtocol==='openai-responses-v1') {
       if(!verifiedResponsesProfile(usageProfile))throw new TypeError('Explicit verified Responses usage profile required');
     } else createUsageNormalizer({profile:usageProfile});
-    if(usageProtocol==='openai-responses-v1')normalizeLocalResponsesRequest({},reasoning,usageProfile,contextWindow);else applyLocalReasoning({},reasoning);
+    if(usageProtocol==='openai-responses-v1')normalizeLocalResponsesRequest({},reasoning,usageProfile,contextWindow,model);else if(usageProfile===LLAMA_MESSAGES_PROFILE)normalizeLlamaMessagesRequest({},reasoning,model);else applyLocalReasoning({},reasoning);
     this.#upstream=url;this.#token=token;this.#sample=readResources;this.#audit=audit;this.#release=release;
     this.#options={port,model,reasoning,usageProtocol,observeRequest,onResponseCompleted,guardPercent,vramGuardPercent,ramGuardPercent,sampleMaxAgeMs,sampleTimeoutMs,pollMs,idleMs,requestTimeoutMs,maxBodyBytes,usageProfile,contextWindow,maxOutputTokens};
   }
@@ -147,7 +175,7 @@ export class LocalInferenceBridge {
   stop(reason='manual'){
     if(this.#stopping)return this.#stopping;this.#state='stopping';this.#failure=['manual','idle'].includes(reason)?null:reason;
     clearInterval(this.#monitor);clearTimeout(this.#idle);this.#active?.abort.abort();
-    this.#stopping=(async()=>{if(this.#server){this.#server.closeAllConnections();await new Promise(r=>this.#server.close(()=>r()));}try{await bounded(Promise.resolve().then(()=>this.#release()).then(()=>{this.#cleanupComplete=true;}),10000);}catch{this.#failure='Owned resource cleanup failed';}this.#address=null;this.#state=this.#failure?'fault':'stopped';})();return this.#stopping;
+    this.#stopping=(async()=>{if(this.#server){this.#server.closeAllConnections();await new Promise(r=>this.#server.close(()=>r()));}try{await bounded(Promise.resolve().then(()=>this.#release(reason)).then(()=>{this.#cleanupComplete=true;}),10000);}catch{this.#failure='Owned resource cleanup failed';}this.#address=null;this.#state=this.#failure?'fault':'stopped';})();return this.#stopping;
   }
   async #handle(req,res){
     const reply=(status,message)=>{if(res.destroyed||res.writableEnded)return;if(res.headersSent){res.destroy();return;}res.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});res.end(JSON.stringify({error:message}));};
@@ -172,8 +200,8 @@ export class LocalInferenceBridge {
       if(parsed.model!==this.#options.model)throw error(400,'Model does not match local profile');
       if(parsed.max_tokens!==undefined&&(!Number.isSafeInteger(parsed.max_tokens)||parsed.max_tokens<=0||parsed.max_tokens>this.#options.maxOutputTokens))throw error(400,'Unverified output budget');
       if(active.abort.signal.aborted)throw error(503,'Request cancelled');
-      const adapter=responses?adaptLocalResponsesTools(normalizeLocalResponsesRequest(parsed,this.#options.reasoning,this.#options.usageProfile,this.#options.contextWindow),{imageToolResultsAsMessages:this.#options.usageProfile===LLAMA_RESPONSES_PROFILE,reasoningContentAsSummary:this.#options.usageProfile===LLAMA_RESPONSES_PROFILE}):null;
-      const normalized=adapter?adapter.request:applyLocalReasoning(normalizeLocalMessageRequest(parsed),this.#options.reasoning);
+      const adapter=responses?adaptLocalResponsesTools(normalizeLocalResponsesRequest(parsed,this.#options.reasoning,this.#options.usageProfile,this.#options.contextWindow,this.#options.model),{imageToolResultsAsMessages:this.#options.usageProfile===LLAMA_RESPONSES_PROFILE,reasoningContentAsSummary:this.#options.usageProfile===LLAMA_RESPONSES_PROFILE}):null;
+      const normalized=adapter?adapter.request:this.#options.usageProfile===LLAMA_MESSAGES_PROFILE?normalizeLlamaMessagesRequest(parsed,this.#options.reasoning,this.#options.model):applyLocalReasoning(normalizeLocalMessageRequest(parsed),this.#options.reasoning);
       this.#options.observeRequest(normalized);
       const outgoing=normalized===parsed?body:Buffer.from(JSON.stringify(normalized));
       const headers={'content-type':'application/json','accept-encoding':'identity','content-length':outgoing.length};
@@ -185,15 +213,14 @@ export class LocalInferenceBridge {
           if(response.headers['content-encoding']&&response.headers['content-encoding']!=='identity'){response.destroy();reject(error(502,'Unexpected upstream encoding'));return;}
           const options={profile:this.#options.usageProfile,onCompleted:()=>{active.completed=true;this.#options.onResponseCompleted();},onUsage:record=>{const result=this.#audit(record);if(result?.then){Promise.resolve(result).catch(()=>{});throw new Error('Usage audit must be synchronous');}}};
           if(String(responseHeaders['content-type']).includes('text/event-stream')){res.writeHead(200,responseHeaders);const transforms=responses?[adapter.stream(),createResponsesUsageSSETransform(options)]:[createUsageSSETransform(options)];pipeline(response,...transforms,res,e=>e?reject(e):resolve());}
-          else{readBody(response,this.#options.maxBodyBytes).then(raw=>{let result=JSON.parse(raw);if(responses){const record=normalizeResponsesUsage(result,options);if(record)options.onUsage(record);result=adapter.restoreResponse(result);}else result=createUsageNormalizer(options)(result);res.writeHead(200,responseHeaders);res.end(JSON.stringify(result));resolve();}).catch(reject);}
+          else{readBody(response,this.#options.maxBodyBytes).then(raw=>{let result=JSON.parse(raw);if(responses){const record=normalizeResponsesUsage(result,options);if(record)options.onUsage(record);result=adapter.restoreResponse(result);}else{result=createUsageNormalizer(options)(result);if(this.#options.usageProfile===LLAMA_MESSAGES_PROFILE&&result.type==='message'&&result.stop_reason)options.onCompleted();}res.writeHead(200,responseHeaders);res.end(JSON.stringify(result));resolve();}).catch(reject);}
         });up.once('error',reject);up.end(outgoing);
       });
     }catch(e){if(!active.completed){reply(e.status||502,e.status?e.message:'Local upstream failed');if(!e.status&&!active.abort.signal.aborted)await this.stop('Local upstream or usage failure');}}
     finally{
       clearTimeout(timer);
-      // Disconnecting HTTP does not prove that a local runtime has stopped GPU
-      // generation. Release the owned model on cancellation/timeouts instead of
-      // retaining it through the ordinary idle period.
+      // The resource owner confirms remote cancellation before reusing a model;
+      // unsupported or unconfirmed cancellation still unloads the resource.
       if(active.abort.signal.aborted)await this.stop('Request cancelled');
       if(this.#active===active)this.#active=null;
       this.#armIdle();

@@ -1,8 +1,28 @@
 import { AgentBusyError } from './agent-runtime.mjs';
 import { withCharacterSessionLocks } from './character-settings.mjs';
-import { normalizeLocalDefinition } from './local-provider-service.mjs';
+import { normalizeLocalDefinition, localProfileReasoningOptions } from './local-provider-service.mjs';
 import { isIP } from 'node:net';
-import { WindowsLMStudioHost, isQwen38LMStudioModelKey } from './local-provider-host.mjs';
+import { WindowsLMStudioHost } from './local-provider-host.mjs';
+
+export function assignedLocalDefinition(definition, assignment) {
+  return normalizeLocalDefinition({
+    ...definition,
+    host:{...definition.host,...(assignment.address?{address:assignment.address}:{})},
+    profile:{...definition.profile,...(assignment.reasoning?{reasoning:assignment.reasoning}:{})},
+  });
+}
+
+export async function controlLocalModel({pool,runtime,localProviders,characterID,action}) {
+  if(!runtime||runtime.draining)throw new AgentBusyError('백엔드가 준비된 뒤 다시 선택하세요.');
+  if(!['start','stop'].includes(action))throw new Error('Unsupported model action');
+  const result=await pool.query(`SELECT p.definition, c.config->>'localHostAddress' AS address,
+    c.config->>'localReasoning' AS reasoning FROM characters c
+    JOIN local_agent_profiles p ON p.id=c.config->>'localProfileId'
+    WHERE c.id=$1 AND p.enabled=true`,[characterID]);
+  const row=result.rows[0];
+  if(!row)throw new Error('로컬 모델을 먼저 선택하세요.');
+  return {ok:true,...await localProviders.controlModel(assignedLocalDefinition(row.definition,row),action)};
+}
 
 export function normalizeLocalHostAddress(value) {
   const address=typeof value==='string'?value.trim():'';
@@ -59,12 +79,12 @@ export function localSelectionSettings(previous, definition) {
     delete config.localProfileId;delete config.localPreviousSettings;delete config.localReasoning;delete config.localHostAddress;
     delete config.executablePath;
     if(saved.executablePath)config.executablePath=saved.executablePath;
-    return {...saved,config};
+    return {...saved,autoCompactPercent:saved.autoCompactPercent??90,config};
   }
   if(config.localProfileId===definition.profile.id)return null;
   const backend=definition.profile.backend;
   if(!['claude','codex'].includes(backend))throw new Error('Unsupported local runner backend');
-  if(!config.localProfileId)config.localPreviousSettings={backend:previous.backend,model:previous.model,effort:previous.effort,fastMode:previous.fastMode,permission:previous.permission,executablePath:config.executablePath??null};
+  if(!config.localProfileId)config.localPreviousSettings={backend:previous.backend,model:previous.model,effort:previous.effort,fastMode:previous.fastMode,permission:previous.permission,autoCompactPercent:previous.autoCompactPercent??90,executablePath:config.executablePath??null};
   delete config.executablePath;
   const localAddress=config.localProfileId?config.localHostAddress:undefined;
   config.localProfileId=definition.profile.id;
@@ -73,7 +93,7 @@ export function localSelectionSettings(previous, definition) {
   // The runner changes, not the user's PC route. SSH still validates the new
   // profile's pinned host identity before any model request can be made.
   if(localAddress)config.localHostAddress=normalizeLocalHostAddress(localAddress);
-  return {backend,model:definition.profile.model,effort:'default',fastMode:false,permission:localPermission(previous.permission,backend),config};
+  return {backend,model:definition.profile.model,effort:'default',fastMode:false,permission:localPermission(previous.permission,backend),autoCompactPercent:100,config};
 }
 
 export async function setLocalReasoning({pool,runtime,characterID,reasoning,broadcast=()=>{}}) {
@@ -89,8 +109,7 @@ export async function setLocalReasoning({pool,runtime,characterID,reasoning,broa
         const previous=(await client.query('SELECT config FROM characters WHERE id=$1 FOR UPDATE',[characterID])).rows[0];
         if(!previous?.config?.localProfileId)throw new Error('Local profile required');
         const found=(await client.query('SELECT definition FROM local_agent_profiles WHERE id=$1 AND enabled=true FOR SHARE',[previous.config.localProfileId])).rows[0];
-        if(!isQwen38LMStudioModelKey(found?.definition?.host?.modelKey))throw new Error('Reasoning control is verified only for Qwen3.8-27B');
-        const allowed=found.definition.profile.runtime==='llama-cpp-b10982'?['default','low','medium','xhigh']:['default','on','off'];
+        const allowed=localProfileReasoningOptions(normalizeLocalDefinition(found?.definition));
         if(!allowed.includes(reasoning))throw new Error('Unsupported local reasoning option for this runtime');
         await client.query('UPDATE characters SET config=$2::jsonb,updated_at=now() WHERE id=$1',[characterID,JSON.stringify({...previous.config,localReasoning:reasoning})]);
         await client.query('COMMIT');
@@ -113,7 +132,7 @@ export async function selectLocalProfile({pool,runtime,characterID,profileID,bro
       await client.query('BEGIN');
       try {
         if(runtime.draining||runtime.running.has(characterID)||runtime.compactingCharacters.has(characterID)||runtime.terminalSessionRegistry?.has(characterID))throw new AgentBusyError('직원 상태가 바뀌었습니다. 작업 종료 후 다시 선택하세요.');
-        const current=await client.query('SELECT id,backend,model,effort,fast_mode AS "fastMode",permission,config FROM characters WHERE id=$1 FOR UPDATE',[characterID]);
+        const current=await client.query('SELECT id,backend,model,effort,fast_mode AS "fastMode",permission,auto_compact_percent AS "autoCompactPercent",config FROM characters WHERE id=$1 FOR UPDATE',[characterID]);
         if(!current.rows[0])throw new Error('직원을 찾을 수 없습니다.');
         let definition=null;
         if(profileID) {
@@ -126,7 +145,7 @@ export async function selectLocalProfile({pool,runtime,characterID,profileID,bro
           if(current.rows[0].config?.localProfileId)await runtime.localProviders?.closeIdleProfile(current.rows[0].config.localProfileId);
           plan=await runtime.inspectWorkspaceForSessionEnd(characterID,client);
           await runtime.applyWorkspaceSessionEndPlan(client,plan);
-          await client.query('UPDATE characters SET backend=$2,model=$3,effort=$4,fast_mode=$5,permission=$6,config=$7::jsonb,updated_at=now() WHERE id=$1',[characterID,next.backend,next.model,next.effort,next.fastMode,next.permission,JSON.stringify(next.config)]);
+          await client.query('UPDATE characters SET backend=$2,model=$3,effort=$4,fast_mode=$5,permission=$6,config=$7::jsonb,auto_compact_percent=$8,updated_at=now() WHERE id=$1',[characterID,next.backend,next.model,next.effort,next.fastMode,next.permission,JSON.stringify(next.config),next.autoCompactPercent]);
         }
         await client.query('COMMIT');
         return {ok:true,characterId:characterID,localProfileId:profileID||null,newSession:!!next};

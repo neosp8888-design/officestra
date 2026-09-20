@@ -211,10 +211,34 @@ struct ArchiveBookNavigation {
 struct ArchiveOpenBook: View {
     let turn: LiveFeedTurn
     let navigation: ArchiveBookNavigation
+    let isDeleting: Bool
     let onPrevious: () -> Void
     let onNext: () -> Void
+    let onDelete: () -> Void
     let onClose: () -> Void
+    @Binding private var deleteErrorMessage: String?
     @State private var copiedKey: String?
+    @State private var showsDeleteConfirmation = false
+
+    init(
+        turn: LiveFeedTurn,
+        navigation: ArchiveBookNavigation,
+        isDeleting: Bool = false,
+        onPrevious: @escaping () -> Void,
+        onNext: @escaping () -> Void,
+        onDelete: @escaping () -> Void = {},
+        onClose: @escaping () -> Void,
+        deleteErrorMessage: Binding<String?> = .constant(nil)
+    ) {
+        self.turn = turn
+        self.navigation = navigation
+        self.isDeleting = isDeleting
+        self.onPrevious = onPrevious
+        self.onNext = onNext
+        self.onDelete = onDelete
+        self.onClose = onClose
+        _deleteErrorMessage = deleteErrorMessage
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -254,6 +278,43 @@ struct ArchiveOpenBook: View {
         // 공용 region의 조건 분기를 쓰면 커서 출입마다 두 ScrollView와
         // 본문·표·코드 뷰가 재생성된다. 선택을 유지해 본문과 스크롤 위치를 보존한다.
         .textSelection(.enabled)
+        .confirmationDialog(
+            OfficeLocalization.string("대화 삭제"),
+            isPresented: $showsDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(
+                OfficeLocalization.string("대화 삭제"),
+                role: .destructive,
+                action: onDelete
+            )
+            Button(OfficeLocalization.string("취소"), role: .cancel) {}
+        } message: {
+            Text(
+                OfficeLocalization.string(
+                    "이 대화와 관련된 업무 기록 및 검색 색인이 함께 삭제됩니다. 실행 중인 대화는 삭제할 수 없습니다."
+                )
+            )
+        }
+        .alert(
+            OfficeLocalization.string("대화를 삭제하지 못했습니다"),
+            isPresented: deleteErrorPresented
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(deleteErrorMessage.map(OfficeLocalization.systemMessage) ?? "")
+        }
+    }
+
+    private var deleteErrorPresented: Binding<Bool> {
+        Binding(
+            get: { deleteErrorMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    deleteErrorMessage = nil
+                }
+            }
+        )
     }
 
     private var bookToolbar: some View {
@@ -312,6 +373,27 @@ struct ArchiveOpenBook: View {
                 Color.primary.opacity(0.055),
                 in: Capsule()
             )
+
+            Button(role: .destructive) {
+                showsDeleteConfirmation = true
+            } label: {
+                if isDeleting {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .frame(width: 14, height: 14)
+                } else {
+                    Label(
+                        OfficeLocalization.string("대화 삭제"),
+                        systemImage: "trash"
+                    )
+                }
+            }
+            .font(.system(size: 10, weight: .bold))
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.red.opacity(0.88))
+            .disabled(isDeleting)
+            .accessibilityLabel(OfficeLocalization.string("대화 삭제"))
+            .help(OfficeLocalization.string("대화 삭제"))
 
             Button(action: onClose) {
                 Label(OfficeLocalization.string("닫기"), systemImage: "xmark")

@@ -2,9 +2,9 @@
 
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
-import { LocalProviderService, normalizeLocalDefinition, LOCAL_TURN_EFFORT_SQL } from './local-provider-service.mjs';
-import { selectLocalProfile, setLocalReasoning, setLocalHostAddress } from './local-profile-selection.mjs';
-import { LocalHostBusyError, isQwen38LMStudioModelKey } from './local-provider-host.mjs';
+import { LocalProviderService, normalizeLocalDefinition, localProfileTitle, localProfileReasoningOptions, localProfileDefaultReasoning, LOCAL_TURN_EFFORT_SQL } from './local-provider-service.mjs';
+import { selectLocalProfile, setLocalReasoning, setLocalHostAddress, assignedLocalDefinition, controlLocalModel } from './local-profile-selection.mjs';
+import { LocalHostBusyError } from './local-provider-host.mjs';
 import { WebSocket, WebSocketServer } from "ws";
 
 import {
@@ -72,6 +72,10 @@ import {
   normalizeTurnFeedback,
   replaceTurnFeedback,
 } from "./turn-feedback.mjs";
+import {
+  TurnDeletionError,
+  deleteArchivedTurn,
+} from "./turn-deletion.mjs";
 import { startSlackBridge } from "./slack-bridge.mjs";
 import {
   CharacterTurnCostSummaryCache,
@@ -314,6 +318,11 @@ function routeTurnFeedback(pathname) {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+function routeTurn(pathname) {
+  const match = pathname.match(/^\/api\/turns\/([^/]+)$/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 function routeWorkspaceReview(pathname) {
   const match = pathname.match(
     /^\/api\/workspace-reviews\/([^/]+)(?:\/(approve|reject))?$/,
@@ -511,10 +520,10 @@ async function updateCharacterContextSettings(response, characterID, body) {
   if (
     !Number.isInteger(autoCompactPercent) ||
     autoCompactPercent < 20 ||
-    autoCompactPercent > 95
+    autoCompactPercent > 100
   ) {
     send(response, 400, {
-      error: "자동 압축 기준은 20% 이상 95% 이하의 정수여야 합니다.",
+      error: "자동 압축 기준은 20% 이상 100% 이하의 정수여야 합니다.",
     });
     return;
   }
@@ -522,7 +531,7 @@ async function updateCharacterContextSettings(response, characterID, body) {
     `
       UPDATE characters
       SET auto_compact_percent = $2, updated_at = now()
-      WHERE id = $1
+      WHERE id = $1 AND ($2 <= 95 OR NULLIF(config->>'localProfileId', '') IS NOT NULL)
       RETURNING
         id,
         auto_compact_percent AS "autoCompactPercent"
@@ -530,6 +539,11 @@ async function updateCharacterContextSettings(response, characterID, body) {
     [characterID, autoCompactPercent],
   );
   if (result.rowCount === 0) {
+    const exists = await pool.query('SELECT id FROM characters WHERE id=$1', [characterID]);
+    if (exists.rowCount) {
+      send(response, 400, { error: "클라우드 모델의 자동 압축 기준은 최대 95%입니다." });
+      return;
+    }
     send(response, 404, { error: "캐릭터를 찾을 수 없습니다." });
     return;
   }
@@ -1128,6 +1142,29 @@ async function updateTurnFeedback(response, turnID, body) {
     feedbackChanged: true,
   });
   send(response, 200, { feedback: stored.feedback });
+}
+
+async function deleteTurn(response, turnID) {
+  try {
+    const deleted = await deleteArchivedTurn(pool, turnID);
+    if (!deleted) {
+      send(response, 404, { error: "대화를 찾을 수 없습니다." });
+      return;
+    }
+    broadcast({
+      type: "feed.changed",
+      turnId: deleted.id,
+      characterId: deleted.characterId,
+      costChanged: true,
+    });
+    send(response, 200, { deleted: true, ...deleted });
+  } catch (error) {
+    if (error instanceof TurnDeletionError) {
+      send(response, error.statusCode, { error: error.message });
+      return;
+    }
+    throw error;
+  }
 }
 
 async function queryTurnFeed({
@@ -2212,6 +2249,7 @@ const server = createServer(async (request, response) => {
     const jobCharacterID = routeAgentJob(url.pathname);
     const terminalSessionRoute = routeTerminalSession(url.pathname);
     const liveFeedTurnID = routeLiveFeedTurn(url.pathname);
+    const turnID = routeTurn(url.pathname);
     const turnSourcesID = routeTurnSources(url.pathname);
     const turnFeedbackID = routeTurnFeedback(url.pathname);
     const workspaceReviewRoute = routeWorkspaceReview(url.pathname);
@@ -2255,7 +2293,16 @@ const server = createServer(async (request, response) => {
     ) {
       const profiles = await pool.query('SELECT id, enabled, definition FROM local_agent_profiles ORDER BY id');
       const assignments = await pool.query("SELECT c.id AS \"characterId\", c.config->>'localProfileId' AS \"profileId\", c.config->>'localReasoning' AS reasoning, COALESCE(c.config->>'localHostAddress', p.definition->'host'->>'address') AS address FROM characters c LEFT JOIN local_agent_profiles p ON p.id=c.config->>'localProfileId' WHERE c.config ? 'localProfileId'");
-      send(response,200,{profiles:profiles.rows.map(row=>({id:row.id,enabled:row.enabled,backend:row.definition.profile.backend,model:row.definition.profile.model,title:row.definition.host.modelKey.split('/').at(-1),contextWindow:row.definition.profile.contextWindow,kvCacheQuantization:row.definition.profile.kvCacheQuantization??null,reasoningOptions:row.definition.profile.runtime==='llama-cpp-b10982'?['default','low','medium','xhigh']:isQwen38LMStudioModelKey(row.definition.host.modelKey)?['default','on','off']:[]})),assignments:assignments.rows,statuses:localProviders?.status()??[]});
+      const statuses=assignments.rows.flatMap(assignment=>{
+        const profile=profiles.rows.find(row=>row.id===assignment.profileId);
+        return profile&&localProviders?[{id:assignment.characterId,characterId:assignment.characterId,profileId:assignment.profileId,...localProviders.modelStatus(assignedLocalDefinition(profile.definition,assignment))}]:[];
+      });
+      send(response,200,{profiles:profiles.rows.map(row=>({id:row.id,enabled:row.enabled,backend:row.definition.profile.backend,model:row.definition.profile.model,title:localProfileTitle(row.definition),contextWindow:row.definition.profile.contextWindow,kvCacheQuantization:row.definition.profile.kvCacheQuantization??null,reasoningOptions:localProfileReasoningOptions(row.definition),defaultReasoning:localProfileDefaultReasoning(row.definition)})),assignments:assignments.rows,statuses});
+    } else if (request.method === 'POST' && /^\/api\/characters\/[^/]+\/local-model$/.test(url.pathname)) {
+      if(!trustedJSONMutation(request,response))return;
+      const body=await readJSON(request);
+      try{send(response,200,await controlLocalModel({pool,runtime,localProviders,characterID:decodeURIComponent(url.pathname.split('/')[3]),action:body.action}));}
+      catch(error){send(response,error instanceof AgentBusyError||error instanceof LocalHostBusyError?409:400,{error:error.message});}
     } else if (request.method === 'PUT' && /^\/api\/characters\/[^/]+\/local-address$/.test(url.pathname)) {
       if(!trustedJSONMutation(request,response))return;
       const body=await readJSON(request);
@@ -2349,6 +2396,12 @@ const server = createServer(async (request, response) => {
         turnFeedbackID,
         await readJSON(request),
       );
+    } else if (request.method === "DELETE" && turnID) {
+      if (!trustedJSONMutation(request, response)) {
+        return;
+      }
+      await readJSON(request);
+      await deleteTurn(response, turnID);
     } else if (
       request.method === "GET" &&
       url.pathname === "/api/live-feed"

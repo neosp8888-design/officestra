@@ -2094,6 +2094,7 @@ export class AgentRuntime {
         fastMode: row.fastMode,
         autoCompactPercent: normalizeAutoCompactPercent(
           row.autoCompactPercent,
+          row.config?.localProfileId ? 100 : 95,
         ),
         permission: row.permission,
         identityPrompt: row.identityPrompt,
@@ -4362,12 +4363,12 @@ function canonicalRuntimePath(value) {
   }
 }
 
-export function normalizeAutoCompactPercent(value) {
+export function normalizeAutoCompactPercent(value, maximum = 95) {
   const percent = Number(value);
   if (!Number.isFinite(percent)) {
     return 90;
   }
-  return Math.min(95, Math.max(20, Math.round(percent)));
+  return Math.min(maximum, Math.max(20, Math.round(percent)));
 }
 
 function workspaceReviewPayload(workspace, diff) {

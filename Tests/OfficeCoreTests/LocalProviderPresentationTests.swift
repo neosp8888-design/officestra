@@ -2,6 +2,28 @@ import XCTest
 @testable import OfficeGame
 
 final class LocalProviderPresentationTests: XCTestCase {
+    func testStatusRowSelectsOnlyCurrentEmployeeAndCollapsesLegacyReasoningEntries() throws {
+        let json = #"[{"id":"claude:on","profileId":"claude","state":"ready"},{"id":"codex:on","profileId":"codex","state":"ready"},{"id":"codex:off","profileId":"codex","state":"idle"}]"#
+        let old = try JSONDecoder().decode([LocalProviderStatus].self, from: Data(json.utf8))
+        XCTAssertEqual(LocalProviderStatus.selected(from: old, characterID: "right-woman", profileID: "codex")?.state, "ready")
+        XCTAssertNil(LocalProviderStatus.selected(from: old, characterID: "boss", profileID: "other"))
+        let current = try JSONDecoder().decode([LocalProviderStatus].self, from: Data(#"[{"id":"left-woman","characterId":"left-woman","profileId":"codex","state":"ready","loaded":true},{"id":"right-woman","characterId":"right-woman","profileId":"codex","state":"stopped","loaded":false}]"#.utf8))
+        let selected = LocalProviderStatus.selected(from: current, characterID: "right-woman", profileID: "codex")
+        XCTAssertEqual(selected?.state, "stopped")
+        XCTAssertEqual(selected?.isLoaded, false)
+        XCTAssertEqual(selected?.isChangingModel, false)
+    }
+    func testMeroMeroNativeToggleAndDefaultDecodeForBothRunners() throws {
+        for runner in ["claude", "codex"] {
+            let json = "{\"id\":\"mero-\(runner)\",\"enabled\":true,\"backend\":\"\(runner)\",\"model\":\"meromero\",\"contextWindow\":32768,\"kvCacheQuantization\":\"q8_0\",\"reasoningOptions\":[\"default\",\"off\",\"on\"],\"defaultReasoning\":\"off\"}"
+            let profile = try JSONDecoder().decode(LocalModelOption.self, from: Data(json.utf8))
+            XCTAssertEqual(profile.defaultReasoning, "off")
+            XCTAssertEqual(profile.contextWindowTitle, "32K")
+            XCTAssertEqual(profile.reasoningOptions, ["default", "off", "on"])
+            XCTAssertFalse(profile.supportsReasoningLevels)
+            XCTAssertEqual(profile.reasoningHelp, OfficeLocalization.string("다음 요청부터 적용됩니다. 기본은 추론 끄기이며, 이 모델은 켜기·끄기를 지원합니다."))
+        }
+    }
     func testDirectRuntimeReasoningLevelsDecodeWithoutReducingContext() throws {
         let json = #"{"profiles":[{"id":"local-4090-qwen38-llamacpp","enabled":true,"backend":"codex","model":"qwen3.8","contextWindow":65536,"kvCacheQuantization":"q8_0","reasoningOptions":["default","low","medium","xhigh"]}],"assignments":[{"characterId":"right-woman","profileId":"local-4090-qwen38-llamacpp","reasoning":"xhigh"}],"statuses":[]}"#
         let catalog = try JSONDecoder().decode(LocalProviderList.self, from: Data(json.utf8))

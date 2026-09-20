@@ -74,6 +74,7 @@ test('MTP uses the measured native head without changing operating settings',()=
  assert.match(command,/"--spec-type" "draft-mtp" "--spec-draft-n-max" "2"/);
  // Cleanup remains restricted to this exact owned command, never all servers.
  assert.ok(llamaOrphanCleanupScript(profile).includes(command));
+ assert.deepEqual(llamaServerArguments({...profile,backend:'claude'}),args);
 });
 test('native-style disconnect after completed does not mark failure or reload the model',async t=>{
  const upstream=createServer((req,res)=>{req.resume();res.writeHead(200,{'content-type':'text/event-stream'});res.write('data: '+JSON.stringify({type:'response.completed',response:{id:'test',status:'completed',usage:{input_tokens:15,output_tokens:2}}})+'\n\n');setTimeout(()=>res.end(),150).unref();});

@@ -7,6 +7,7 @@ import { isAbsolute, join } from 'node:path';
 import { buildArguments, claudePersistentArguments, executionEnvironment, locateExecutable,
   claudePersistentWorkerSignature, normalizeAutoCompactPercent } from './agent-runtime.mjs';
 import { terminalArguments } from './terminal-sessions.mjs';
+import { isMeroMero, directReasoningOptions, directCodexReasoning } from './local-model-capabilities.mjs';
 
 const KEYS = new Set(['id','providerKind','backend','model','endpoint','credentialEnv',
   'credentialVersion','contextWindow','maxOutputTokens','usageProtocol','reasoning','kvCacheQuantization','runtime']);
@@ -42,11 +43,11 @@ export function normalizeLocalAgentProfile(value) {
     throw new TypeError(`Local ${value.backend} profile requires ${expectedUsageProtocol}`);
   }
   if(value.runtime!==undefined&&value.runtime!=='llama-cpp-b10982')throw new TypeError('Unsupported local runtime');
-  if(value.runtime&&!(value.backend==='codex'&&value.contextWindow===65536&&value.kvCacheQuantization==='q8_0'&&model==='officestra-qwen38-27b-uncensored-q4km'))throw new TypeError('Direct runtime requires verified Qwen 64K KV8');
-  if(value.reasoning!==undefined&&!(value.runtime?['default','low','medium','xhigh']:['default','on','off']).includes(value.reasoning))throw new TypeError('Unsupported local reasoning option');
+  if(value.runtime&&!(value.kvCacheQuantization==='q8_0'&&(isMeroMero(value)?[32768,65536].includes(value.contextWindow):value.contextWindow===65536&&model==='officestra-qwen38-27b-uncensored-q4km')))throw new TypeError('Direct runtime requires a verified model/context/KV8 configuration');
+  if(value.reasoning!==undefined&&!(value.runtime?directReasoningOptions(value):['default','on','off']).includes(value.reasoning))throw new TypeError('Unsupported local reasoning option');
   if(value.kvCacheQuantization!==undefined &&
-      !(value.kvCacheQuantization==='q8_0'&&value.backend==='codex'&&value.contextWindow===65536)) {
-    throw new TypeError('Only explicit local Codex 64K q8 KV is supported');
+      !(value.kvCacheQuantization==='q8_0'&&(value.backend==='codex'||value.runtime==='llama-cpp-b10982')&&(isMeroMero(value)?[32768,65536].includes(value.contextWindow):value.contextWindow===65536))) {
+    throw new TypeError('Only verified local 64K q8 KV profiles are supported');
   }
   return Object.freeze({id,providerKind:'local',backend:value.backend,model,
     endpoint:url.origin,credentialEnv,credentialVersion,contextWindow:value.contextWindow,
@@ -65,8 +66,8 @@ function localClaudeOptions(args, mode) {
           '--output-format','--input-format'].includes(args[i])) {
       result.push(args[i],args[++i]);continue;
     }
-    // These flags belong to the cloud model. Gateway effort delivery has not
-    // been verified, so do not offer a setting that is silently ignored.
+    // Cloud CLI effort flags are not the local model's control. The selected
+    // profile sets the verified runtime-specific effort in the bridge.
     if (args[i]==='--effort') {i++;continue;}
     if (args[i]==='--prompt-suggestions') {result.push(args[i],'false');i++;continue;}
     result.push(args[i]);
@@ -106,12 +107,12 @@ function localCodexOptions(args, profile, character, mode, catalogPath, workdir)
     }
     result.push(args[i]);
   }
-  const autoCompactPercent=normalizeAutoCompactPercent(character.autoCompactPercent);
+  const autoCompactPercent=normalizeAutoCompactPercent(character.autoCompactPercent??100,100);
   const autoCompactTokenLimit=Math.floor(profile.contextWindow*autoCompactPercent/100);
   const overrides=[
     '-c',`model=${quotedConfig(profile.model)}`,
     '-c',`model_provider=${quotedConfig(LOCAL_CODEX_PROVIDER)}`,
-    '-c',`model_reasoning_effort=${quotedConfig(profile.runtime==='llama-cpp-b10982'?(profile.reasoning&&profile.reasoning!=='default'?profile.reasoning:'xhigh'):'default')}`,
+    '-c',`model_reasoning_effort=${quotedConfig(profile.runtime==='llama-cpp-b10982'?directCodexReasoning(profile):'default')}`,
     // Display the reasoning this local model actually emits. This does not
     // change effort or synthesize a summary; both GUI JSON and TUI need it.
     // llama.cpp raw content is mirrored into the Codex summary display lane
@@ -168,6 +169,7 @@ export function createLocalAgentLaunch({profile,character,mode='gui',prompt='',
       CLAUDE_CODE_USE_GATEWAY:'1',CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:'1',
       CLAUDE_CODE_MAX_RETRIES:'0',CLAUDE_CODE_MAX_CONTEXT_TOKENS:String(p.contextWindow),
       CLAUDE_CODE_MAX_OUTPUT_TOKENS:String(p.maxOutputTokens),MAX_THINKING_TOKENS:'0',
+      CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:String(normalizeAutoCompactPercent(character.autoCompactPercent??100,100)),
       // A local model can spend several minutes loading and evaluating a long
       // prompt before it sends response headers. Claude Code otherwise applies
       // both its SDK request timeout and independent first-byte/stream
@@ -194,6 +196,6 @@ export function createLocalAgentLaunch({profile,character,mode='gui',prompt='',
   // Secret-free worker identity; callers must rotate credentialVersion with a
   // credential change. Do not put credential values into logs/signatures.
   const workerIdentity=claudePersistentWorkerSignature({character,workdir,executable});
-  const signature=createHash('sha256').update(JSON.stringify({profile:p,mode,workerIdentity})).digest('hex');
+  const signature=createHash('sha256').update(JSON.stringify({profile:p,mode,workerIdentity,autoCompactPercent:normalizeAutoCompactPercent(character.autoCompactPercent??100,100)})).digest('hex');
   return {executable:mode==='terminal'?localTerminalExecutable(executable,env):executable,backend:p.backend,providerKind:'local',profile:p,args:normalizedArgs,env,cwd:workdir,signature};
 }

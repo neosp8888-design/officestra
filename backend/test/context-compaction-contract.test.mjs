@@ -42,7 +42,7 @@ test("컨텍스트 설정과 수동 압축 API를 신뢰된 로컬 JSON 경로�
   assert.equal(serverSource.includes("context\\/compact$/"), true);
   assert.match(
     serverSource,
-    /updateCharacterContextSettings[\s\S]*autoCompactPercent < 20[\s\S]*autoCompactPercent > 95/,
+    /updateCharacterContextSettings[\s\S]*autoCompactPercent < 20[\s\S]*autoCompactPercent > 100/,
   );
   assert.match(
     serverSource,
@@ -75,7 +75,7 @@ test("자동 압축 기준 migration은 90% 기본값과 50~95% 제약을 둔다
 test("앱의 자동 압축 기준 클램프와 슬라이더는 20% 하한을 함께 쓴다", () => {
   assert.equal(directorSource.includes("max(50,"), false);
   assert.equal(
-    directorSource.match(/min\(95, max\(20, percent\)\)/g)?.length,
+    directorSource.match(/min\(localProfileID\(for: character\) == nil \? 95 : 100, max\(20, percent\)\)/g)?.length,
     1,
   );
   assert.equal(
@@ -83,7 +83,7 @@ test("앱의 자동 압축 기준 클램프와 슬라이더는 20% 하한을 함
       ?.length,
     1,
   );
-  assert.match(appSource, /in: 20 \.\.\. 95,/);
+  assert.match(appSource, /in: 20 \.\.\. \(director.localProfileID\(for: character.id\) == nil \? 95 : 100\),/);
 });
 
 test("Codex와 Claude 압축 지침은 직원 호칭 없이 내용을 보존한다", () => {

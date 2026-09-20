@@ -4,6 +4,9 @@ import { StringDecoder } from 'node:string_decoder';
 // Opt-in dialect established by LM Studio runtime stats vs Messages usage.
 // Never enable for Anthropic/cloud providers, or infer from token ratios.
 export const INCLUSIVE_INPUT_PROFILE = 'lmstudio-0.4.24+1-inclusive-input';
+// Pinned b10982 /v1/messages reports UNcached input separately from cache.
+// Verified against server-task.cpp and cold/warm live Messages requests.
+export const LLAMA_MESSAGES_PROFILE = 'llama.cpp-b10982-messages-exclusive-input';
 
 function tokens(value, name) {
   if (!Number.isSafeInteger(value) || value < 0) throw new Error(`Invalid ${name}`);
@@ -11,7 +14,7 @@ function tokens(value, name) {
 }
 
 export function createUsageNormalizer({ profile, onUsage = () => {} } = {}) {
-  if (profile !== INCLUSIVE_INPUT_PROFILE) throw new Error('Explicit verified local usage profile required');
+  if (![INCLUSIVE_INPUT_PROFILE,LLAMA_MESSAGES_PROFILE].includes(profile)) throw new Error('Explicit verified local usage profile required');
   let rawInput, cacheRead = 0, cacheWrite = 0, messageId;
   return (event) => {
     const start = event?.type === 'message_start';
@@ -31,9 +34,12 @@ export function createUsageNormalizer({ profile, onUsage = () => {} } = {}) {
     if (cacheWrite !== 0) throw new Error('Unverified local cache-creation semantics');
     const changesInput = 'input_tokens' in usage || 'cache_read_input_tokens' in usage;
     if (!changesInput) return event;
-    if (rawInput === undefined || cacheRead > rawInput) throw new Error('Inconsistent inclusive input/cache counts');
-    const normalized = { ...usage, input_tokens: rawInput - cacheRead };
-    onUsage({ profile, messageId, raw, normalized: { ...normalized }, totalInputTokens: rawInput });
+    const exclusive=profile===LLAMA_MESSAGES_PROFILE;
+    if (rawInput === undefined || (!exclusive&&cacheRead > rawInput)) throw new Error('Inconsistent inclusive input/cache counts');
+    const totalInputTokens=exclusive?rawInput+cacheRead:rawInput;
+    if(!Number.isSafeInteger(totalInputTokens))throw new Error('Invalid total input tokens');
+    const normalized = { ...usage, input_tokens: exclusive?rawInput:rawInput - cacheRead };
+    onUsage({ profile, messageId, raw, normalized: { ...normalized }, totalInputTokens });
     return start ? { ...event, message: { ...event.message, usage: normalized } } : { ...event, usage: normalized };
   };
 }
@@ -43,12 +49,16 @@ export function createUsageSSETransform(options) {
   const normalize = createUsageNormalizer(options);
   const decoder = new StringDecoder('utf8');
   let pending = '';
+  let completed=false;
   function frame(input) {
     const data = input.split(/\r?\n/).filter(line => line.startsWith('data:'));
     if (!data.length) return input;
     const raw = data.map(line => line.slice(5).replace(/^ /, '')).join('\n');
     let event;
     try { event = JSON.parse(raw); } catch { return input; }
+    if(options.profile===LLAMA_MESSAGES_PROFILE&&event.type==='message_stop'){
+      completed=true;options.onCompleted?.();
+    }
     const next = normalize(event);
     if (next === event) return input;
     const eol = input.includes('\r\n') ? '\r\n' : '\n';
@@ -76,7 +86,11 @@ export function createUsageSSETransform(options) {
       try { pending += decoder.write(chunk); drain(this); callback(); } catch (error) { callback(error); }
     },
     flush(callback) {
-      try { pending += decoder.end(); drain(this, true); callback(); } catch (error) { callback(error); }
+      try {
+        pending += decoder.end(); drain(this, true);
+        if(options.profile===LLAMA_MESSAGES_PROFILE&&!completed)throw new Error('Incomplete local Messages stream');
+        callback();
+      } catch (error) { callback(error); }
     },
   });
 }

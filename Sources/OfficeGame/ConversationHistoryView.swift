@@ -298,6 +298,9 @@ struct ConversationArchiveView: View {
     @State private var turns: [GlobalHistoryTurn] = []
     @State private var errorMessage: String?
     @State private var isLoading = true
+    @State private var turnPendingDeletion: GlobalHistoryTurn?
+    @State private var deletingTurnID: String?
+    @State private var deleteErrorMessage: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -360,7 +363,13 @@ struct ConversationArchiveView: View {
                                     .font(.system(size: 16, weight: .bold))
 
                                     ForEach(group.turns) { turn in
-                                        ArchiveTurnCard(turn: turn)
+                                        ArchiveTurnCard(
+                                            turn: turn,
+                                            isDeleting: deletingTurnID == turn.id,
+                                            onDelete: {
+                                                turnPendingDeletion = turn
+                                            }
+                                        )
                                     }
                                 }
                             }
@@ -379,6 +388,36 @@ struct ConversationArchiveView: View {
         )
         .task {
             await load()
+        }
+        .confirmationDialog(
+            OfficeLocalization.string("대화 삭제"),
+            isPresented: deletionConfirmationPresented,
+            titleVisibility: .visible,
+            presenting: turnPendingDeletion
+        ) { turn in
+            Button(
+                OfficeLocalization.string("대화 삭제"),
+                role: .destructive
+            ) {
+                Task {
+                    await delete(turn)
+                }
+            }
+            Button(OfficeLocalization.string("취소"), role: .cancel) {}
+        } message: { _ in
+            Text(
+                OfficeLocalization.string(
+                    "이 대화와 관련된 업무 기록 및 검색 색인이 함께 삭제됩니다. 실행 중인 대화는 삭제할 수 없습니다."
+                )
+            )
+        }
+        .alert(
+            OfficeLocalization.string("대화를 삭제하지 못했습니다"),
+            isPresented: deleteErrorPresented
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(deleteErrorMessage.map(OfficeLocalization.systemMessage) ?? "")
         }
     }
 
@@ -432,6 +471,28 @@ struct ConversationArchiveView: View {
         .sorted { $0.date > $1.date }
     }
 
+    private var deletionConfirmationPresented: Binding<Bool> {
+        Binding(
+            get: { turnPendingDeletion != nil },
+            set: { isPresented in
+                if !isPresented && deletingTurnID == nil {
+                    turnPendingDeletion = nil
+                }
+            }
+        )
+    }
+
+    private var deleteErrorPresented: Binding<Bool> {
+        Binding(
+            get: { deleteErrorMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    deleteErrorMessage = nil
+                }
+            }
+        )
+    }
+
     private func load() async {
         isLoading = true
         errorMessage = nil
@@ -458,6 +519,24 @@ struct ConversationArchiveView: View {
         }
         isLoading = false
     }
+
+    private func delete(_ turn: GlobalHistoryTurn) async {
+        guard deletingTurnID == nil else {
+            return
+        }
+        deletingTurnID = turn.id
+        defer {
+            deletingTurnID = nil
+        }
+        do {
+            try await director.deleteArchivedTurn(turn.id)
+            turns.removeAll { $0.id == turn.id }
+            turnPendingDeletion = nil
+        } catch {
+            turnPendingDeletion = nil
+            deleteErrorMessage = error.localizedDescription
+        }
+    }
 }
 
 private struct HistoryDayGroup: Identifiable {
@@ -471,6 +550,8 @@ private struct HistoryDayGroup: Identifiable {
 
 private struct ArchiveTurnCard: View {
     let turn: GlobalHistoryTurn
+    let isDeleting: Bool
+    let onDelete: () -> Void
 
     var body: some View {
         DisclosureGroup {
@@ -500,6 +581,22 @@ private struct ArchiveTurnCard: View {
                         Text(sessionID)
                             .font(.system(size: 13, design: .monospaced))
                     }
+                }
+
+                HStack {
+                    Spacer()
+                    Button(role: .destructive, action: onDelete) {
+                        if isDeleting {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label(
+                                OfficeLocalization.string("대화 삭제"),
+                                systemImage: "trash"
+                            )
+                        }
+                    }
+                    .disabled(isDeleting)
                 }
             }
             .padding(.top, 8)

@@ -620,15 +620,7 @@ private struct OfficeGameView: View {
             )
             .task { await director.refreshLocalProviderStatuses() }
 
-            ForEach(director.localProviderStatuses) { status in
-                Text(status.displayText)
-                    .font(.caption)
-                    .foregroundStyle(status.state == "error" ? Color.orange : Color.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 4)
-                    .accessibilityIdentifier("localProviderStatus")
-            }
+            LocalModelControlBar(director: director, selection: director.characterSelectionStore)
 
             Divider()
                 .opacity(0.55)
@@ -1030,6 +1022,72 @@ private struct OfficeGameView: View {
         }
     }
 
+}
+
+private struct LocalModelControlBar: View {
+    @ObservedObject var director: AgentDirector
+    @ObservedObject var selection: CharacterSelectionStore
+    @State private var failure: String?
+
+    var body: some View {
+        if let character = selection.selectedCharacterID,
+           let profileID = director.localProfileID(for: character) {
+            let status = LocalProviderStatus.selected(from: director.localProviderStatuses,
+                characterID: character.rawValue, profileID: profileID)
+            HStack(spacing: 8) {
+                Text(status?.displayText ?? OfficeLocalization.string("로컬 AI · 실행 대기"))
+                    .foregroundStyle(status?.state == "error" ? Color.orange : Color.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(status?.error ?? status?.displayText ?? "")
+                    .accessibilityIdentifier("localProviderStatus")
+                Spacer(minLength: 0)
+                Button {
+                    run("start", for: character)
+                } label: {
+                    Label(OfficeLocalization.string("모델 실행"), systemImage: "play.fill")
+                }
+                .disabled(status?.isLoaded == true || busy(status))
+                .accessibilityIdentifier("localModelStart")
+                Button {
+                    run("stop", for: character)
+                } label: {
+                    Label(OfficeLocalization.string("모델 중지"), systemImage: "stop.fill")
+                }
+                .disabled(status?.state == "stopped" || busy(status))
+                .help(OfficeLocalization.string("같은 모델을 사용하는 모든 직원의 생성을 중지하고 GPU 메모리를 해제합니다."))
+                .accessibilityIdentifier("localModelStop")
+            }
+            .font(.caption)
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 4)
+            .task {
+                while !Task.isCancelled {
+                    await director.refreshLocalProviderStatuses()
+                    do { try await Task.sleep(for: .seconds(5)) }
+                    catch { break }
+                }
+            }
+            .alert(OfficeLocalization.string("로컬 모델 제어"), isPresented: Binding(
+                get: { failure != nil }, set: { if !$0 { failure = nil } }
+            )) {
+                Button(OfficeLocalization.string("확인"), role: .cancel) { failure = nil }
+            } message: { Text(failure ?? "") }
+        }
+    }
+
+    private func busy(_ status: LocalProviderStatus?) -> Bool {
+        director.isControllingLocalModel || status?.isChangingModel == true || !director.isReadyForSubmissions
+    }
+
+    private func run(_ action: String, for character: OfficeCharacter) {
+        Task {
+            do { try await director.controlLocalModel(action, for: character) }
+            catch { failure = error.localizedDescription }
+        }
+    }
 }
 
 private struct LiveWorkspaceHeader: View {
@@ -2391,7 +2449,7 @@ private struct ContextCompactionControls: View {
 
                 Slider(
                     value: $draftPercent,
-                    in: 20 ... 95,
+                    in: 20 ... (director.localProfileID(for: character.id) == nil ? 95 : 100),
                     step: 5,
                     onEditingChanged: thresholdEditingChanged
                 )
@@ -2570,6 +2628,9 @@ private struct AgentQuickSettingsView: View {
     }
 
     private func localReasoningTitle(_ value: String) -> String {
+        if value == "default", localProfile?.defaultReasoning == "off" {
+            return OfficeLocalization.string("기본 추론") + " · " + OfficeLocalization.string("추론 끄기")
+        }
         if ["low", "medium", "xhigh"].contains(value) { return value }
         if value == "default", localProfile?.supportsReasoningLevels == true {
             return OfficeLocalization.string("기본 추론") + " · xhigh"
