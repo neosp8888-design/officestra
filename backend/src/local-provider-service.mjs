@@ -150,7 +150,14 @@ export class LocalProviderService {
         await resource.release();
         if(group.record)this.models.keepWarm(group,group.record);
         group.paused=false;
-        for(const e of this.entries.values())if(e.group===group)this.change(e,'idle');
+        for(const e of this.entries.values())if(e.group===group){
+          // borrow() has confirmed cleanup before replacing an invalid record.
+          // A failed old bridge must not keep rejecting the recovered model.
+          if(!e.resource?.alive()){
+            await e.bridge?.stop();e.bridge=null;e.resource=null;e.cleanupFailed=false;
+          }
+          this.change(e,'idle');
+        }
       }
     } catch(error) {
       group.controlError=error.message;

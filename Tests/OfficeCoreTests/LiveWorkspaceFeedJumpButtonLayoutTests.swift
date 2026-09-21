@@ -30,7 +30,7 @@ final class LiveWorkspaceFeedJumpButtonLayoutTests: XCTestCase {
         XCTAssertEqual(buttonCenter, avatarCenter)
         XCTAssertEqual(
             LiveWorkspaceFeedJumpButtonLayout.leadingPadding,
-            21
+            27
         )
     }
 }

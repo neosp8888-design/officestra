@@ -118,6 +118,41 @@ test('a lost shared tunnel is cleaned before another profile borrows a new resou
   await old.release('idle');assert.equal(fresh.alive(),true);
   await fresh.release();await unlock();assert.equal(releases,2);
 });
+test('failed cleanup can retry after SSH recovers without discarding ownership early',async()=>{
+  const pool=new LocalModelPool(),group=pool.group(definition);
+  let attempts=0,fail=true;
+  const pending=deferred();
+  const record={valid:true,refs:new Set(),resource:{release:async()=>{
+    attempts++;if(fail)throw Error('SSH failed');await pending.promise;
+  }}};
+  group.record=record;
+  await assert.rejects(pool.dispose(group,record),/SSH failed/);
+  assert.equal(group.record,record);assert.equal(record.valid,false);
+  fail=false;
+  const a=pool.dispose(group,record),b=pool.dispose(group,record);
+  await delay(0);
+  assert.equal(attempts,2,'Concurrent retry callers must share one remote cleanup');
+  assert.equal(group.record,record,'Ownership must remain until cleanup succeeds');
+  pending.resolve();await Promise.all([a,b]);assert.equal(group.record,null);
+});
+
+test('explicit model start clears failed bridge only after shared cleanup succeeds',async t=>{
+  let broken=true;
+  const s=await fixture(t,{retainModels:true,release:async()=>{if(broken)throw Error('SSH failed');}});
+  const a=await s.launch('claude');
+  await(await a.post('BEFORE')).text();
+  const entry=[...s.service.entries.values()][0];
+  await entry.bridge.stop('SSH failed');entry.cleanupFailed=true;
+  assert.equal(entry.bridge.status.cleanupComplete,false);
+  await assert.rejects(s.service.controlModel(entry.definition,'start'),/SSH failed/);
+  assert.equal(s.counts().starts,1,'No replacement until cleanup is confirmed');
+  broken=false;
+  await s.service.controlModel(entry.definition,'start');
+  assert.equal(entry.cleanupFailed,false);assert.equal(entry.bridge,null);
+  const response=await a.post('AFTER');
+  assert.equal(response.status,200);await response.text();
+  assert.equal(s.counts().starts,2);
+});
 test('model queue serves waiters FIFO and removes cancelled requests without replay',async()=>{
   const pool=new LocalModelPool(),group=pool.group(definition),signal=new AbortController().signal;
   const order=[],unlock=await pool.acquire(group,signal),cancel=new AbortController();
@@ -241,7 +276,7 @@ test('failed memory release is an error, never stopped or silently restarted',as
   await assert.rejects(service.controlModel(definition,'stop'),/release failed/);
   assert.equal(service.modelStatus(definition).state,'error');
   await assert.rejects(service.controlModel(definition,'start'),/release failed/);
-  assert.equal(releases,1);
+  assert.equal(releases,2,'A new start retries cleanup, but never starts over an unconfirmed process');
   await assert.rejects(service.shutdown(),/release failed/);
 });
 

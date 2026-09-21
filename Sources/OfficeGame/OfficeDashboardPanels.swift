@@ -3793,37 +3793,9 @@ struct LiveWorkspaceFeed: View, Equatable {
     private func jumpToLatestButton(
         proxy: ScrollViewProxy
     ) -> some View {
-        Button {
+        LiveWorkspaceFeedJumpButton(director: director, characterID: characterID) {
             scrollToLatest(proxy)
-        } label: {
-            Image(systemName: "arrow.down")
-                .font(.system(size: 13, weight: .black))
-            .foregroundStyle(DashboardPalette.accent)
-            .frame(
-                width: LiveWorkspaceFeedJumpButtonLayout.diameter,
-                height: LiveWorkspaceFeedJumpButtonLayout.diameter
-            )
-            .background {
-                Circle()
-                    .fill(.ultraThinMaterial)
-                    .overlay {
-                        Circle()
-                            .stroke(
-                                DashboardPalette.accent.opacity(0.62),
-                                lineWidth: 1.4
-                            )
-                    }
-            }
-            .shadow(
-                color: DashboardPalette.accent.opacity(0.28),
-                radius: 7,
-                y: 3
-            )
-            .shadow(color: .black.opacity(0.12), radius: 3, y: 2)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(OfficeLocalization.string("맨 아래로 이동"))
-        .help(OfficeLocalization.string("맨 아래로 이동"))
     }
 
     private func markAtBottom() {
@@ -3844,10 +3816,43 @@ enum LiveWorkspaceFeedJumpButtonLayout {
     static let alignment = Alignment.bottomLeading
     static let contentHorizontalPadding = CGFloat(18)
     static let avatarDiameter = CGFloat(38)
-    static let diameter = CGFloat(32)
+    static let diameter = CGFloat(20)
     static let bottomPadding = CGFloat(12)
     static let leadingPadding =
         contentHorizontalPadding + (avatarDiameter - diameter) / 2
+}
+
+private struct LiveWorkspaceFeedJumpButton: View {
+    // Observe model changes only in this small control, not the transcript tree.
+    @ObservedObject var director: AgentDirector
+    let characterID: OfficeCharacter
+    let action: () -> Void
+
+    private var accent: Color {
+        DashboardPalette.providerAccent(
+            for: director.characters.first(where: { $0.id == characterID })?.backend ?? .codex
+        )
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.down")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(accent)
+                .frame(width: LiveWorkspaceFeedJumpButtonLayout.diameter,
+                       height: LiveWorkspaceFeedJumpButtonLayout.diameter)
+                .background {
+                    Circle()
+                        .fill(.ultraThinMaterial)
+                        .overlay { Circle().stroke(accent.opacity(0.62), lineWidth: 1) }
+                }
+                .shadow(color: accent.opacity(0.22), radius: 3, y: 1)
+                .shadow(color: .black.opacity(0.10), radius: 2, y: 1)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(OfficeLocalization.string("맨 아래로 이동"))
+        .help(OfficeLocalization.string("맨 아래로 이동"))
+    }
 }
 
 private struct LiveWorkspaceFeedTurnItem: Identifiable {

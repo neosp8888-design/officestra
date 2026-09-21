@@ -125,7 +125,7 @@ test('a live 32K entry cannot silently be reused as a 64K model',async t=>{
   const s=await setup(t);
   await assert.rejects(()=>s.service.launch({character:{...character,localProfile:{...definition,profile:{...definition.profile,contextWindow:65536}}},mode:'gui',workdir:'/tmp',executable:'/test/claude'}),/Close existing/);
 });
-async function setup(t,{busy=0,fail=false,idleMs=10000,vramPct=70,onRequest,onRelease,cleanupWaitMs=15000,mode='terminal',cleanupError}={}) {
+async function setup(t,{busy=0,fail=false,idleMs=10000,vramPct=70,onRequest,onRelease,cleanupWaitMs=15000,mode='terminal'}={}) {
   let starts=0,releases=0,requests=0;
   const server=createServer(async(req,res)=>{for await(const _ of req){} requests++;if(onRequest?.(req,res,requests)===false)return;if(fail){fail=false;res.destroy();return;}res.setHeader('content-type','application/json');res.end(JSON.stringify({type:'message',content:[{type:'text',text:'ok'}],usage:{input_tokens:100,cache_read_input_tokens:20,output_tokens:2}}));});
   await new Promise(r=>server.listen(0,'127.0.0.1',r));
@@ -137,8 +137,7 @@ async function setup(t,{busy=0,fail=false,idleMs=10000,vramPct=70,onRequest,onRe
   const spec=await service.launch({character,mode,workdir:'/tmp',executable:'/test/claude',prompt:'hello'});
   t.after(async()=>{
     try{
-      if(cleanupError){await assert.rejects(spec.release(),cleanupError);await assert.rejects(service.shutdown(),cleanupError);}
-      else{await spec.release();await service.shutdown();}
+      await spec.release();await service.shutdown();
     }finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
   });
   const post=(headers={},signal)=>fetch(spec.env.ANTHROPIC_BASE_URL+'/v1/messages',{method:'POST',signal,headers:{'x-api-key':spec.env.ANTHROPIC_API_KEY,...headers},body:JSON.stringify({model:character.model,max_tokens:32,messages:[{role:'user',content:'hello'}]})});
@@ -176,7 +175,7 @@ test('cleanup wait timeout and cancelled waiter do not start a new inference',as
 });
 test('unconfirmed resource release fails closed rather than provisioning again',async t=>{
   const received=deferred();let broken=true;
-  const s=await setup(t,{cleanupError:/release failed/,onRequest:(_q,_r,n)=>{if(n===1){received.resolve();return false;}},onRelease:()=>{if(broken)throw new Error('release failed');}});
+  const s=await setup(t,{onRequest:(_q,_r,n)=>{if(n===1){received.resolve();return false;}},onRelease:()=>{if(broken)throw new Error('release failed');}});
   const c=new AbortController();const first=s.post({},c.signal).catch(()=>null);await received.promise;c.abort();await first;await delay(30);
   assert.equal((await s.post()).status,503);assert.equal(s.counts().starts,1);broken=false;
 });

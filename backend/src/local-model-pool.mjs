@@ -58,13 +58,25 @@ export class LocalModelPool {
   async dispose(group,record){
     this.clearWarm(record);
     record.valid=false;
-    record.releasing??=Promise.resolve().then(()=>record.resource.release());
-    await record.releasing;
+    if(!record.releasing){
+      record.releaseError=null;
+      record.releasing=Promise.resolve().then(()=>record.resource.release());
+    }
+    const releasing=record.releasing;
+    try{await releasing;}
+    catch(error){
+      // Keep the unconfirmed ownership record, but allow the next explicit
+      // cleanup attempt to contact the host again after SSH recovers.
+      if(record.releasing===releasing){record.releasing=null;record.releaseError=error;}
+      throw error;
+    }
     if(group.record===record)group.record=null;
   }
   async maybeRelease(group){
     const record=group.record;
     if(record&&!record.refs.size&&!group.queue.length&&!record.warm){
+      // Unlocking the failed operation is not a new recovery request.
+      if(record.releaseError)throw record.releaseError;
       if(group.retain&&record.valid)this.keepWarm(group,record);
       else await this.dispose(group,record);
     }
