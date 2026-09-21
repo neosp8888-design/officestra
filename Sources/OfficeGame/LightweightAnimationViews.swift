@@ -78,22 +78,26 @@ final class CoreAnimationFocusLineNSView: NSView {
         updateAnimation()
     }
 
+    /// One 2.4s sweep per 30s cycle; the band stays off-screen between sweeps.
     private func updateAnimation() {
         shimmer.removeAllAnimations()
         guard isAnimated, window != nil, bounds.width > 0, shimmer.bounds.width > 0 else { return }
-        let travel = CABasicAnimation(keyPath: "transform.translation.x")
-        travel.fromValue = 0
-        travel.toValue = bounds.width + shimmer.bounds.width
+        let cycle: CFTimeInterval = 30
+        let sweepFraction = 2.4 / cycle
+        let travel = CAKeyframeAnimation(keyPath: "transform.translation.x")
+        travel.values = [0, bounds.width + shimmer.bounds.width, bounds.width + shimmer.bounds.width]
+        travel.keyTimes = [0, sweepFraction, 1].map { NSNumber(value: $0) }
+        travel.timingFunctions = [CAMediaTimingFunction(name: .easeInEaseOut),
+                                  CAMediaTimingFunction(name: .linear)]
+        travel.duration = cycle
         let brightness = CAKeyframeAnimation(keyPath: "opacity")
-        brightness.values = [0.25, 1, 0.25]
-        brightness.keyTimes = [0, 0.5, 1]
+        brightness.values = [0.25, 1, 0.25, 0.25]
+        brightness.keyTimes = [0, sweepFraction / 2, sweepFraction, 1].map { NSNumber(value: $0) }
+        brightness.duration = cycle
         let flow = CAAnimationGroup()
-        flow.duration = 2.4
-        travel.duration = flow.duration
-        brightness.duration = flow.duration
+        flow.duration = cycle
         flow.animations = [travel, brightness]
         flow.repeatCount = .infinity
-        flow.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         shimmer.add(flow, forKey: "officestra.focusFlow")
         animationStarts += 1
     }
