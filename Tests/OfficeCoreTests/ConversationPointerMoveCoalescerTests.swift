@@ -4,7 +4,7 @@ import XCTest
 
 @MainActor
 final class ConversationPointerMoveCoalescerTests: XCTestCase {
-    func testPackagedAppSelectsTheEarlyEventDispatcher() throws {
+    func testBundleDeclaresTheEarlyEventDispatcherClass() throws {
         let repository = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let data = try Data(contentsOf: repository.appendingPathComponent("Resources/Info.plist"))

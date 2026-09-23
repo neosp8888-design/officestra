@@ -4,7 +4,6 @@ import AppKit
 import OfficeCore
 import SwiftUI
 
-@main
 struct OfficeGameApp: App {
     @StateObject private var launchCoordinator = OfficeLaunchCoordinator()
 

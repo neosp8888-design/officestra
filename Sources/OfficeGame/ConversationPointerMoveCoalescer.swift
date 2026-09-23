@@ -1,6 +1,6 @@
 // 빠른 마우스 이동마다 중첩 hosting/scroll/selection 트리가 hit-test를
 // 반복하지 않도록 대화 영역의 hover 갱신만 60Hz로 합친다.
-// OS 커서 이동과 클릭·드래그·스크롤·키 입력은 제한하지 않는다.
+// 휠은 별도 coalescer로 이동량을 합치며, 클릭·드래그·키 입력은 즉시 전달한다.
 
 import AppKit
 import SwiftUI
@@ -9,6 +9,10 @@ import SwiftUI
 // 못했다. 기본 sendEvent로 들어가기 전에 합쳐 재전달의 이중 탐색도 막는다.
 @objc(OfficeApplication)
 final class OfficeApplication: NSApplication {
+    private lazy var scrollWheels = ConversationScrollWheelCoalescer { [weak self] event in
+        guard let self, ConversationPointerMoveBoundaryView.containsScroll(event) else { return }
+        self.forwardEvent(event)
+    }
     private lazy var pointerMoves = ConversationPointerMoveCoalescer { [weak self] event in
         guard let self, ConversationPointerMoveBoundaryView.contains(event),
               NSEvent.pressedMouseButtons == 0 else { return }
@@ -16,6 +20,25 @@ final class OfficeApplication: NSApplication {
     }
 
     override func sendEvent(_ event: NSEvent) {
+        if event.type == .scrollWheel {
+            pointerMoves.cancel()
+            if ConversationScrollEdgeGate.shouldIgnore(event) {
+                // A queued inward movement must be delivered before deciding
+                // whether this new outward movement is still at the edge.
+                scrollWheels.flush()
+                if ConversationScrollEdgeGate.shouldIgnore(event) { return }
+            }
+            if let event = scrollWheels.process(
+                event, isInsideConversation: ConversationPointerMoveBoundaryView.containsScroll(event)
+            ) {
+                super.sendEvent(event)
+            }
+            return
+        }
+        // Deliver accumulated movement before a click, direction/region change,
+        // or key event can replace the feed or its scroll target.
+        scrollWheels.flush()
+        scrollWheels.cancel()
         guard event.type == .mouseMoved else {
             pointerMoves.cancel()
             super.sendEvent(event)
@@ -30,9 +53,16 @@ final class OfficeApplication: NSApplication {
         }
     }
 
-    func cancelPendingPointerMove() { pointerMoves.cancel() }
+    func cancelPendingPointerMove() {
+        pointerMoves.cancel()
+        scrollWheels.cancel()
+    }
 
-    private func forwardEvent(_ event: NSEvent) { super.sendEvent(event) }
+    private func forwardEvent(_ event: NSEvent) {
+        // The viewport may have reached the edge while a wheel batch waited.
+        guard !ConversationScrollEdgeGate.shouldIgnore(event) else { return }
+        super.sendEvent(event)
+    }
 }
 
 struct ConversationPointerMoveBoundary: NSViewRepresentable {
@@ -68,6 +98,11 @@ final class ConversationPointerMoveBoundaryView: NSView {
 
     static func contains(_ event: NSEvent) -> Bool {
         guard event.type == .mouseMoved else { return false }
+        return regions.allObjects.contains { $0.containsEvent(event) }
+    }
+
+    static func containsScroll(_ event: NSEvent) -> Bool {
+        guard event.type == .scrollWheel else { return false }
         return regions.allObjects.contains { $0.containsEvent(event) }
     }
 

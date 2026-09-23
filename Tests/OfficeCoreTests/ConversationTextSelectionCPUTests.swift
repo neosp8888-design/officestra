@@ -299,7 +299,7 @@ final class ConversationTextSelectionCPUTests: XCTestCase {
         let appRoot = try XCTUnwrap(
             sourceSection(
                 in: appSource,
-                from: "@main\nstruct OfficeGameApp",
+                from: "struct OfficeGameApp",
                 to: "private struct OfficeLaunchRootView"
             )
         )

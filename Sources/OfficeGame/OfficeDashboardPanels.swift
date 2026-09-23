@@ -3405,7 +3405,8 @@ struct LiveWorkspaceFeed: View, Equatable {
                                         metrics,
                                         proxy: proxy
                                     )
-                                }
+                                },
+                                canLoadOlderTurns: canLoadOlderTurns
                             )
                             .frame(height: 1)
 
@@ -3938,13 +3939,15 @@ struct LiveWorkspaceFeedScrollObserver: NSViewRepresentable {
     let onUserScrollStarted: () -> Void
     let onUserScrollActivity: () -> Void
     let onUserScroll: (LiveWorkspaceFeedScrollSnapshot) -> Void
+    var canLoadOlderTurns = false
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             onMetrics: onMetrics,
             onUserScrollStarted: onUserScrollStarted,
             onUserScrollActivity: onUserScrollActivity,
-            onUserScroll: onUserScroll
+            onUserScroll: onUserScroll,
+            canLoadOlderTurns: canLoadOlderTurns
         )
     }
 
@@ -3966,6 +3969,7 @@ struct LiveWorkspaceFeedScrollObserver: NSViewRepresentable {
         context.coordinator.onUserScrollStarted = onUserScrollStarted
         context.coordinator.onUserScrollActivity = onUserScrollActivity
         context.coordinator.onUserScroll = onUserScroll
+        context.coordinator.scrollEdgeTarget.canLoadOlderTurns = canLoadOlderTurns
         context.coordinator.attach(
             to: nsView.window == nil
                 ? nil
@@ -3982,6 +3986,7 @@ struct LiveWorkspaceFeedScrollObserver: NSViewRepresentable {
     }
 
     final class Coordinator {
+        let scrollEdgeTarget = ConversationScrollEdgeGate.Target()
         var onMetrics: (LiveWorkspaceFeedScrollSnapshot) -> Void
         var onUserScrollStarted: () -> Void
         var onUserScrollActivity: () -> Void
@@ -4005,12 +4010,14 @@ struct LiveWorkspaceFeedScrollObserver: NSViewRepresentable {
             onMetrics: @escaping (LiveWorkspaceFeedScrollSnapshot) -> Void,
             onUserScrollStarted: @escaping () -> Void,
             onUserScrollActivity: @escaping () -> Void,
-            onUserScroll: @escaping (LiveWorkspaceFeedScrollSnapshot) -> Void
+            onUserScroll: @escaping (LiveWorkspaceFeedScrollSnapshot) -> Void,
+            canLoadOlderTurns: Bool = false
         ) {
             self.onMetrics = onMetrics
             self.onUserScrollStarted = onUserScrollStarted
             self.onUserScrollActivity = onUserScrollActivity
             self.onUserScroll = onUserScroll
+            scrollEdgeTarget.canLoadOlderTurns = canLoadOlderTurns
         }
 
         deinit {
@@ -4033,6 +4040,7 @@ struct LiveWorkspaceFeedScrollObserver: NSViewRepresentable {
             }
             self.scrollView = scrollView
             self.documentView = documentView
+            scrollEdgeTarget.attach(to: scrollView)
             scrollView.contentView.postsBoundsChangedNotifications = true
             scrollView.contentView.postsFrameChangedNotifications = true
             boundsObserver = NotificationCenter.default.addObserver(
@@ -4096,6 +4104,7 @@ struct LiveWorkspaceFeedScrollObserver: NSViewRepresentable {
         }
 
         func detach() {
+            scrollEdgeTarget.detach()
             attachmentGeneration &+= 1
             if let boundsObserver {
                 NotificationCenter.default.removeObserver(boundsObserver)
