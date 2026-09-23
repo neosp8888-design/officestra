@@ -307,6 +307,48 @@ test("갱신 실패 시 마지막 정상 모델과 제외 설정을 유지한다
   assert.equal(service.snapshot().providers[0].lastError, "offline");
 });
 
+test("CLI가 마지막 수집 시도 뒤에 설치됐을 때만 12시간을 기다리지 않고 다시 받는다", async () => {
+  let now = Date.parse("2026-09-23T10:53:00Z");
+  const changedAt = { codex: 0, antigravity: 0, claude: 0 };
+  const fetched = [];
+  const service = new ModelCatalogService({
+    store: fakeStore(),
+    now: () => now,
+    resolveExecutable: (provider) => provider,
+    executableChangedAt: async (executable) => changedAt[executable],
+    runCommand: async (executable) => {
+      fetched.push(executable);
+      return {
+        stdout: {
+          codex: codexPayload,
+          antigravity: antigravityPayload,
+          claude: claudePayload,
+        }[executable],
+      };
+    },
+  });
+  await service.loadCached();
+  await service.refreshDue();
+  fetched.length = 0;
+
+  now += 60_000;
+  const unchanged = await service.refreshUpdatedExecutables();
+  assert.deepEqual(unchanged.map((entry) => entry.status), ["fresh", "fresh", "fresh"]);
+  assert.deepEqual(fetched, []);
+
+  // 수집 4분 뒤 Claude CLI만 새로 설치됐다.
+  changedAt.claude = Date.parse("2026-09-23T10:57:34Z");
+  now = Date.parse("2026-09-23T11:03:00Z");
+  const updated = await service.refreshUpdatedExecutables();
+  assert.deepEqual(updated.map((entry) => entry.status), ["fresh", "fresh", "updated"]);
+  assert.deepEqual(fetched, ["claude"]);
+
+  // 한 번 다시 받은 뒤에는 같은 설치로 반복 수집하지 않는다.
+  now += 60_000;
+  await service.refreshUpdatedExecutables();
+  assert.deepEqual(fetched, ["claude"]);
+});
+
 test("마이그레이션은 모델 카탈로그와 동적 effort 저장을 준비한다", () => {
   const source = readFileSync(
     new URL("../../database/migrations/036_agent_model_catalog.sql", import.meta.url),

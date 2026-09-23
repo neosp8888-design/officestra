@@ -408,6 +408,14 @@ async function cliUpdates(response, url) {
   const force = ["1", "true"].includes(
     String(url.searchParams.get("force") ?? "").toLowerCase(),
   );
+  // 화이트보드 갱신 주기에 맞춰 CLI가 새로 설치됐는지도 본다. 목록 수집은
+  // 응답을 붙잡지 않고, 바뀌면 model-catalog.changed 이벤트로 알린다.
+  void modelCatalogService?.refreshUpdatedExecutables().catch((error) => {
+    console.warn(
+      "CLI 갱신 뒤 모델 목록을 다시 받지 못했습니다.",
+      error instanceof Error ? error.message : String(error),
+    );
+  });
   send(response, 200, await cliUpdateChecker.read({ force }));
 }
 

@@ -1,6 +1,7 @@
 // 설치된 Codex·Antigravity·Claude CLI의 모델 목록과 모델별 실행 옵션을 수집한다.
 
 import { execFile } from "node:child_process";
+import { realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { promisify } from "node:util";
 
@@ -23,6 +24,16 @@ async function runCatalogCommand(executable, argumentsList, options = {}) {
     pending.child.stdin.end(input);
   }
   return await pending;
+}
+
+// 심볼릭 링크를 따라간 실제 실행 파일의 ctime을 CLI 설치 시각으로 본다.
+// npm·자체 설치 모두 파일을 새로 쓰므로 ctime이 설치 시각으로 바뀐다.
+async function readExecutableChangedAt(executable) {
+  try {
+    return (await stat(await realpath(executable))).ctimeMs;
+  } catch {
+    return null;
+  }
 }
 
 export const MODEL_CATALOG_REFRESH_MILLISECONDS = 12 * 60 * 60 * 1000;
@@ -445,6 +456,7 @@ export class ModelCatalogService {
     store,
     resolveExecutable = (provider) => CATALOG_EXECUTABLES[provider] ?? provider,
     runCommand = runCatalogCommand,
+    executableChangedAt = readExecutableChangedAt,
     now = () => Date.now(),
     logger = console,
     onChanged = () => {},
@@ -456,6 +468,7 @@ export class ModelCatalogService {
     this.store = store;
     this.resolveExecutable = resolveExecutable;
     this.runCommand = runCommand;
+    this.executableChangedAt = executableChangedAt;
     this.now = now;
     this.logger = logger;
     this.onChanged = onChanged;
@@ -529,6 +542,28 @@ export class ModelCatalogService {
       MODEL_CATALOG_PROVIDERS.map((provider) =>
         this.refreshProvider(provider, { force })
       ),
+    );
+  }
+
+  // CLI가 마지막 수집 시도 뒤에 설치됐으면 12시간을 기다리지 않고 다시
+  // 받는다. 화이트보드가 CLI 업데이트 상태를 조회할 때 함께 부른다.
+  // 저장된 시도 시각과 비교하므로 백엔드가 꺼진 동안의 갱신도 잡힌다.
+  async refreshUpdatedExecutables() {
+    return await Promise.all(
+      MODEL_CATALOG_PROVIDERS.map(async (provider) => {
+        const attempted = timestamp(this.rows.get(provider)?.lastAttemptedAt);
+        const changedAt = await this.executableChangedAt(
+          await this.resolveExecutable(provider),
+        );
+        if (
+          !Number.isFinite(attempted) ||
+          !Number.isFinite(changedAt) ||
+          changedAt <= attempted
+        ) {
+          return { provider, status: "fresh" };
+        }
+        return await this.refreshProvider(provider, { force: true });
+      }),
     );
   }
 
