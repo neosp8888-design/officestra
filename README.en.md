@@ -7,6 +7,16 @@
 Run Claude Code, Codex, and Antigravity together in one macOS app.<br>
 **Five independent sessions · Coworker collaboration · English / Korean**
 
+[Download v1.6.0](https://github.com/neosp8888-design/officestra/releases/tag/v1.6.0) · [Release notes](docs/releases/v1.6.0.md)
+
+## What's new in v1.6.0
+
+- **Two conversations side by side:** click a pane to target its coworker while keeping drafts and attachments per coworker.
+- **Automatic reply forwarding:** select multiple recipients, retain them across turns, and inspect or cancel pending deliveries.
+- **More comfortable long conversations:** less redundant work during rapid scrolling and window resizing. The jump-to-bottom button appears after you manually scroll at least one viewport away from the bottom.
+- **A persistent workspace:** restore window size and position, refresh model discovery after CLI installation or updates, and see reported developer-tool activity in conversations.
+- **Local model controls:** start and stop provisioned profiles and choose model-specific reasoning options. Local AI remains optional and experimental.
+
 <p align="center">
   <img src="docs/images/officestra-social-preview.png" alt="OFFICESTRA bringing Claude Code, Codex, and Antigravity into one office" width="100%">
 </p>
@@ -58,6 +68,8 @@ Do not stop at acknowledging a request from another coworker. Send the result, v
 The final owner must verify coworkers' findings against source and tests, then present one consolidated conclusion.
 Only delete, deploy, restart services, or expand permissions when the user has authorized it.
 ```
+
+## Split conversations and automatic forwarding
 
 Use the **split button beside LIVE** to view two coworkers side by side in chat
 or terminal mode. Choose the right coworker on first use; later splits restore
@@ -126,10 +138,10 @@ feature works without a local model.
 
 ### If you have a prepared local model host
 
-- The direct path validated in this public preview is narrowly pinned to a
-  **Codex runner, Responses bridge, SSH host-key-pinned Windows NVIDIA PC, and
-  Qwen3.8-27B with a 64K context (q8 KV)**. This is not yet a generic form for
-  arbitrary OpenAI-compatible URLs.
+- The direct path uses a **Claude Code or Codex runner, local compatibility
+  bridge, and SSH host-key-pinned Windows NVIDIA PC**. Pinned model/runtime
+  profiles support Qwen3.8-27B and MeroMero 31B / 26B-A4B. This is not yet a
+  generic form for arbitrary OpenAI-compatible URLs.
 - The local PC needs the model files and runtime pinned by the repository. The
   Mac needs a non-interactive SSH key and pinned host key for that PC. A change
   to the model, runtime, paths, or GPU configuration requires revalidation of
@@ -141,6 +153,12 @@ feature works without a local model.
   coworker's **Settings** to verify and save the local PC's IPv4 address. Choose
   **Return to previous cloud settings** to restore the earlier CLI, model, and
   permission.
+- Start or stop the model beside its status. Stopping releases memory held by
+  the model managed by OFFICESTRA. Sessions using the same model share runtime resources.
+- MeroMero 31B is text-only; 26B-A4B has an image-input path. Image support,
+  32K/64K context, and reasoning options depend on the profile. Large images
+  combined with long contexts require separate GPU-memory and stability
+  validation; not every combination is guaranteed.
 
 OFFICESTRA manages only local processes that it started and refuses to take over
 an existing model server or a GPU running another workload. Local turns show no
@@ -172,7 +190,7 @@ This README describes features on the current `main` branch.
 
 ## Get started
 
-The latest DMG release is **v1.5.0**. To run from source, use the AI-assisted setup below.
+The latest DMG release is **v1.6.0**. To run from source, use the AI-assisted setup below.
 
 ### Easiest path: ask an AI to do it
 
@@ -186,7 +204,7 @@ use one of them:
 
 ### Download the app
 
-[Download OFFICESTRA v1.5.0 DMG](https://github.com/neosp8888-design/officestra/releases/tag/v1.5.0)
+[Download OFFICESTRA v1.6.0 DMG](https://github.com/neosp8888-design/officestra/releases/tag/v1.6.0)
 — Apple silicon · macOS 14 or later · English/Korean.
 
 Open the DMG and drag OFFICESTRA into Applications. Node.js is included. You still
@@ -283,6 +301,21 @@ When the app opens, use the first-run assistant to select a workspace and assign
 your signed-in CLIs to coworkers.
 
 </details>
+
+## Testing from source
+
+Run these commands from the repository root. They reduce repetitive passing-test
+output while preserving errors, warnings, skips, and exit codes, and print the
+path to the complete raw log.
+
+```sh
+python3 scripts/office-test.py --cwd backend --kind node -- node --test
+python3 scripts/office-test.py --kind swift -- swift test
+```
+
+Opt-in performance diagnostics and database integration tests may be skipped
+without their separate environment. External developer tools such as Graft and
+personal hooks are not bundled with the app.
 
 > [!WARNING]
 > OFFICESTRA is still a preview. Back up important work. Check conversations and
