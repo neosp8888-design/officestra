@@ -23,10 +23,12 @@
 
 명령 출력은 읽은 파일과 똑같이 대화에 쌓여 남은 턴마다 다시 전송된다. 조용한 형태로 실행한다.
 
-- 백엔드 테스트 전체 — `cd backend && node --test 2>&1 | grep -vE "^✔ " | tail -25`
-  통과 줄만 걷어내고 요약·건너뜀·실패는 그대로 남는다. 420줄이 12줄이 된다.
-- 백엔드 한 파일만 — `cd backend && node --test test/<파일> 2>&1 | grep -vE "^✔ " | tail -15`
-- Swift 테스트 — `swift test` 그대로 쓴다. 기본 출력이 20줄 안쪽이라 걸러낼 것이 없다.
+- 저장소 루트에서 아래 공통 실행 명령을 사용한다. CLI·모델·GUI/터미널에 관계없이 같은 스크립트이며 별도 설치나 훅이 필요 없다.
+- 백엔드 테스트 전체 — `python3 scripts/office-test.py --cwd backend --kind node -- node --test`
+- 백엔드 한 파일만 — `python3 scripts/office-test.py --cwd backend --kind node -- node --test test/<파일>`
+- Swift 테스트 — `python3 scripts/office-test.py --kind swift -- swift test` (필요한 `--filter` 등은 뒤에 그대로 붙인다.)
+- 반복적인 시작·통과 출력만 정리하며, 실패 상세·경고·건너뜀·TODO·개수 요약과 원래 종료 코드를 보존한다. 전체 원문은 출력에 안내된 로컬 로그에서 확인한다. 결과 뒤에 `tail`을 붙이지 않는다.
+- 스크립트나 Python이 없는 환경에서는 원래 `node --test` / `swift test`를 필터 없이 실행한다. `grep | tail`로 대체하면 실패 상세가 잘리고 실패 종료가 성공처럼 보일 수 있다.
 
 ## 환경과 데이터 조회
 
