@@ -8,6 +8,69 @@ import XCTest
 
 @MainActor
 final class ConversationWorkspaceTests: XCTestCase {
+    func testMeasureNativeComposerLatency() async throws {
+        guard let output = ProcessInfo.processInfo.environment["OFFICESTRA_COMPOSER_PERF"] else {
+            throw XCTSkip("Set OFFICESTRA_COMPOSER_PERF for the opt-in native input diagnostic")
+        }
+        var results: [String: [String: Double]] = [:]
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        for split in [false, true] {
+            let director = AgentDirector(startBackgroundTasks: false, conversationDefaults: nil)
+            director.selectedCharacterID = .rightMan
+            director.employeeComposerStore.focusesComposerOnSelection = false
+            if split {
+                director.toggleConversationSplit()
+                chooseReady(director, .rightWoman, in: .right)
+                let markdown = String(repeating: "### 내용\n\n긴 대화의 **배치 비용**과 입력 반응을 측정합니다.\n\n| 항목 | 결과 |\n| --- | --- |\n| 대화 | 유지 |\n\n", count: 20)
+                director.liveFeedStore.replace(with: [turn(.rightMan, text: markdown), turn(.rightWoman, text: markdown)])
+                director.liveFeedStore.finishInitialLoading()
+            }
+            let content: AnyView = split
+                ? AnyView(SplitPerformanceWorkspace(director: director, selection: director.characterSelectionStore))
+                : AnyView(CommandEntryRow(director: director, placeholder: "입력", attachmentCount: 0,
+                    isPreparingAttachments: false, onChooseAttachments: {}, onSubmit: { _ in false }))
+            let root = NSHostingView(rootView: content.frame(width: 1000, height: 720))
+            root.frame = CGRect(x: 0, y: 0, width: 1000, height: 720)
+            let window = NSWindow(contentRect: root.bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.contentView = root
+            defer {
+                descendants(root).compactMap { $0 as? ConversationFeedHostsNSView }.forEach { $0.tearDown() }
+                window.contentView = nil
+            }
+            try await settle(root)
+            let input = try XCTUnwrap(descendants(root).compactMap { $0 as? CommandComposerTextView }.first)
+            for (label, character) in [("english", "a"), ("korean", "가"), ("newlines", "\n")] {
+                input.string = ""
+                input.didChangeText()
+                try await settle(root)
+                let documents = descendants(root).compactMap { $0 as? SelectableMarkdownDocumentView }
+                let before = documents.reduce(0) { $0 + $1.layoutPassCount }
+                var editMS: [Double] = [], layoutMS: [Double] = []
+                for _ in 0..<40 {
+                    // This offline fixture deliberately never connects a backend.
+                    // Re-enable the native editor after each availability refresh.
+                    input.isEditable = true
+                    let start = ProcessInfo.processInfo.systemUptime
+                    input.insertText(character, replacementRange: NSRange(location: (input.string as NSString).length, length: 0))
+                    editMS.append((ProcessInfo.processInfo.systemUptime - start) * 1000)
+                    let renderStart = ProcessInfo.processInfo.systemUptime
+                    root.layoutSubtreeIfNeeded()
+                    root.displayIfNeeded()
+                    layoutMS.append((ProcessInfo.processInfo.systemUptime - renderStart) * 1000)
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                func p95(_ values: [Double]) -> Double { values.sorted()[Int(Double(values.count - 1) * 0.95)] }
+                results["\(split ? "split" : "inputOnly")_\(label)"] = [
+                    "editP95MS": p95(editMS), "editMaxMS": editMS.max() ?? 0,
+                    "layoutP95MS": p95(layoutMS), "layoutMaxMS": layoutMS.max() ?? 0,
+                    "markdownLayouts": Double(documents.reduce(0) { $0 + $1.layoutPassCount } - before)
+                ]
+                XCTAssertEqual(input.string, String(repeating: character, count: 40))
+            }
+        }
+        try JSONSerialization.data(withJSONObject: results, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: output))
+    }
+
     func testFocusDoesNotInvalidateWholeOfficeButStillUpdatesSelectionAndBubble() throws {
         let director = AgentDirector(startBackgroundTasks: false, conversationDefaults: nil)
         director.selectedCharacterID = .rightMan
