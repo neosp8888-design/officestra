@@ -3392,6 +3392,7 @@ struct LiveWorkspaceFeed: View, Equatable {
                                     if !didPerformInitialScroll {
                                         didPerformInitialScroll = true
                                     }
+                                    scrollMetrics.jumpVisibility.userScrollStarted()
                                     pauseFollowingLatest()
                                 },
                                 onUserScrollActivity: {
@@ -3401,6 +3402,10 @@ struct LiveWorkspaceFeed: View, Equatable {
                                     pauseFollowingLatest()
                                 },
                                 onUserScroll: { metrics in
+                                    scrollMetrics.jumpVisibility.userScrollEnded(
+                                        metrics,
+                                        bottomTolerance: Self.bottomTolerance
+                                    )
                                     handleUserScroll(
                                         metrics,
                                         proxy: proxy
@@ -3523,11 +3528,6 @@ struct LiveWorkspaceFeed: View, Equatable {
                     ) {
                         jumpToLatestButton(proxy: proxy)
                             .padding(
-                                .leading,
-                                LiveWorkspaceFeedJumpButtonLayout
-                                    .leadingPadding
-                            )
-                            .padding(
                                 .bottom,
                                 LiveWorkspaceFeedJumpButtonLayout.bottomPadding
                             )
@@ -3556,6 +3556,10 @@ struct LiveWorkspaceFeed: View, Equatable {
         scrollMetrics.distanceFromBottom = metrics.distanceFromBottom
         scrollMetrics.viewportHeight = metrics.viewportHeight
         scrollMetrics.contentHeight = metrics.contentHeight
+        scrollMetrics.jumpVisibility.update(
+            metrics,
+            bottomTolerance: Self.bottomTolerance
+        )
 
         settleInitialAnchorIfNeeded()
         if !didPerformInitialScroll {
@@ -3794,7 +3798,11 @@ struct LiveWorkspaceFeed: View, Equatable {
     private func jumpToLatestButton(
         proxy: ScrollViewProxy
     ) -> some View {
-        LiveWorkspaceFeedJumpButton(director: director, characterID: characterID) {
+        LiveWorkspaceFeedJumpButton(
+            director: director,
+            visibility: scrollMetrics.jumpVisibility,
+            characterID: characterID
+        ) {
             scrollToLatest(proxy)
         }
     }
@@ -3814,18 +3822,16 @@ struct LiveWorkspaceFeed: View, Equatable {
 }
 
 enum LiveWorkspaceFeedJumpButtonLayout {
-    static let alignment = Alignment.bottomLeading
-    static let contentHorizontalPadding = CGFloat(18)
-    static let avatarDiameter = CGFloat(38)
-    static let diameter = CGFloat(20)
-    static let bottomPadding = CGFloat(12)
-    static let leadingPadding =
-        contentHorizontalPadding + (avatarDiameter - diameter) / 2
+    static let alignment = Alignment.bottom
+    static let bottomPadding = CGFloat(3)
+    static let width = CGFloat(32)
+    static let height = CGFloat(13)
 }
 
-private struct LiveWorkspaceFeedJumpButton: View {
+struct LiveWorkspaceFeedJumpButton: View {
     // Observe model changes only in this small control, not the transcript tree.
     @ObservedObject var director: AgentDirector
+    @ObservedObject var visibility: LiveWorkspaceFeedJumpVisibility
     let characterID: OfficeCharacter
     let action: () -> Void
 
@@ -3837,22 +3843,51 @@ private struct LiveWorkspaceFeedJumpButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: "arrow.down")
-                .font(.system(size: 9, weight: .bold))
+            Image(systemName: "chevron.down")
+                .font(.system(size: 7.5, weight: .bold))
                 .foregroundStyle(accent)
-                .frame(width: LiveWorkspaceFeedJumpButtonLayout.diameter,
-                       height: LiveWorkspaceFeedJumpButtonLayout.diameter)
+                .frame(
+                    width: LiveWorkspaceFeedJumpButtonLayout.width,
+                    height: LiveWorkspaceFeedJumpButtonLayout.height
+                )
                 .background {
-                    Circle()
-                        .fill(.ultraThinMaterial)
-                        .overlay { Circle().stroke(accent.opacity(0.62), lineWidth: 1) }
+                    Capsule()
+                        .fill(accent.opacity(0.10))
+                        .background(
+                            .ultraThinMaterial.opacity(0.65),
+                            in: Capsule()
+                        )
+                        .overlay {
+                            Capsule().stroke(
+                                accent.opacity(0.45),
+                                lineWidth: 1
+                            )
+                        }
                 }
-                .shadow(color: accent.opacity(0.22), radius: 3, y: 1)
-                .shadow(color: .black.opacity(0.10), radius: 2, y: 1)
+                .shadow(
+                    color: .black.opacity(0.10),
+                    radius: 2,
+                    y: 1
+                )
+                .opacity(0.65)
+                .frame(width: 44, height: 20)
+                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(LiveWorkspaceFeedJumpButtonStyle())
+        .contentShape(Rectangle())
+        .opacity(visibility.isVisible ? 1 : 0)
+        .allowsHitTesting(visibility.isVisible)
+        .accessibilityHidden(!visibility.isVisible)
         .accessibilityLabel(OfficeLocalization.string("맨 아래로 이동"))
         .help(OfficeLocalization.string("맨 아래로 이동"))
+    }
+}
+
+private struct LiveWorkspaceFeedJumpButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.90 : 1.0)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 
@@ -3871,11 +3906,46 @@ private struct LiveWorkspaceFeedTurnRevision: Equatable {
     let changedFileCount: Int
 }
 
+@MainActor
+final class LiveWorkspaceFeedJumpVisibility: ObservableObject {
+    @Published private(set) var isVisible = false
+    private var isUserScrolling = false
+
+    func userScrollStarted() {
+        isUserScrolling = true
+    }
+
+    func userScrollEnded(
+        _ snapshot: LiveWorkspaceFeedScrollSnapshot,
+        bottomTolerance: CGFloat
+    ) {
+        update(snapshot, bottomTolerance: bottomTolerance)
+        isUserScrolling = false
+    }
+
+    func update(
+        _ snapshot: LiveWorkspaceFeedScrollSnapshot,
+        bottomTolerance: CGFloat
+    ) {
+        if snapshot.distanceFromBottom <= bottomTolerance {
+            if isVisible { isVisible = false }
+        } else if isUserScrolling,
+                  !isVisible,
+                  snapshot.viewportHeight > 0,
+                  snapshot.contentHeight > snapshot.viewportHeight,
+                  snapshot.distanceFromBottom >= snapshot.viewportHeight {
+            isVisible = true
+        }
+    }
+}
+
+@MainActor
 private final class LiveWorkspaceFeedScrollMetrics {
     var hasSnapshot = false
     var distanceFromBottom = CGFloat.zero
     var viewportHeight = CGFloat.zero
     var contentHeight = CGFloat.zero
+    let jumpVisibility = LiveWorkspaceFeedJumpVisibility()
     var isProgrammaticScrollInFlight = false
     var scrollGeneration = 0
     var followScrollTask: Task<Void, Never>?
