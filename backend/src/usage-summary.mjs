@@ -385,12 +385,36 @@ async function readClaudeCredential() {
   throw new Error("Claude Code 로그인 정보를 찾을 수 없습니다.");
 }
 
+// 로그인 정보의 rateLimitTier는 요금제를 바꿔도 예전 값이 남는다(Pro인데
+// default_claude_max_5x). Claude Code가 계정 프로필을 받을 때마다 고쳐 쓰는
+// ~/.claude.json의 oauthAccount가 있으면 요금제는 그쪽을 따른다.
+async function readClaudeAccountPlan() {
+  const configPath = process.env.CLAUDE_CONFIG_DIR
+    ? resolve(process.env.CLAUDE_CONFIG_DIR, ".claude.json")
+    : resolve(homedir(), ".claude.json");
+  try {
+    const account = JSON.parse(await readFile(configPath, "utf8"))?.oauthAccount;
+    const type = String(account?.organizationType ?? "")
+      .trim()
+      .replace(/^claude_/, "");
+    if (!type) return null;
+    return {
+      tier: account.organizationRateLimitTier ?? null,
+      subscriptionType: type,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function readClaudeRateLimits({
   fetchImplementation = fetch,
   credentialReader = readClaudeCredential,
+  accountPlanReader = readClaudeAccountPlan,
   timeoutMs = 8_000,
 } = {}) {
   const credential = await credentialReader();
+  const plan = (await accountPlanReader()) ?? credential;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   timer.unref?.();
@@ -414,8 +438,8 @@ export async function readClaudeRateLimits({
     }
     return parseClaudeRateLimits(
       await response.json(),
-      credential.tier,
-      credential.subscriptionType,
+      plan.tier,
+      plan.subscriptionType,
     );
   } catch (error) {
     if (error?.name === "AbortError") {

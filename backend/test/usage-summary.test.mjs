@@ -223,6 +223,30 @@ test("Claude 직접 조회는 기존 OAuth 토큰을 읽기 전용으로 전달�
   assert.equal(result.weekly.remaining, 80);
 });
 
+test("Claude 요금제는 로그인 정보의 옛 등급보다 계정 프로필을 따른다", async () => {
+  const response = {
+    ok: true,
+    status: 200,
+    json: async () => ({ five_hour: null, seven_day: null }),
+  };
+  const read = (accountPlan) => readClaudeRateLimits({
+    credentialReader: async () => ({
+      accessToken: "test-token",
+      tier: "default_claude_max_5x",
+      subscriptionType: "max",
+    }),
+    accountPlanReader: async () => accountPlan,
+    fetchImplementation: async () => response,
+  });
+
+  assert.equal(
+    (await read({ tier: "default_claude_ai", subscriptionType: "pro" })).plan,
+    "Pro",
+  );
+  // 프로필을 못 읽으면 로그인 정보로 되돌아간다.
+  assert.equal((await read(null)).plan, "Max 5x");
+});
+
 test("Antigravity Gemini 주간 잔량을 실제 quota bucket에서 읽는다", () => {
   assert.deepEqual(
     parseAntigravityRateLimits({
