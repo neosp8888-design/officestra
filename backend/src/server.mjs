@@ -109,6 +109,7 @@ import {
   sharedInstallPrefix,
 } from "./cli-updates.mjs";
 import { TerminalSessionManager } from "./terminal-sessions.mjs";
+import { recordDeveloperToolEvent } from './developer-tool-events.mjs';
 import {
   createPostgresPricingCatalogStore,
   PricingCatalogService,
@@ -2500,6 +2501,13 @@ const server = createServer(async (request, response) => {
       url.pathname === "/api/turns"
     ) {
       await recordTurn(response, await readJSON(request));
+    } else if (
+      request.method === "POST" &&
+      url.pathname === "/api/developer-tool-events"
+    ) {
+      if (!trustedJSONMutation(request, response)) return;
+      const result = await recordDeveloperToolEvent(runtime, await readJSON(request));
+      send(response, result.accepted ? 202 : 409, result);
     } else if (
       request.method === "GET" &&
       url.pathname === "/api/terminal-sessions"

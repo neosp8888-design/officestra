@@ -5870,6 +5870,38 @@ test("세 CLI 터미널 활동은 기존 DB 활동 경로로 저장하며 본문
   }
 });
 
+test("터미널 완료는 진행 중인 개발 도구 표시 저장을 기다리고 기존 활동 다음 순서에 이어 쓴다", async () => {
+  const runtime = terminalTurnRuntime();
+  const originalQuery = runtime.pool.query;
+  const writes = [];
+  let flushed = false;
+  let flush;
+  const terminal = { toolActivityState: {
+    turnID: 'turn-1',
+    activityWritePromise: new Promise(resolve => { flush = () => { flushed = true; resolve(); }; }),
+  } };
+  runtime.terminalSessionRegistry = { sessions: new Map([['left-man', terminal]]) };
+  runtime.pool.query = async (sql, values) => {
+    assert.equal(flushed, true, 'completion must wait for pending progress writes');
+    if (sql.includes('FROM turn_activities WHERE turn_id')) return {rows: [
+      {seq: 1, kind:'tool', text:'Graft · 관련 코드 3곳', eventKey:'developer-tool:graft:1', status:'completed'},
+    ]};
+    if (sql.includes('SELECT')) return originalQuery(sql, values);
+    writes.push({sql, values});
+    return {rowCount:1,rows:[]};
+  };
+  let captured;
+  runtime.complete = async state => { captured = state; };
+  const completion = runtime.completeTerminalTurn({characterID:'left-man',turnID:'turn-1',response:'완료',usage:{},
+    activities:[{kind:'command',text:'rg focus Sources',eventKey:'terminal:command:1',status:'completed'}]});
+  assert.equal(terminal.toolEventsClosing,true);
+  flush();
+  await completion;
+  assert.equal(captured.activityRecords.get('developer-tool:graft:1').sequence,1);
+  assert.equal(captured.activityRecords.get('terminal:command:1').sequence,2);
+  assert.equal(writes.find(({sql}) => sql.includes('INSERT INTO turn_activities')).values[1],2);
+});
+
 test("터미널 사용량 읽기는 대화 ID나 시작 시각이 없으면 건너뛴다", async () => {
   const runtime = terminalTurnRuntime();
   const startedAt = new Date("2026-09-02T14:00:00.000Z");

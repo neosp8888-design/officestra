@@ -1,6 +1,7 @@
 // 이 파일은 백엔드에서 CLI 업무를 실행하고 공개 진행 상태를 PostgreSQL과 WebSocket에 전달한다.
 
 import { spawn, spawnSync } from "node:child_process";
+import { developerToolEnvironment } from './developer-tool-events.mjs';
 import { resolveLocalCharacter, snapshotLocalTurn, validateLocalResume } from './local-provider-service.mjs';
 import { recordReplyDelivery, replyRoutingPrompt } from './reply-delivery.mjs';
 import { once } from "node:events";
@@ -1839,6 +1840,11 @@ export class AgentRuntime {
     activities = [],
     refreshCompleted = false,
   }) {
+    const terminal = this.terminalSessionRegistry?.sessions.get(characterID);
+    if (terminal?.toolActivityState?.turnID === turnID) {
+      terminal.toolEventsClosing = true;
+      await terminal.toolActivityState.activityWritePromise;
+    }
     const result = await this.pool.query(
       `
         SELECT
@@ -1932,7 +1938,7 @@ export class AgentRuntime {
       structuredResultPath: null,
       refreshTerminalResult: refreshCompleted === true,
     };
-    if (refreshCompleted) {
+    if (refreshCompleted || terminal?.toolActivityState?.turnID === turnID) {
       const previous = await this.pool.query(
         `SELECT seq, kind, text, event_key AS "eventKey", status, collaboration
          FROM turn_activities WHERE turn_id = $1 ORDER BY seq`,
@@ -5356,6 +5362,7 @@ export function executionEnvironment(
     return environment;
   }
   environment = { ...environment };
+  Object.assign(environment, developerToolEnvironment(character.id, baseEnvironment));
   environment[STRUCTURED_RESULT_ENV] = structuredTurnResultPath({
     workdir,
     characterID: character.id,

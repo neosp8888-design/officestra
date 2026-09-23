@@ -159,6 +159,8 @@ export function terminalEnvironment(character, {
       `http://127.0.0.1:${port}/api/terminal-sessions/` +
       `${encodeURIComponent(characterID)}/events`,
     OFFICESTRA_TERMINAL_CHARACTER_ID: characterID,
+    OFFICESTRA_TOOL_MODE: 'terminal',
+    OFFICESTRA_TOOL_EVENTS_URL: `http://127.0.0.1:${port}/api/developer-tool-events`,
   };
   environment.PATH = [
     dirname(terminalHookPath),
@@ -217,6 +219,8 @@ function dateFromEpoch(value, fallback = new Date()) {
 }
 
 function resetTerminalArtifacts(state) {
+  state.toolActivityState = null;
+  state.toolEventsClosing = false;
   state.activities = new TerminalActivityCollector(state.workdir);
   state.initialGeneratedImages = new Set(listGeneratedImages(
     state.externalSessionID,
