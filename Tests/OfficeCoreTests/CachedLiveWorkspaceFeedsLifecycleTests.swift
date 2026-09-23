@@ -6,6 +6,137 @@ import XCTest
 
 @MainActor
 final class CachedLiveWorkspaceFeedsLifecycleTests: XCTestCase {
+    func testMeasureContinuousResizeWorkload() async throws {
+        guard let output = ProcessInfo.processInfo.environment["OFFICESTRA_RESIZE_PERF"] else {
+            throw XCTSkip("Set OFFICESTRA_RESIZE_PERF to measure the same resize workload before/after")
+        }
+        let director = AgentDirector(startBackgroundTasks: false)
+        director.liveFeedStore.replace(with: (0..<10).map { index in
+            makeTurn(id: "resize-perf-\(index)", characterID: OfficeCharacter.boss.rawValue,
+                prompt: "질문 \(index)",
+                response: (0..<24).map { "## 항목 \(index)-\($0)\n\n긴 대화의 **줄바꿈과 배치** 비용을 측정하는 문장입니다. 내용과 선택 효과를 유지합니다.\n\n| 항목 | 결과 |\n| --- | --- |\n| \($0) | 확인 |\n" }.joined(separator: "\n"),
+                status: .completed, startedAt: Date(timeIntervalSinceReferenceDate: Double(400_000 + index)), backend: .codex)
+        })
+        director.liveFeedStore.finishInitialLoading()
+        let container = CachedLiveWorkspaceFeedsNSView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        let window = NSWindow(contentRect: container.bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = container
+        defer { container.tearDown(); window.contentView = nil }
+        container.configure(director: director, selectedCharacterID: .boss)
+        container.layoutSubtreeIfNeeded()
+        let mounted = try await waitNaturallyUntil(timeout: .seconds(6)) {
+            container.activeCharacterIDForTesting == .boss && container.visibleCardCountForTesting > 0
+        }
+        XCTAssertTrue(mounted)
+        let resolvedScroll = try await waitForPrimaryScrollView(in: container)
+        let scroll = try XCTUnwrap(resolvedScroll)
+        performLiveScroll(scroll, toTop: false)
+        try await settle(for: .milliseconds(200))
+        func documents(_ view: NSView) -> [SelectableMarkdownDocumentView] {
+            (view as? SelectableMarkdownDocumentView).map { [$0] } ?? view.subviews.flatMap(documents)
+        }
+        var results: [String: [String: Double]] = [:]
+        for dimension in ["width", "height", "width-monotonic"] {
+            let phaseStart = ProcessInfo.processInfo.systemUptime
+            let cpuStart = clock()
+            let layoutStart = container.resizeForcedLayoutCountForTesting
+            if ProcessInfo.processInfo.environment["OFFICESTRA_RESIZE_LIVE"] == "1" {
+                container.viewWillStartLiveResize()
+            }
+            var durations: [Double] = []
+            let texts = documents(container)
+            let before = texts.reduce(0) { $0 + $1.textLayoutMeasurementCount }
+            for step in 0..<40 {
+                let offset = CGFloat(dimension == "width-monotonic" ? step : (step < 20 ? step : 39 - step)) * 3
+                let size = NSSize(width: 900 + (dimension.hasPrefix("width") ? offset : 0), height: 700 - (dimension == "height" ? offset : 0))
+                let start = ProcessInfo.processInfo.systemUptime
+                container.setFrameSize(size)
+                container.layoutSubtreeIfNeeded()
+                durations.append((ProcessInfo.processInfo.systemUptime - start) * 1000)
+                try await settle(for: .milliseconds(8))
+            }
+            container.viewDidEndLiveResize()
+            try await settle(for: .milliseconds(200))
+            results[dimension] = ["meanMS": durations.reduce(0,+) / Double(durations.count),
+                "p95MS": durations.sorted()[37], "maxMS": durations.max() ?? 0,
+                "textMeasurements": Double(texts.reduce(0) { $0 + $1.textLayoutMeasurementCount } - before),
+                "viewportUpdates": Double(container.resizeForcedLayoutCountForTesting - layoutStart),
+                "phaseElapsedMS": (ProcessInfo.processInfo.systemUptime - phaseStart) * 1000,
+                "phaseCPUMS": Double(clock() - cpuStart) / Double(CLOCKS_PER_SEC) * 1000]
+            XCTAssertGreaterThan(container.visibleCardCountForTesting, 0)
+            XCTAssertEqual(container.activeCharacterIDForTesting, .boss)
+        }
+        try JSONSerialization.data(withJSONObject: results, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: output))
+    }
+
+    func testLiveResizeCoalescesBurstAndFlushesFinalViewport() async throws {
+        let director = AgentDirector(startBackgroundTasks: false)
+        director.liveFeedStore.replace(with: makeTurns(completedResponse:
+            String(repeating: "긴 응답과 줄바꿈 확인입니다. ", count: 100)))
+        director.liveFeedStore.finishInitialLoading()
+        let container = CachedLiveWorkspaceFeedsNSView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        let window = NSWindow(contentRect: container.bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = container
+        defer { container.tearDown(); window.contentView = nil }
+        container.configure(director: director, selectedCharacterID: .boss)
+        container.layoutSubtreeIfNeeded()
+        let mounted = try await waitNaturallyUntil(timeout: .seconds(6)) {
+            container.activeCharacterIDForTesting == .boss && container.visibleCardCountForTesting > 0
+        }
+        XCTAssertTrue(mounted)
+        let resolved = try await waitForPrimaryScrollView(in: container)
+        let scroll = try XCTUnwrap(resolved)
+        performLiveScroll(scroll, toTop: false)
+        try await settle(for: .milliseconds(100))
+        let layouts = container.resizeForcedLayoutCountForTesting
+        let searches = container.primaryScrollSearchCountForTesting
+        container.viewWillStartLiveResize()
+        for step in 1...100 {
+            container.setFrameSize(NSSize(width: 900 - CGFloat(step), height: 700 - CGFloat(step)))
+            container.layoutSubtreeIfNeeded()
+        }
+        XCTAssertLessThan(container.resizeForcedLayoutCountForTesting - layouts, 10,
+            "A queued resize burst must not reflow the transcript for every intermediate size")
+        container.viewDidEndLiveResize()
+        try await settle(for: .milliseconds(250))
+        XCTAssertTrue(container.subviews.allSatisfy { $0.frame == container.bounds })
+        XCTAssertLessThan(container.primaryScrollSearchCountForTesting - searches, 5)
+        XCTAssertGreaterThan(container.visibleCardCountForTesting, 0)
+        let document = try XCTUnwrap(scroll.documentView)
+        let snapshot = LiveWorkspaceFeedScrollGeometry.snapshot(documentBounds: document.bounds,
+            visibleRect: scroll.documentVisibleRect, isFlipped: document.isFlipped)
+        XCTAssertLessThanOrEqual(snapshot.distanceFromBottom, 20)
+        let settledLayouts = container.resizeForcedLayoutCountForTesting
+        try await settle(for: .milliseconds(150))
+        XCTAssertEqual(container.resizeForcedLayoutCountForTesting, settledLayouts,
+            "No resize timer should keep laying out an idle conversation")
+
+        performSmallLiveScroll(scroll, delta: -300)
+        try await settle(for: .milliseconds(100))
+        container.viewWillStartLiveResize()
+        for step in 1...40 {
+            container.setFrameSize(NSSize(width: 800 - CGFloat(step), height: 600))
+            container.layoutSubtreeIfNeeded()
+        }
+        container.viewDidEndLiveResize()
+        try await settle(for: .milliseconds(150))
+        let readingSnapshot = LiveWorkspaceFeedScrollGeometry.snapshot(documentBounds: document.bounds,
+            visibleRect: scroll.documentVisibleRect, isFlipped: document.isFlipped)
+        XCTAssertGreaterThan(readingSnapshot.distanceFromBottom, 20,
+            "Resizing while reading history must not resume following the latest message")
+        XCTAssertGreaterThan(container.visibleCardCountForTesting, 0)
+
+        // A pending timer must not revive a detached host after closing the pane.
+        container.viewWillStartLiveResize()
+        container.setFrameSize(NSSize(width: 810, height: 600))
+        container.layoutSubtreeIfNeeded()
+        container.setFrameSize(NSSize(width: 820, height: 600))
+        container.layoutSubtreeIfNeeded()
+        container.tearDown()
+        try await settle(for: .milliseconds(100))
+        XCTAssertEqual(container.liveHostingViewCountForTesting, 0)
+    }
+
     func testScrollObserverCoalescesLogitechStyleBurstPerGesture() async throws {
         let scrollView = NSScrollView(
             frame: NSRect(x: 0, y: 0, width: 700, height: 500)

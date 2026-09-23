@@ -811,6 +811,8 @@ final class AgentDirector: ObservableObject {
     @Published private(set) var localReasoningSelections: [String: String] = [:]
     @Published private(set) var terminalRestartRequest:
         TerminalRestartRequest?
+    @Published private(set) var scrollToBottomRequest = 0
+    @Published private(set) var scrollToBottomTarget: OfficeCharacter?
     /// 터미널 화면이 붙어 있는 동안만 채워진다. 입력·예약·멈춤이 이리로 간다.
     weak var terminalInputSink: TerminalInputSink?
 
@@ -1368,6 +1370,11 @@ final class AgentDirector: ObservableObject {
     func toggleConversationSplit() {
         conversationLayout.toggle(current: selectedCharacterID)
         liveFeedStore.presentCharacterFeeds(Set(conversationLayout.visible.map(\.rawValue)), selected: selectedCharacterID?.rawValue)
+    }
+
+    func requestScrollToBottom(for characterID: OfficeCharacter? = nil) {
+        scrollToBottomTarget = characterID
+        scrollToBottomRequest &+= 1
     }
 
     func chooseConversationCharacter(_ characterID: OfficeCharacter, in pane: ConversationPane, focusesComposer: Bool = true) {

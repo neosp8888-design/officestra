@@ -2050,6 +2050,16 @@ final class CachedLiveWorkspaceFeedsNSView: NSView {
     /// 맞춘다. 한 번만 맞추면 그 뒤 급락에서 문서 밖에 남는다.
     private var resizeSettleUntil: Date?
     private static let resizeSettleWindow = TimeInterval(1.2)
+    private weak var cachedScrollRoot: NSView?
+    private weak var cachedPrimaryScrollView: NSScrollView?
+    private(set) var resizeForcedLayoutCountForTesting = 0
+    private(set) var primaryScrollSearchCountForTesting = 0
+    private var isLiveResizingViewport = false
+    private var resizeTimer: Timer?
+    private var nextResizeLayoutTime = TimeInterval.zero
+    // Leave time for window/input events between expensive transcript layouts.
+    // The timer exists only while a newer size is waiting during a drag.
+    private static let liveResizeLayoutInterval = TimeInterval(1.0 / 30.0)
     // 드물게 나타나는 백화 증상의 증거를 남기는 함정이다. 증상이
     // 없으면 알림 관찰만 하고 아무것도 기록하지 않는다.
     private let stallRecorder = LiveWorkspaceFeedStallRecorder.live()
@@ -2139,7 +2149,7 @@ final class CachedLiveWorkspaceFeedsNSView: NSView {
 
     // 크기가 바뀌기 전에 호출되므로 여기서 이전 보기 위치를 기록한다.
     override func setFrameSize(_ newSize: NSSize) {
-        if newSize != frame.size {
+        if newSize != frame.size, lastLaidOutBounds == bounds {
             captureViewportAnchorBeforeResize()
         }
         super.setFrameSize(newSize)
@@ -2164,12 +2174,60 @@ final class CachedLiveWorkspaceFeedsNSView: NSView {
 
     override func layout() {
         super.layout()
-        let didResize = lastLaidOutBounds != bounds
+        transitionLoadingGateView?.frame = bounds
+        guard lastLaidOutBounds != bounds else { return }
+        if isLiveResizingViewport, activeEntry != nil,
+           ProcessInfo.processInfo.systemUptime < nextResizeLayoutTime {
+            scheduleResizeLayout()
+            return
+        }
+        applyViewportBounds()
+    }
+
+    override func viewWillStartLiveResize() {
+        super.viewWillStartLiveResize()
+        isLiveResizingViewport = true
+        nextResizeLayoutTime = 0
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        resizeTimer?.invalidate()
+        resizeTimer = nil
+        nextResizeLayoutTime = 0
+        isLiveResizingViewport = window?.inLiveResize ?? false
+        needsLayout = true
+    }
+
+    override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        isLiveResizingViewport = false
+        resizeTimer?.invalidate()
+        resizeTimer = nil
+        applyViewportBounds()
+    }
+
+    private func scheduleResizeLayout() {
+        guard resizeTimer == nil else { return }
+        let timer = Timer(timeInterval: max(0.001,
+            nextResizeLayoutTime - ProcessInfo.processInfo.systemUptime), repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.resizeTimer = nil
+                self.applyViewportBounds()
+            }
+        }
+        resizeTimer = timer
+        // Native window dragging uses the event-tracking run loop mode.
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func applyViewportBounds() {
+        guard lastLaidOutBounds != bounds else { return }
+        resizeTimer?.invalidate()
+        resizeTimer = nil
         for subview in subviews where subview.frame != bounds {
             subview.frame = bounds
-        }
-        guard didResize else {
-            return
         }
         lastLaidOutBounds = bounds
         resizeSettleUntil = Date().addingTimeInterval(Self.resizeSettleWindow)
@@ -2180,6 +2238,8 @@ final class CachedLiveWorkspaceFeedsNSView: NSView {
         if let activeEntry {
             restoreViewportAfterResize(for: activeEntry)
         }
+        nextResizeLayoutTime = ProcessInfo.processInfo.systemUptime
+            + Self.liveResizeLayoutInterval
     }
 
     // 리사이즈 직전 하단에 있었으면 하단을, 아니면 보던 위치를 문서
@@ -2198,6 +2258,10 @@ final class CachedLiveWorkspaceFeedsNSView: NSView {
         else {
             return
         }
+        // Keep geometry settled before scroll observers classify the movement.
+        // Skipping these passes can incorrectly resume following the latest
+        // message after the user has scrolled into history.
+        if !constrainOnly { resizeForcedLayoutCountForTesting += 1 }
         host.layoutSubtreeIfNeeded()
         scrollView.layoutSubtreeIfNeeded()
         documentView.layoutSubtreeIfNeeded()
@@ -2333,6 +2397,10 @@ final class CachedLiveWorkspaceFeedsNSView: NSView {
     }
 
     func tearDown() {
+        resizeTimer?.invalidate()
+        resizeTimer = nil
+        isLiveResizingViewport = false
+        nextResizeLayoutTime = 0
         selectionGeneration &+= 1
         selectionWillChangeCancellable?.cancel()
         selectionWillChangeCancellable = nil
@@ -2341,6 +2409,9 @@ final class CachedLiveWorkspaceFeedsNSView: NSView {
         removeTransitionLoadingGate()
         selectedCharacterID = nil
         director = nil
+        cachedScrollRoot = nil
+        cachedPrimaryScrollView = nil
+        resizeSettleUntil = nil
     }
 
     func setWorkspaceVisible(_ visible: Bool) {
@@ -2416,7 +2487,10 @@ final class CachedLiveWorkspaceFeedsNSView: NSView {
             }
         )
         entry.hostingView.frame = bounds
-        entry.hostingView.autoresizingMask = [.width, .height]
+        // This container applies the latest viewport size itself. Autoresizing
+        // would reflow the transcript inside super.setFrameSize, before the
+        // live-resize coalescer gets a chance to discard intermediate sizes.
+        entry.hostingView.autoresizingMask = []
         pendingEntry = entry
         startTransitionWatchdog()
         if let transitionLoadingGateView {
@@ -3175,12 +3249,27 @@ final class CachedLiveWorkspaceFeedsNSView: NSView {
     }
 
     private func primaryScrollView(in root: NSView) -> NSScrollView? {
-        descendantViews(of: root)
+        if cachedScrollRoot === root,
+           let scrollView = cachedPrimaryScrollView,
+           scrollView.isDescendant(of: root) {
+            return scrollView
+        }
+        primaryScrollSearchCountForTesting += 1
+        let scrollView = descendantViews(of: root)
             .compactMap { $0 as? NSScrollView }
             .max { lhs, rhs in
                 lhs.bounds.width * lhs.bounds.height
                     < rhs.bounds.width * rhs.bounds.height
             }
+        // A pending SwiftUI host can still have zero-sized children. Do not
+        // retain that provisional choice before its main scroll view is laid out.
+        if let scrollView, scrollView.hasVerticalScroller,
+           scrollView.documentView != nil,
+           scrollView.bounds.width > 0, scrollView.bounds.height > 0 {
+            cachedScrollRoot = root
+            cachedPrimaryScrollView = scrollView
+        }
+        return scrollView
     }
 
     private func descendantViews(of view: NSView) -> [NSView] {
@@ -3531,6 +3620,11 @@ struct LiveWorkspaceFeed: View, Equatable {
                                 .bottom,
                                 LiveWorkspaceFeedJumpButtonLayout.bottomPadding
                             )
+                    }
+                    .onReceive(director.$scrollToBottomRequest) { _ in
+                        if director.scrollToBottomTarget == nil || director.scrollToBottomTarget == characterID {
+                            scrollToLatest(proxy)
+                        }
                     }
                     .onDisappear {
                         cancelScheduledScrolls()
