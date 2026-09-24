@@ -1429,6 +1429,21 @@ test("일반 업무 시작은 과거 작업 기록을 자동으로 주입하지 
   );
 });
 
+test('GUI execution injects routing guidance only for saved tags, not API reply or incoming delivery identity', async () => {
+  for(const replyRecipientIDs of [[], ['boss','right-man']]) {
+    const {runtime,capture}=startedRuntimeState();
+    const prepare=runtime.prepareTurn;
+    runtime.prepareTurn=async input=>({...await prepare(input),replyRecipientIDs});
+    await runtime.start({characterID:'left-woman',prompt:'검토해줘',conversationID:'conversation-1',
+      replyRecipientID:'left-man',deliveryID:'incoming-delivery',senderCharacterID:'left-man'});
+    assert.equal(capture.state.recordPrompt,'검토해줘');
+    if(replyRecipientIDs.length) {
+      assert.match(capture.state.executionPrompt,/선택된 자동 전달 태그=\["boss","right-man"\]/);
+      assert.doesNotMatch(capture.state.executionPrompt,/left-man/);
+    } else assert.equal(capture.state.executionPrompt,'검토해줘');
+  }
+});
+
 test("첨부 안내는 executionPrompt와 recordPrompt에 그대로 유지된다", async () => {
   const attachmentRoot = mkdtempSync(join(tmpdir(), "office-attachment-"));
   const attachmentPath = join(attachmentRoot, "보고서.png");

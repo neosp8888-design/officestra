@@ -1474,6 +1474,7 @@ export class AgentRuntime {
       }),
       signature,
       sessionID: state.externalSessionID,
+      resumeTranscriptPath: claudeSessionPath(state.workdir, state.externalSessionID),
       onExit: (exitedWorker) => {
         if (this.claudeWorkers.get(characterID) === exitedWorker) {
           this.claudeWorkers.delete(characterID);

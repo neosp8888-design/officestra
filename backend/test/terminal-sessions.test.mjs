@@ -923,17 +923,75 @@ test('유휴 터미널 API는 같은 CLI 훅 접수 후에만 202 turnId를 반�
   assert.equal(f.runtime.completed[0].turnID, started.turnId);
 });
 
-test('terminal reply tag and delivery identity survive PTY acknowledgement without polluting stored user text',async t=>{
+test('terminal without saved tags adds no routing guidance despite legacy reply and incoming delivery identity',async t=>{
   const f=await dispatchFixture(t);
   const result=f.manager.dispatch({characterID:'boss',prompt:'자연스럽게 답해줘',senderCharacterID:'left-woman',replyRecipientID:'right-woman',deliveryID:'delivery-test'});
   await waitUntil(()=>f.events.some(e=>e.type==='terminal.dispatch'));
-  const {prompt}=f.control('claim');assert.match(prompt,/앱이 "right-woman" 직원에게 자동으로 한 번 전달/);
+  const {prompt}=f.control('claim');assert.doesNotMatch(prompt,/OFFICESTRA 전달 안내|자동 전달/);
   const started=await f.submit(prompt);await result;
   assert.equal(f.runtime.begun[0].prompt,'자연스럽게 답해줘');
   assert.equal(f.runtime.begun[0].replyRecipientID,'right-woman');
   assert.equal(f.runtime.begun[0].deliveryID,'delivery-test');
   await f.manager.handleEvent('boss',{source:'claude',payload:{hook_event_name:'Stop',last_assistant_message:'네, 좋아요.'}});
   assert.equal(f.runtime.completed[0].turnID,started.turnId);
+});
+
+test('terminal routing guidance uses only the receiving employee saved tags',async t=>{
+  const f=await dispatchFixture(t);
+  f.runtime.pool.query=async(sql,args)=>{
+    if(sql.includes('FROM reply_route_recipients')) {
+      assert.deepEqual(args,['boss']);
+      return {rows:[{recipient_character_id:'left-man'},{recipient_character_id:'right-woman'}]};
+    }
+    return {rows:[]};
+  };
+  const result=f.manager.dispatch({characterID:'boss',prompt:'검토해줘',replyRecipientID:'left-woman'});
+  assert.throws(()=>f.control('claim'),AgentBusyError,'claim waits for saved tags and busy check');
+  await waitUntil(()=>f.events.some(e=>e.type==='terminal.dispatch'));
+  const {prompt}=f.control('claim');
+  assert.match(prompt,/선택된 자동 전달 태그=\["left-man","right-woman"\]/);
+  assert.doesNotMatch(prompt,/left-woman/);
+  await f.submit(prompt);await result;
+  assert.equal(f.runtime.begun[0].prompt,'검토해줘');
+});
+
+test('Claude long paste acknowledgement preserves dispatch identity and releases the lock', async t => {
+  const f = await dispatchFixture(t);
+  const result = f.manager.dispatch({ characterID: 'boss', prompt: '긴 메시지\n검토 요청', senderCharacterID: 'left-woman', replyRecipientID: 'right-woman', deliveryID: 'paste-delivery' });
+  await waitUntil(()=>f.state.dispatch?.wire);
+  const { prompt } = f.control('claim');
+  await f.submit(`<pasted_content id="33ad">\n${prompt}\n</pasted_content id="33ad">`);
+  assert.equal(f.state.dispatch, null);
+  await result;
+  assert.equal(f.runtime.begun[0].prompt, '긴 메시지\n검토 요청');
+  assert.equal(f.runtime.begun[0].senderCharacterID, 'left-woman');
+  assert.equal(f.runtime.begun[0].replyRecipientID, 'right-woman');
+  assert.equal(f.runtime.begun[0].deliveryID, 'paste-delivery');
+  await f.manager.handleEvent('boss', { source: 'claude', payload: { hook_event_name: 'Stop', last_assistant_message: '확인' } });
+  const second = f.manager.dispatch({ characterID: 'boss', prompt: '후속 요청' });
+  await waitUntil(()=>f.state.dispatch?.wire);
+  await f.submit(f.control('claim').prompt);
+  await second;
+});
+
+test('paste acknowledgement rejects changed bodies, extra text, mismatched IDs and other backends', async t => {
+  for (const variant of ['changed', 'extra', 'id', 'unclaimed', 'codex', 'antigravity']) {
+    await t.test(variant, async t => {
+      const f = await dispatchFixture(t);
+      const result = f.manager.dispatch({ characterID: 'boss', prompt: '원문', senderCharacterID: 'left-woman' });
+      const failure = assert.rejects(result, AgentBusyError);
+      await waitUntil(()=>f.state.dispatch?.wire);
+      const prompt = variant === 'unclaimed' ? f.state.dispatch.wire : f.control('claim').prompt;
+      let wrapped = `<pasted_content id="33ad">\n${prompt}${variant === 'changed' ? ' 변경' : ''}\n</pasted_content id="${variant === 'id' ? 'other' : '33ad'}">`;
+      if (variant === 'extra') wrapped += '\n다른 입력';
+      await f.state.beginTurn({ characterID: 'boss', sessionID: 'db-session', prompt: wrapped, execution: { backend: ['codex', 'antigravity'].includes(variant) ? variant : 'claude' } });
+      assert.ok(f.state.dispatch);
+      assert.equal(f.runtime.begun[0].prompt, wrapped);
+      assert.equal(f.runtime.begun[0].senderCharacterID, null);
+      await f.manager.close('boss');
+      await failure;
+    });
+  }
 });
 
 test('터미널 dispatch 중복·DB running·압축은 즉시409이며 예약하지 않는다', async t => {
@@ -1000,6 +1058,7 @@ test('미수신 timeout은 해제, claim 이후 불확실 timeout은 재전송 �
   assert.equal(f.state.dispatch, null);
   const result = f.manager.dispatch({ characterID: 'boss', prompt: '늦은 접수' });
   const failure = assert.rejects(result, AgentBusyError);
+  await waitUntil(()=>f.state.dispatch?.wire);
   const { prompt } = f.control('claim');
   await failure;
   assert.ok(f.state.dispatch.expired);
@@ -1017,6 +1076,7 @@ test('종료·명시적중단은 불확실 전달을 정리하고 제어문자·
   await assert.rejects(f.manager.dispatch({ characterID: 'boss', prompt: 'x', conversationID: 'other' }), AgentBusyError);
   const result = f.manager.dispatch({ characterID: 'boss', prompt: 'x', attachmentPaths: ['/tmp/example.png'] });
   const failure = assert.rejects(result, AgentBusyError);
+  await waitUntil(()=>f.state.dispatch?.wire);
   const { prompt } = f.control('claim'); assert.ok(prompt.endsWith('/tmp/example.png'));
   await f.manager.interrupt('boss'); await failure;
   assert.equal(f.state.dispatch, null);
@@ -1026,6 +1086,7 @@ test('공통 턴 시작 어댑터는 세 backend의 실제 본문과 turnId를 �
   for (const backend of ['claude', 'codex', 'antigravity']) {
     const f = await dispatchFixture(t);
     const result = f.manager.dispatch({ characterID: 'boss', prompt: '같은 대화' });
+    await waitUntil(()=>f.state.dispatch?.wire);
     const { prompt } = f.control('claim');
     const turn = await f.state.beginTurn({ characterID: 'boss', sessionID: 'db-session', prompt, execution: { backend } });
     assert.equal((await result).turnId, turn.turnID);
@@ -1037,6 +1098,7 @@ test('공통 턴 시작 어댑터는 세 backend의 실제 본문과 turnId를 �
 test('Antigravity SQLite 실제 감시 경로가 API 표식 턴을 연결하고 한 번만 완료한다', async t => {
   const h = await antigravityWatcherHarness(t);
   const result = h.manager.dispatch({ characterID: 'boss', prompt: '안티 회신' });
+  await waitUntil(()=>h.state.dispatch?.wire);
   const { prompt } = h.manager.dispatchControl('boss', { action: 'claim', dispatchId: h.state.dispatch.id, terminalSessionId: h.state.terminalSessionID, ownerToken: h.state.ownerToken });
   h.insert({ idx: 1, kind: 'user', text: prompt });
   await h.watcher.sweep();
@@ -1055,6 +1117,7 @@ test('Codex rollout 감시와 notify는 API 요청을 같은 턴으로 접수·�
   const spec = await manager.open('boss'); t.after(() => manager.close('boss'));
   const state = manager.sessions.get('boss'); await state.watcher.sweep();
   const result = manager.dispatch({ characterID: 'boss', prompt: '코덱스 회신' });
+  await waitUntil(()=>state.dispatch?.wire);
   const { prompt } = manager.dispatchControl('boss', { action: 'claim', dispatchId: state.dispatch.id, terminalSessionId: spec.terminalSessionId, ownerToken: spec.ownerToken });
   await appendFile(rollout, [
     { type: 'turn_context', payload: { turn_id: codexTurnID, cwd: workdir } },

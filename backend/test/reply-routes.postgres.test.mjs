@@ -60,6 +60,39 @@ test('persistent routing SQL integration', {skip:process.env.OFFICESTRA_TEST_REP
       await recordReplyDelivery(client,{turnID:turn,characterID:'a'});
       assert.equal((await queued(turn)).length,2,'repeated completion must not duplicate recipient deliveries');
     });
+    await t.test('an API reply recipient cannot create or override saved tags',async()=>{
+      await reset();sent.length=0;
+      const untagged=await createTurn('a');
+      assert.deepEqual(await recordReplyDelivery(client,{turnID:untagged,characterID:'a',replyRecipientID:'b'}),[]);
+      assert.deepEqual(await queued(untagged),[]);
+      await setting('a',['c']);const tagged=await createTurn('a');
+      assert.deepEqual(await recordReplyDelivery(client,{turnID:tagged,characterID:'a',replyRecipientID:'b'}),['c']);
+      await service.tick();assert.deepEqual(sent.map(s=>s.characterID),['c']);
+      assert.deepEqual(await queued(sent[0].turn),[],'receiving without tags does not create another reply');
+    });
+    await t.test('legacy one-off reservations need current tags and obey pause and removal',async()=>{
+      await reset();sent.length=0;
+      const turn=await createTurn('a');
+      await client.query('INSERT INTO reply_deliveries(source_turn_id,recipient_character_id) VALUES($1,$2)',[turn,'b']);
+      await service.tick();assert.equal(sent.length,0);assert.equal((await queued(turn))[0].status,'cancelled');
+      await setting('a',['b'],true);
+      const paused=await createTurn('a');
+      await client.query('INSERT INTO reply_deliveries(source_turn_id,recipient_character_id) VALUES($1,$2)',[paused,'b']);
+      await service.tick();assert.equal(sent.length,0);assert.equal((await queued(paused))[0].status,'pending');
+      await setting('a',['b'],false);await service.tick();assert.equal(sent.length,1);
+      const removed=await createTurn('a');
+      await client.query('INSERT INTO reply_deliveries(source_turn_id,recipient_character_id) VALUES($1,$2)',[removed,'b']);
+      await setting('a',[]);assert.equal((await queued(removed))[0].status,'cancelled');
+    });
+    await t.test('removing tags between polling and claiming prevents even legacy delivery',async()=>{
+      await reset();sent.length=0;await setting('a',['b']);
+      const turn=await createTurn('a');
+      await client.query('INSERT INTO reply_deliveries(source_turn_id,recipient_character_id) VALUES($1,$2)',[turn,'b']);
+      const available=service.runtime.messageAvailability;
+      service.runtime.messageAvailability=async()=>{await setting('a',[]);return available();};
+      try {await service.tick();assert.equal(sent.length,0);assert.equal((await queued(turn))[0].status,'cancelled');}
+      finally {service.runtime.messageAvailability=available;}
+    });
     await t.test('a busy recipient does not block another; receiving turns use their own saved recipients',async()=>{
       await reset();sent.length=0;await setting('a',['b','c']);await setting('b',['a']);
       const turn=await createTurn('a');await recordReplyDelivery(client,{turnID:turn,characterID:'a'});

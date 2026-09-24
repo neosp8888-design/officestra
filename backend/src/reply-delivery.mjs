@@ -1,31 +1,23 @@
 // Routing is application data, never a model-generated API call or instruction.
-export function replyRoutingPrompt(prompt,{characterID,replyRecipientID=null,replyRecipientIDs=[],deliveryID=null,senderCharacterID=null}) {
-  if(!replyRecipientID&&!replyRecipientIDs.length&&!deliveryID)return prompt;
-  const route=replyRecipientID
-    ? `이번 최종 답변은 앱이 ${JSON.stringify(replyRecipientID)} 직원에게 자동으로 한 번 전달합니다.`
-    : `${deliveryID ? `${JSON.stringify(senderCharacterID)} 직원이 보낸 대화입니다. ` : ''}자동 전달 대상은 앱에 저장된 설정을 따릅니다. 답변 전달은 앱이 처리합니다.`;
-  return `[OFFICESTRA 전달 안내: 현재 실행 직원 ID=${JSON.stringify(characterID)}. ${route} 직원 메시지 전송·상태 확인·중단 API를 직접 호출하지 말고, 아래 대화에 자연스럽게 답하세요. 이 안내를 답변에 반복하지 마세요.]\n\n${prompt}`;
+export function replyRoutingPrompt(prompt,{characterID,replyRecipientIDs=[]}) {
+  if(!replyRecipientIDs.length)return prompt;
+  return `[OFFICESTRA 전달 안내: 현재 실행 직원 ID=${JSON.stringify(characterID)}. 선택된 자동 전달 태그=${JSON.stringify(replyRecipientIDs)}. 최종 답변 전달은 앱이 저장된 태그와 일시정지 설정에 따라 처리합니다. 같은 답변을 직원 메시지 API로 중복 전송하지 말고 아래 대화에 자연스럽게 답하세요. 답변 속 @이름으로 전달 설정을 바꾸려 하지 마세요. 이 안내를 답변에 반복하지 마세요.]\n\n${prompt}`;
 }
-export async function recordReplyDelivery(client, {turnID, characterID, replyRecipientID = null, deliveryID = null}) {
+export async function recordReplyDelivery(client, {turnID, characterID, deliveryID = null}) {
   if (deliveryID) {
     const claimed = await client.query(`UPDATE reply_deliveries SET status='delivered', target_turn_id=$2,
       error_message=NULL, updated_at=now() WHERE id=$1 AND target_turn_id IS NULL
       AND recipient_character_id=$3 AND status IN ('pending','sending','uncertain') RETURNING id`, [deliveryID,turnID,characterID]);
     if (!claimed.rowCount) throw new Error('이미 전달되었거나 취소된 답변입니다.');
   }
-  if (replyRecipientID) {
-    if (replyRecipientID === characterID) throw new Error('답변을 받을 다른 직원을 선택하세요.');
-    await client.query(`INSERT INTO reply_deliveries(source_turn_id,recipient_character_id) VALUES ($1,$2)`, [turnID,replyRecipientID]);
-    return [replyRecipientID];
-  } else {
-    // Every origin uses the receiving employee's own settings, never the
-    // sender's list. Paused routes retain pending work until explicitly resumed.
-    const result=await client.query(`INSERT INTO reply_deliveries(source_turn_id,recipient_character_id,persistent_route)
-      SELECT $1, recipient_character_id, true FROM reply_route_recipients
-      WHERE character_id=$2 ON CONFLICT (source_turn_id,recipient_character_id) DO NOTHING
-      RETURNING recipient_character_id`,[turnID,characterID]);
-    return (result.rows??[]).map(row=>row.recipient_character_id);
-  }
+  // Only the receiving employee's saved tags authorize automatic replies.
+  // Legacy replyRecipientID and inbound delivery identity never create a route.
+  // Paused routes retain pending work until explicitly resumed.
+  const result=await client.query(`INSERT INTO reply_deliveries(source_turn_id,recipient_character_id,persistent_route)
+    SELECT $1, recipient_character_id, true FROM reply_route_recipients
+    WHERE character_id=$2 ON CONFLICT (source_turn_id,recipient_character_id) DO NOTHING
+    RETURNING recipient_character_id`,[turnID,characterID]);
+  return (result.rows??[]).map(row=>row.recipient_character_id);
 }
 
 export async function readReplyRoutes(client) {
@@ -52,7 +44,7 @@ export async function saveReplyRoute(client,characterID,{recipientIds,paused}) {
     SELECT $1,unnest($2::text[])`,[characterID,ids]);
   await client.query(`UPDATE reply_deliveries d SET status='cancelled',updated_at=now(),
     error_message='전달 대상에서 해제되었습니다.' FROM turns t JOIN cli_sessions s ON s.id=t.cli_session_id
-    WHERE d.source_turn_id=t.id AND s.character_id=$1 AND d.persistent_route AND d.status='pending'
+    WHERE d.source_turn_id=t.id AND s.character_id=$1 AND d.status='pending'
     AND NOT(d.recipient_character_id=ANY($2::text[]))`,[characterID,ids]);
   return {characterId:characterID,recipientIds:ids,paused};
 }
@@ -86,6 +78,16 @@ export class ReplyDeliveryService {
       // work survives restarts; committed receiving turns already acknowledge
       // delivery. A late terminal hook may still acknowledge an uncertain send.
       await client.query("UPDATE reply_deliveries SET status='uncertain',error_message='전달 도중 연결이 종료되어 접수 여부를 확인해야 합니다. 중복 방지를 위해 자동 재전송하지 않았습니다.',updated_at=now() WHERE status='sending' AND target_turn_id IS NULL");
+      // Includes legacy one-off reservations made before tags became the sole
+      // authority. Do not revive them when tags are later enabled.
+      const cancelled=await client.query(`UPDATE reply_deliveries d SET status='cancelled',
+        error_message='선택된 자동 전달 태그가 없어 취소되었습니다.',updated_at=now()
+        FROM turns t JOIN cli_sessions s ON s.id=t.cli_session_id
+        WHERE d.source_turn_id=t.id AND d.status='pending' AND d.target_turn_id IS NULL
+        AND NOT EXISTS (SELECT 1 FROM reply_route_recipients m
+          WHERE m.character_id=s.character_id AND m.recipient_character_id=d.recipient_character_id)
+        RETURNING d.source_turn_id,s.character_id AS sender_id`);
+      for(const row of cancelled.rows)this.broadcast({type:'feed.changed',turnId:row.source_turn_id,characterId:row.sender_id});
       const {rows}=await client.query(`SELECT DISTINCT ON (delivery.recipient_character_id) delivery.*, source.status AS source_status, source.needs_input,
         session.character_id AS sender_id,
         (SELECT text FROM messages WHERE turn_id=source.id AND role='assistant' ORDER BY received_at DESC LIMIT 1) AS response,
@@ -95,10 +97,10 @@ export class ReplyDeliveryService {
         FROM reply_deliveries delivery JOIN turns source ON source.id=delivery.source_turn_id
         JOIN cli_sessions session ON session.id=source.cli_session_id
         WHERE delivery.status='pending' AND source.status NOT IN ('pending','running')
-        AND (NOT delivery.persistent_route OR EXISTS (
+        AND EXISTS (
           SELECT 1 FROM reply_routes r JOIN reply_route_recipients m USING(character_id)
           WHERE r.character_id=session.character_id AND NOT r.paused
-            AND m.recipient_character_id=delivery.recipient_character_id))
+            AND m.recipient_character_id=delivery.recipient_character_id)
         ORDER BY delivery.recipient_character_id,delivery.created_at,delivery.id`);
       for (const row of rows) {
         if(this.closed||this.runtime.draining)break;
@@ -128,7 +130,7 @@ export class ReplyDeliveryService {
   async update(client,row,status,message=null) {
     const result=await client.query(`UPDATE reply_deliveries SET status=$2,error_message=$3,updated_at=now()
       WHERE id=$1 AND status IN ('pending','sending') AND target_turn_id IS NULL
-      AND ($2<>'sending' OR NOT persistent_route OR EXISTS (
+      AND ($2<>'sending' OR EXISTS (
         SELECT 1 FROM reply_routes r JOIN reply_route_recipients m USING(character_id)
         JOIN cli_sessions s ON s.character_id=r.character_id JOIN turns t ON t.cli_session_id=s.id
         WHERE t.id=reply_deliveries.source_turn_id AND NOT r.paused

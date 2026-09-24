@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.neo.office-claude-window-nudge</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/neo/office/scripts/claude-window-nudge.py</string>
+    </array>
+    <key>WorkingDirectory</key><string>/Users/neo/office</string>
+    <key>RunAtLoad</key><true/>
+    <key>StartInterval</key><integer>120</integer>
+    <key>StandardOutPath</key><string>/Users/neo/Library/Logs/office-claude-window-nudge.log</string>
+    <key>StandardErrorPath</key><string>/Users/neo/Library/Logs/office-claude-window-nudge.error.log</string>
+</dict>
+</plist>

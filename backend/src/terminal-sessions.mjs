@@ -739,8 +739,7 @@ export class TerminalSessionManager {
     const result = new Promise((yes, no) => { resolve = yes; reject = no; });
     result.catch(() => {}); // The timeout may fire while the DB preflight awaits.
     // Install the lock before the first await, including the DB busy check.
-    const executionText=replyRoutingPrompt(text,{characterID,replyRecipientID,deliveryID,senderCharacterID});
-    const pending = { id, text, senderCharacterID, replyRecipientID, deliveryID, wire: `[OFFICESTRA_REQUEST:${id}]\n${executionText}`, claimed: false, resolve, reject, expiresAt: Date.now() + this.dispatchTimeoutMs };
+    const pending = { id, text, senderCharacterID, replyRecipientID, deliveryID, wire: null, claimed: false, resolve, reject, expiresAt: Date.now() + this.dispatchTimeoutMs };
     state.dispatch = pending;
     pending.timer = setTimeout(() => {
       if (state.dispatch !== pending) return;
@@ -752,7 +751,10 @@ export class TerminalSessionManager {
     }, this.dispatchTimeoutMs);
     void (async () => { try {
       const busy = await this.runtime.pool.query("SELECT t.id FROM turns t JOIN cli_sessions s ON s.id=t.cli_session_id WHERE s.character_id=$1 AND t.status IN ('pending','running') LIMIT 1", [characterID]);
+      if(busy.rows.length)throw new AgentBusyError('터미널의 현재 업무가 끝난 뒤 시작하세요.');
+      const tags=await this.runtime.pool.query('SELECT recipient_character_id FROM reply_route_recipients WHERE character_id=$1 ORDER BY recipient_character_id',[characterID]);
       if (busy.rows.length || state.closed || state.closing || state.runningTurnID || pending.expired || state.dispatch !== pending) throw new AgentBusyError('터미널의 현재 업무가 끝난 뒤 시작하세요.');
+      pending.wire=`[OFFICESTRA_REQUEST:${id}]\n${replyRoutingPrompt(text,{characterID,replyRecipientIDs:tags.rows.map(row=>row.recipient_character_id)})}`;
       this.broadcast({ type: 'terminal.dispatch', characterId: characterID, dispatchId: id, terminalSessionId: state.terminalSessionID });
     } catch (error) {
       clearTimeout(pending.timer);
@@ -772,7 +774,7 @@ export class TerminalSessionManager {
     const pending = state.dispatch;
     if (!pending || pending.id !== body.dispatchId) throw new AgentBusyError('만료되었거나 이미 처리한 터미널 요청입니다.');
     if (body.action === 'claim') {
-      if (pending.expired || pending.claimed || state.runningTurnID || this.runtime.compactingCharacters?.has(characterID)) throw new AgentBusyError('터미널이 사용 중입니다.');
+      if (!pending.wire || pending.expired || pending.claimed || state.runningTurnID || this.runtime.compactingCharacters?.has(characterID)) throw new AgentBusyError('터미널이 사용 중입니다.');
       pending.claimed = true;
       return { prompt: pending.wire, expiresAt: pending.expiresAt };
     }
@@ -789,7 +791,15 @@ export class TerminalSessionManager {
 
   async beginDispatchedTurn(state, options) {
     const pending = state.dispatch;
-    const matches = pending?.claimed && String(options.prompt ?? '').trim() === pending.wire;
+    let dispatchedPrompt = String(options.prompt ?? '').trim();
+    if (options.execution?.backend === 'claude') {
+      // Claude wraps long bracketed pastes in its UserPromptSubmit hook.
+      // Unwrap only one complete envelope; still require the entire wire body
+      // (including the unique request marker) to match the claimed delivery.
+      const pasted = /^<pasted_content id="([A-Za-z0-9_-]{1,64})">\r?\n([\s\S]*)\r?\n<\/pasted_content id="\1">$/.exec(dispatchedPrompt);
+      if (pasted) dispatchedPrompt = pasted[2];
+    }
+    const matches = pending?.claimed && dispatchedPrompt === pending.wire;
     const turn = await this.runtime.beginTerminalTurn({ ...options, prompt: matches ? pending.text : options.prompt, senderCharacterID: matches ? pending.senderCharacterID : null, replyRecipientID:matches?pending.replyRecipientID:null, deliveryID:matches?pending.deliveryID:null });
     state.runningTurnID = turn.turnID;
     if (matches) {

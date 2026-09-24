@@ -4,6 +4,71 @@ import AppKit
 
 final class TerminalWorkspaceLifecycleTests: XCTestCase {
     @MainActor
+    func testTerminalCapabilityRepliesDoNotCountAsManualInput() {
+        let terminal = APIProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
+        let output = Array("\u{1b}[?2004h❯ \u{1b}[>0q\u{1b}[?u\u{1b}[c\u{1b}[6n".utf8)
+        terminal.dataReceived(slice: output[...])
+        XCTAssertEqual(terminal.inputRevision, 0)
+        XCTAssertTrue(terminal.hasEmptyInput)
+        terminal.send(data: Array("manual".utf8)[...])
+        XCTAssertEqual(terminal.inputRevision, 1)
+        XCTAssertFalse(terminal.hasEmptyInput)
+    }
+
+    @MainActor
+    func testReadingHistoryDoesNotHideTheRealEmptyPrompt() {
+        let terminal = APIProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
+        terminal.getTerminal().resize(cols: 80, rows: 8)
+        terminal.feed(text: "\u{1b}[?2004h" + String(repeating: "❯ \r\n", count: 30) + "❯ ")
+        XCTAssertTrue(terminal.hasEmptyInput)
+        terminal.scroll(toPosition: 0)
+        let top = terminal.getTerminal().getTopVisibleRow()
+        XCTAssertTrue(terminal.hasEmptyInput, "Reading history is not editing the prompt")
+        XCTAssertEqual(terminal.getTerminal().getTopVisibleRow(), top, "Checking input must not move the viewport")
+        terminal.feed(text: "draft")
+        terminal.scroll(toPosition: 0)
+        XCTAssertFalse(terminal.hasEmptyInput, "Inspect the live draft, not an old empty prompt")
+        terminal.feed(text: "\r\u{1b}[2K❯ Allow command?")
+        terminal.scroll(toPosition: 0)
+        XCTAssertFalse(terminal.hasEmptyInput)
+    }
+
+    @MainActor
+    func testPlaceholderRedrawWithUnstyledBlankCells() {
+        let terminal = APIProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
+        terminal.feed(text: "\u{1b}[?2004h\u{1b}[2K❯ \u{1b}[2mTry\u{1b}[7G\"fix lint errors\"\u{1b}[22m\r\u{1b}[2C")
+        XCTAssertTrue(terminal.hasEmptyInput, "Cursor-positioned whitespace is not a draft")
+        terminal.feed(text: "\r\u{1b}[2K❯ Try\u{1b}[7G\"fix lint errors\"\r\u{1b}[2C")
+        XCTAssertFalse(terminal.hasEmptyInput, "The same words typed normally must still be protected")
+    }
+
+    @MainActor
+    func testSuggestedNextQuestionDoesNotBlockAPIDeliveryInAnyLanguage() {
+        let terminal = APIProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 1200, height: 400))
+        terminal.getTerminal().resize(cols: 120, rows: 12)
+        for suggestion in ["클대리 수정 끝나면 최종 재검증 돌려줘", "Continue reviewing the changes", "修正を確認して"] {
+            terminal.feed(text: "\u{1b}[?2004h\r\u{1b}[2K❯ \u{1b}[2m\(suggestion)\u{1b}[22m\r\u{1b}[2C")
+            XCTAssertTrue(terminal.hasEmptyInput, "CLI suggestions are not manual drafts: \(suggestion)")
+            terminal.feed(text: "\r\u{1b}[2K❯ \(suggestion)\r\u{1b}[2C")
+            XCTAssertFalse(terminal.hasEmptyInput, "Identical text in a real draft must remain protected")
+        }
+        terminal.feed(text: "\r\u{1b}[2K❯ 직접 입력 \u{1b}[2m추천 뒷부분\u{1b}[22m\r\u{1b}[2C")
+        XCTAssertFalse(terminal.hasEmptyInput, "A suggestion after a real draft is still an input conflict")
+    }
+
+    @MainActor
+    func testAlternateScreenUsesItsOwnPromptAndPreservesDrafts() {
+        let terminal = APIProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
+        terminal.getTerminal().resize(cols: 80, rows: 8)
+        terminal.feed(text: "\u{1b}[?2004h" + String(repeating: "history\r\n", count: 30) + "❯ draft")
+        terminal.feed(text: "\u{1b}[?1049h\u{1b}[2J\u{1b}[7;1H❯ ")
+        XCTAssertTrue(terminal.hasEmptyInput)
+        terminal.feed(text: "unfinished")
+        XCTAssertFalse(terminal.hasEmptyInput)
+        terminal.feed(text: "\u{1b}[?1049l")
+        XCTAssertFalse(terminal.hasEmptyInput, "Normal-screen draft must survive alternate-screen switches")
+    }
+    @MainActor
     func testActualTerminalBufferAPIReadiness() {
         let terminal = APIProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
         terminal.feed(text: "\u{1b}[?2004h❯ ")
@@ -30,15 +95,16 @@ final class TerminalWorkspaceLifecycleTests: XCTestCase {
     }
     func testAPIInputRequiresAnEmptyPromptNotDraftOrMenu() {
         for prefix in ["> ", "❯ ", "› "] {
-            XCTAssertTrue(TerminalAPIInputPolicy.isEmptyPrompt(prefix: prefix, suffix: "", bracketedPaste: true, atBottom: true))
+            XCTAssertTrue(TerminalAPIInputPolicy.isEmptyPrompt(prefix: prefix, suffix: "", bracketedPaste: true))
         }
-        XCTAssertTrue(TerminalAPIInputPolicy.isEmptyPrompt(prefix: "› ", suffix: "Ask Codex to do anything", bracketedPaste: true, atBottom: true, dimPlaceholder: true))
-        XCTAssertFalse(TerminalAPIInputPolicy.isEmptyPrompt(prefix: "› ", suffix: "Ask Codex to do anything", bracketedPaste: true, atBottom: true))
+        XCTAssertTrue(TerminalAPIInputPolicy.isEmptyPrompt(prefix: "› ", suffix: "Ask Codex to do anything", bracketedPaste: true, dimPlaceholder: true))
+        XCTAssertFalse(TerminalAPIInputPolicy.isEmptyPrompt(prefix: "› ", suffix: "Ask Codex to do anything", bracketedPaste: true))
         for (prefix, suffix) in [("❯ draft", ""), ("❯ ", "draft"), ("", ""), ("1. ", "Allow"), ("❯ ", "Allow command?")] {
-            XCTAssertFalse(TerminalAPIInputPolicy.isEmptyPrompt(prefix: prefix, suffix: suffix, bracketedPaste: true, atBottom: true))
+            XCTAssertFalse(TerminalAPIInputPolicy.isEmptyPrompt(prefix: prefix, suffix: suffix, bracketedPaste: true))
         }
-        XCTAssertFalse(TerminalAPIInputPolicy.isEmptyPrompt(prefix: "❯ ", suffix: "", bracketedPaste: false, atBottom: true))
-        XCTAssertFalse(TerminalAPIInputPolicy.isEmptyPrompt(prefix: "❯ ", suffix: "", bracketedPaste: true, atBottom: false))
+        XCTAssertFalse(TerminalAPIInputPolicy.isEmptyPrompt(prefix: "❯ ", suffix: "", bracketedPaste: false))
+        XCTAssertTrue(TerminalAPIInputPolicy.isEmptyPrompt(prefix: "❯ ", suffix: "클대리 수정 끝나면 최종 재검증 돌려줘", bracketedPaste: true, dimPlaceholder: true))
+        XCTAssertFalse(TerminalAPIInputPolicy.isEmptyPrompt(prefix: "1. ", suffix: "선택", bracketedPaste: true, dimPlaceholder: true))
     }
 
     func testTerminalDispatchRealtimeEnvelopeKeepsSessionEpoch() throws {

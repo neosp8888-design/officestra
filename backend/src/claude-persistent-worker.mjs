@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import { readClaudeCostState } from './claude-cost-state.mjs';
 
 const DEFAULT_SUGGESTION_GRACE_MS = 3_000;
 // 중단 제어 요청을 보내면 Claude Code는 보통 수십 ms 안에 비용이 담긴
@@ -19,6 +20,7 @@ export class ClaudePersistentWorker {
     env,
     signature,
     sessionID = null,
+    resumeTranscriptPath = null,
     onExit = () => {},
     spawnProcess = spawn,
     suggestionGraceMs = DEFAULT_SUGGESTION_GRACE_MS,
@@ -35,7 +37,8 @@ export class ClaudePersistentWorker {
     this.exitNotified = false;
     this.terminalError = null;
     this.stderrTail = "";
-    this.cumulativeUsage = null;
+    this.cumulativeUsage = readClaudeCostState(resumeTranscriptPath, sessionID);
+    this.resumedWithoutCostBaseline = Boolean(sessionID && !this.cumulativeUsage);
 
     this.child = spawnProcess(executable, argumentsList, {
       cwd,
@@ -291,6 +294,15 @@ export class ClaudePersistentWorker {
       this.cumulativeUsage,
     );
     this.cumulativeUsage = scoped.cumulative;
+    if (this.resumedWithoutCostBaseline) {
+      this.resumedWithoutCostBaseline = false;
+      // The first resumed total may include old turns. Keep this turn's usage
+      // but leave cost unknown if its persisted baseline cannot be recovered.
+      const safe = { ...scoped.result, total_cost_usd: null };
+      delete safe.modelUsage;
+      delete safe.model_usage;
+      return safe;
+    }
     return scoped.result;
   }
 
@@ -426,6 +438,7 @@ function cumulativeDelta(value, previous) {
 }
 
 function finiteNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? number : null;
 }

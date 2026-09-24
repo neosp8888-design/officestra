@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": ["retry_haiku", "retry_sonnet", "wait", "stop"]
+    },
+    "reason": {"type": "string"}
+  },
+  "required": ["action", "reason"],
+  "additionalProperties": false
+}

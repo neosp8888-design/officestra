@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { EventEmitter, once } from "node:events";
 import { PassThrough } from "node:stream";
 import test from "node:test";
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 import {
   ClaudePersistentWorker,
@@ -153,6 +156,49 @@ test("같은 Claude 프로세스가 연속 turn을 받고 누적 사용량은 tu
 
   worker.close();
   assert.equal(child.killed, true);
+});
+
+test('resumed first turn subtracts persisted CLI cost and model counters before reporting usage', async t => {
+  const dir=mkdtempSync(join(tmpdir(),'claude-resume-cost-'));
+  t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const path=join(dir,'session.jsonl');
+  writeFileSync(path,JSON.stringify({type:'cost-state',sessionId:'session',totalCostUSD:39.985636,
+    modelUsage:{opus:{inputTokens:75437,outputTokens:567902,cacheReadInputTokens:80719380,cacheCreationInputTokens:1503467,costUSD:39.821638},
+      sonnet:{inputTokens:47259,outputTokens:6948,costUSD:0.163998}}})+'\n');
+  const child=new FakeChild(t), received=[];
+  const worker=new ClaudePersistentWorker({executable:'claude',argumentsList:[],cwd:dir,env:{},signature:'resume',
+    sessionID:'session',resumeTranscriptPath:path,spawnProcess:()=>child,suggestionGraceMs:1});
+  t.after(()=>worker.close());
+  const turn=await submittedMessage(child,()=>worker.runTurn({prompt:'검토',onLine:async line=>received.push(JSON.parse(line))}));
+  emit(child,{type:'result',subtype:'success',total_cost_usd:40.4383378,
+    modelUsage:{opus:{inputTokens:75453,outputTokens:573128,cacheReadInputTokens:81699169,cacheCreationInputTokens:1522487,costUSD:40.2743398},
+      sonnet:{inputTokens:47259,outputTokens:6948,costUSD:0.163998}}});
+  await turn.promise;
+  const result=received[0];
+  assert.ok(Math.abs(result.total_cost_usd-0.4527018)<1e-9);
+  assert.equal(result.modelUsage.opus.inputTokens,16);
+  assert.equal(result.modelUsage.opus.outputTokens,5226);
+  assert.equal(result.modelUsage.opus.cacheReadInputTokens,979789);
+  assert.equal(result.modelUsage.opus.cacheCreationInputTokens,19020);
+  assert.equal(result.modelUsage.sonnet.outputTokens,0);
+});
+
+test('unknown resume baseline leaves first cost unknown, preserves turn usage and scopes following turns', async t => {
+  const child=new FakeChild(t),received=[];
+  const worker=new ClaudePersistentWorker({executable:'claude',argumentsList:[],cwd:'/missing',env:{},signature:'resume',
+    sessionID:'session',spawnProcess:()=>child,suggestionGraceMs:1});
+  t.after(()=>worker.close());
+  for(const total of [40,40.5]) {
+    const turn=await submittedMessage(child,()=>worker.runTurn({prompt:'검토',onLine:async line=>received.push(JSON.parse(line))}));
+    emit(child,{type:'result',subtype:'success',total_cost_usd:total,usage:{input_tokens:10,output_tokens:5},
+      modelUsage:{opus:{costUSD:total,inputTokens:total*100}}});
+    await turn.promise;
+  }
+  assert.equal(received[0].total_cost_usd,null);
+  assert.equal(received[0].modelUsage,undefined);
+  assert.deepEqual(received[0].usage,{input_tokens:10,output_tokens:5});
+  assert.equal(received[1].total_cost_usd,0.5);
+  assert.equal(received[1].modelUsage.opus.inputTokens,50);
 });
 
 test("이전 turn에서 늦은 추천은 다음 turn에 붙이지 않는다", async (context) => {

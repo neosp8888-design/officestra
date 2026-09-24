@@ -9,17 +9,16 @@ struct TerminalAPIDispatch: Equatable, Sendable {
 }
 
 enum TerminalAPIInputPolicy {
-    // Fail closed on drafts, multiline continuations, menus and unknown CLI
-    // layouts. This is checked again after the network claim, on the main actor.
-    static func isEmptyPrompt(prefix: String, suffix: String, bracketedPaste: Bool, atBottom: Bool, dimPlaceholder: Bool = false) -> Bool {
-        guard bracketedPaste, atBottom,
+    // The backend decides whether work is running and owns the dispatch lock.
+    // This local check only protects the CLI input from a draft/selection.
+    static func isEmptyPrompt(prefix: String, suffix: String, bracketedPaste: Bool, dimPlaceholder: Bool = false) -> Bool {
+        guard bracketedPaste,
               [">", "❯", "›"].contains(prefix.trimmingCharacters(in: .whitespaces)) else { return false }
         let tail = suffix.trimmingCharacters(in: .whitespacesAndNewlines)
         if tail.isEmpty { return true }
-        // Both installed CLIs render empty-field suggestions with SGR 2.
-        // Identical words typed by the user are not a placeholder.
-        return dimPlaceholder && (tail == "Ask Codex to do anything" ||
-            (tail.hasPrefix("Try \"") && tail.hasSuffix("\"")))
+        // CLI suggestions use SGR 2 at the empty input cursor. Their wording
+        // and language are irrelevant; the same text typed normally is a draft.
+        return dimPlaceholder
     }
 }
 
@@ -27,13 +26,39 @@ enum TerminalAPIInputPolicy {
 final class APIProcessTerminalView: LocalProcessTerminalView {
     var inputRevision = 0
     private(set) var lastInputAt = -TimeInterval.infinity
+    private var processingTerminalOutput = false
     func recordInput() {
         inputRevision &+= 1
         lastInputAt = ProcessInfo.processInfo.systemUptime
     }
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
-        recordInput()
+        // Feeding CLI output can synchronously send capability/cursor replies.
+        // Those are protocol traffic, not a user editing or submitting a draft.
+        if !processingTerminalOutput { recordInput() }
         super.send(source: source, data: data)
+    }
+    override func dataReceived(slice: ArraySlice<UInt8>) {
+        let wasProcessingOutput = processingTerminalOutput
+        processingTerminalOutput = true
+        defer { processingTerminalOutput = wasProcessingOutput }
+        super.dataReceived(slice: slice)
+    }
+
+    private func liveCursorLine(in model: Terminal) -> BufferLine? {
+        // getLine(row:) follows the user's scrollback viewport. Read the active
+        // screen instead, without scrolling it or mistaking old text for a draft.
+        // SwiftTerm exposes bufferLine(atRow:) but not the active screen's yBase.
+        // Locate the buffer end in O(log n), never scan/copy conversation text.
+        var lower = 0
+        var upper = max(model.rows, 1)
+        while model.bufferLine(atRow: upper) != nil { upper *= 2 }
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            if model.bufferLine(atRow: middle) == nil { upper = middle }
+            else { lower = middle + 1 }
+        }
+        guard lower >= model.rows else { return nil }
+        return model.bufferLine(atRow: lower - model.rows + model.getCursorLocation().y)
     }
     var hasEmptyInput: Bool {
         // A just-submitted manual turn can precede the hook/watcher's running
@@ -41,17 +66,20 @@ final class APIProcessTerminalView: LocalProcessTerminalView {
         guard !hasMarkedText(), ProcessInfo.processInfo.systemUptime - lastInputAt >= 2 else { return false }
         let model = getTerminal()
         let cursor = model.getCursorLocation()
-        guard let line = model.getLine(row: cursor.y) else { return false }
-        let suffix = line.translateToString(trimRight: true, startCol: cursor.x)
-        let endColumn = min(model.cols, cursor.x + suffix.utf16.count)
+        guard let line = liveCursorLine(in: model), cursor.x >= 0, cursor.x < model.cols else { return false }
+        // Cursor-based redraws leave null cells between words. They render as
+        // spaces, and wide characters occupy terminal cells, not UTF-16 units.
+        let visibleCharacter: (CharData) -> Character = { $0.getCharacter() == "\0" ? " " : $0.getCharacter() }
+        let suffix = line.translateToString(trimRight: true, startCol: cursor.x, characterProvider: visibleCharacter)
+        let endColumn = min(model.cols, line.getTrimmedLength())
         let dimPlaceholder = cursor.x < endColumn && (cursor.x..<endColumn).allSatisfy { column in
-            guard let cell = model.getCharData(col: column, row: cursor.y) else { return false }
-            return cell.attribute.style.contains(.dim)
+            let cell = line[column]
+            return cell.getCharacter() == "\0" || cell.getCharacter().isWhitespace || cell.attribute.style.contains(.dim)
         }
         return TerminalAPIInputPolicy.isEmptyPrompt(
-            prefix: line.translateToString(startCol: 0, endCol: cursor.x),
+            prefix: line.translateToString(startCol: 0, endCol: cursor.x, characterProvider: visibleCharacter),
             suffix: suffix,
-            bracketedPaste: model.bracketedPasteMode, atBottom: !canScroll || scrollPosition >= 0.999,
+            bracketedPaste: model.bracketedPasteMode,
             dimPlaceholder: dimPlaceholder
         )
     }

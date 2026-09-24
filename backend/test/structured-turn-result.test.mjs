@@ -36,6 +36,8 @@ test('직원 API 발신자 안내는 실제 직원 ID를 사용하고 중복되�
   assert.match(once, /lifecycleState: active는 보존 중인 기록이며 실행 상태가 아니다/);
   assert.match(once, /GET \/api\/agent-jobs\?characterId=수신직원ID의 canReceive/);
   assert.match(once, /DELETE는 기록 정리가 아니라 실제 업무 중단/);
+  assert.doesNotMatch(once, /자동 전달|답변 전달 태그|직원 메시지 API를 직접 호출하지 않는다/,
+    'common identity guidance must not assume automatic reply tags');
   assert.equal(identityPromptWithStructuredResult(once, 'right-man'), once);
   assert.doesNotMatch(identityPromptWithStructuredResult('사용자 지침'), /senderCharacterId/);
 });

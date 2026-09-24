@@ -11,6 +11,7 @@ function fixture(overrides={}) {
     if(sql.includes('pg_try_advisory_lock'))return {rows:[{locked:true}]};
     if(sql.includes('pg_advisory_unlock')){unlocks++;return {rows:[]};}
     if(sql.includes("SET status='uncertain'")){if(row.status==='sending'&&!row.target_turn_id)row.status='uncertain';return {rowCount:1};}
+    if(sql.includes('선택된 자동 전달 태그가 없어'))return {rows:[],rowCount:0};
     if(sql.includes("SET status='cancelled'")){if(row.status!=='pending'||row.target_turn_id)return {rowCount:0};row.status='cancelled';return {rowCount:1};}
     if(sql.startsWith('SELECT DISTINCT ON'))return {rows:row.status==='pending'?[structuredClone(row)]:[]};
     if(sql.startsWith('INSERT INTO reply_deliveries'))return {rows:[],rowCount:0};
@@ -76,14 +77,18 @@ test('user can cancel pending delivery without stopping either employee; claimed
 });
 test('routing is snapshotted transactionally and duplicate or wrong-recipient acknowledgements fail',async()=>{
   const calls=[];const client={query:async(sql,args)=>{calls.push({sql,args});return {rowCount:1};}};
-  await recordReplyDelivery(client,{turnID:'source',characterID:'left-woman',replyRecipientID:'right-woman'});
-  assert.deepEqual(calls[0].args,['source','right-woman']);
-  await assert.rejects(recordReplyDelivery(client,{turnID:'source',characterID:'left-woman',replyRecipientID:'left-woman'}),/다른 직원/);
+  assert.deepEqual(await recordReplyDelivery(client,{turnID:'source',characterID:'left-woman',replyRecipientID:'right-woman'}),[]);
+  assert.deepEqual(calls[0].args,['source','left-woman']);
+  assert.match(calls[0].sql,/FROM reply_route_recipients/);
   const f=fixture();await assert.rejects(recordReplyDelivery(f.client,{turnID:'t',characterID:'left-woman',deliveryID:f.row.id}),/이미 전달/);
   await f.service.tick();await assert.rejects(recordReplyDelivery(f.client,{turnID:'duplicate',characterID:'right-woman',deliveryID:f.row.id}),/이미 전달/);
 });
 test('routing guidance is execution-only and tells the model to respond rather than perform delivery',()=>{
   const prompt='안녕';assert.equal(replyRoutingPrompt(prompt,{characterID:'left-woman'}),prompt);
-  const routed=replyRoutingPrompt(prompt,{characterID:'left-woman',replyRecipientID:'right-woman'});
-  assert.match(routed,/앱이 "right-woman" 직원에게 자동으로 한 번 전달/);assert.match(routed,/직접 호출하지 말고/);assert.ok(routed.endsWith(prompt));
+  for(const legacy of [{replyRecipientID:'right-woman'},{deliveryID:'incoming',senderCharacterID:'boss'},
+    {replyRecipientID:'right-woman',deliveryID:'incoming',senderCharacterID:'boss'}]) {
+    assert.equal(replyRoutingPrompt(prompt,{characterID:'left-woman',...legacy}),prompt);
+  }
+  const routed=replyRoutingPrompt(prompt,{characterID:'left-woman',replyRecipientIDs:['right-woman','boss']});
+  assert.match(routed,/선택된 자동 전달 태그=\["right-woman","boss"\]/);assert.match(routed,/중복 전송하지 말고/);assert.ok(routed.endsWith(prompt));
 });
