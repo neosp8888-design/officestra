@@ -1,7 +1,7 @@
 /* 이 파일은 한국어 이외 시스템 언어에서 표시할 OfficeGame 영어 문구를 제공한다. */
 
 "대화 보관함" = "Conversation Archive";
-"화이트보드" = "Whiteboard";
+"사용량" = "Usage";
 "직원 업무 기록" = "Team work records";
 "현재 사용 가능량" = "Current availability";
 "실시간 대화" = "Live Conversation";
@@ -43,6 +43,7 @@
 "다음 12건 보기" = "Show next 12";
 "다음 12개 기록 보기" = "Show next 12 records";
 "한도 새로고침" = "Refresh limits";
+"%@ 기준" = "As of %@";
 "새로고침 중" = "Refreshing";
 "다시 시도" = "Try again";
 "사용 가능" = "Available";

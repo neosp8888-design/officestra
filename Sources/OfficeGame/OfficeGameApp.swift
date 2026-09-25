@@ -314,7 +314,7 @@ private struct OfficeGameView: View {
     @State private var profileCharacter: OfficeCharacter?
     @State private var historyTarget: ConversationHistoryTarget?
     @State private var bubbleDetail: BubbleDetail?
-    @State private var detailSelection = OfficeDetailSelection.archive
+    @State private var detailSelection = OfficeDetailSelection.usage
     @State private var outgoingArtStyle: OfficeArtStyle?
     @State private var artStyleRevealProgress: CGFloat = 1
     @State private var splitDragStartLeftWidth: CGFloat?

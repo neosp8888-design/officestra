@@ -20,7 +20,7 @@ enum OfficeDetailSelection: String, CaseIterable, Identifiable {
         case .archive:
             OfficeLocalization.string("대화 보관함")
         case .usage:
-            OfficeLocalization.string("화이트보드")
+            OfficeLocalization.string("사용량")
         case .wiki:
             OfficeLocalization.string("사내 위키")
         case .workBoard:
@@ -549,22 +549,38 @@ private struct UsageBoardContent: View {
                 GeometryReader { proxy in
                     ScrollView {
                         VStack(spacing: 12) {
-                            HStack {
+                            // 눌렀을 때 바뀐 게 보이도록 조회 시각을 함께 둔다.
+                            // Claude·Antigravity 한도는 백엔드가 5분 간격으로만 새로 읽는다.
+                            HStack(spacing: 6) {
                                 Spacer()
+                                Text(OfficeLocalization.format(
+                                    "%@ 기준",
+                                    snapshot.fetchedAt.formatted(date: .omitted, time: .standard)
+                                ))
+                                .font(.system(size: 10.5, weight: .medium))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
                                 Button {
                                     Task {
                                         await refresh(force: true)
                                         await refreshUpdateStatus(force: false)
                                     }
                                 } label: {
-                                    Label(
-                                        OfficeLocalization.string("한도 새로고침"),
-                                        systemImage: "arrow.clockwise"
-                                    )
+                                    Group {
+                                        if isRefreshing {
+                                            ProgressView().controlSize(.mini)
+                                        } else {
+                                            Image(systemName: "arrow.clockwise")
+                                                .font(.system(size: 11, weight: .semibold))
+                                        }
+                                    }
+                                    .frame(width: 16, height: 16)
                                 }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
+                                .buttonStyle(.borderless)
+                                .foregroundStyle(.secondary)
                                 .disabled(isRefreshing)
+                                .help(OfficeLocalization.string("한도 새로고침"))
+                                .accessibilityLabel(OfficeLocalization.string("한도 새로고침"))
                                 .accessibilityIdentifier("usageBoardRefresh")
                             }
                             if UsageBoardLayout.usesSingleColumn(
