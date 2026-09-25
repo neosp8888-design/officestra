@@ -9,6 +9,11 @@ export class WorkBoardError extends Error {
 }
 
 const states = new Set(["open", "in_progress", "review", "done", "canceled", "deferred"]);
+const ticketTypes = new Set(["general", "planning", "implementation", "pretest",
+  "verification", "research", "content", "operations"]);
+const userReviews = new Set(["none", "approved", "changes_requested"]);
+const verificationVerdicts = new Set(["pass", "fail"]);
+const operationImpacts = new Set(["internal", "external"]);
 const commitPattern = /^[0-9a-f]{40}$/;
 const activityKinds = new Set(["progress", "decision", "verification"]);
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -93,7 +98,9 @@ export function normalizeTicketInput(body, { patch = false } = {}) {
   const value = object(body);
   const fields = ["title", "description", "assigneeId", "completedById", "verifiedById", "state", "dueDate",
     "completionCriteria", "parentTicketId", "predecessorIds", "goalIds", "workRecordIds",
-    "decisionPending", "reportedActorId", "pushedCommitSha"];
+    "decisionPending", "reportedActorId", "pushedCommitSha", "ticketType", "completionEvidence",
+    "userReview", "userReviewNote", "targetTicketId", "verificationVerdict", "operationImpact",
+    "resolutionReason"];
   allowedFields(value, patch ? fields : ["projectId", ...fields]);
   if (patch && Object.keys(value).length === 0) throw new WorkBoardError("수정할 필드가 없습니다.");
   const result = {};
@@ -101,6 +108,39 @@ export function normalizeTicketInput(body, { patch = false } = {}) {
   if (!patch || Object.hasOwn(value, "title")) result.title = text(value.title, "title", 160, true);
   if (!patch || Object.hasOwn(value, "description")) result.description = text(value.description ?? "", "description", 10000);
   if (!patch || Object.hasOwn(value, "completionCriteria")) result.completionCriteria = text(value.completionCriteria ?? "", "completionCriteria", 4000);
+  if (!patch || Object.hasOwn(value, "ticketType")) {
+    const ticketType = value.ticketType ?? (!patch ? "general" : null);
+    if (!ticketTypes.has(ticketType)) throw new WorkBoardError("ticketType이 올바르지 않습니다.");
+    result.ticketType = ticketType;
+  }
+  for (const field of ["completionEvidence", "userReviewNote", "resolutionReason"]) {
+    if (!patch || Object.hasOwn(value, field)) {
+      result[field] = text(value[field] ?? "", field, field === "completionEvidence" ? 10000 : 4000);
+    }
+  }
+  if (!patch || Object.hasOwn(value, "userReview")) {
+    const review = value.userReview ?? (!patch ? "none" : null);
+    if (!userReviews.has(review)) throw new WorkBoardError("userReview가 올바르지 않습니다.");
+    result.userReview = review;
+  }
+  if (!patch || Object.hasOwn(value, "targetTicketId")) {
+    result.targetTicketId = value.targetTicketId === null || value.targetTicketId === undefined
+      ? null : uuid(value.targetTicketId, "targetTicketId");
+  }
+  if (!patch || Object.hasOwn(value, "verificationVerdict")) {
+    const verdict = value.verificationVerdict ?? null;
+    if (verdict !== null && !verificationVerdicts.has(verdict)) {
+      throw new WorkBoardError("verificationVerdict가 올바르지 않습니다.");
+    }
+    result.verificationVerdict = verdict;
+  }
+  if (!patch || Object.hasOwn(value, "operationImpact")) {
+    const impact = value.operationImpact ?? null;
+    if (impact !== null && !operationImpacts.has(impact)) {
+      throw new WorkBoardError("operationImpact가 올바르지 않습니다.");
+    }
+    result.operationImpact = impact;
+  }
   if (!patch || Object.hasOwn(value, "assigneeId")) {
     result.assigneeId = value.assigneeId === null || value.assigneeId === undefined
       ? null : text(value.assigneeId, "assigneeId", 100, true);
@@ -227,6 +267,11 @@ const projectColumns = `id, project_key AS "projectKey", title, description,
 const ticketColumns = `id, project_id AS "projectId", title, description,
   assignee_id AS "assigneeId", completed_by_id AS "completedById",
   verified_by_id AS "verifiedById", state, pushed_commit_sha AS "pushedCommitSha",
+  ticket_type AS "ticketType", completion_evidence AS "completionEvidence",
+  user_review AS "userReview", user_review_note AS "userReviewNote",
+  user_reviewed_at AS "userReviewedAt", target_ticket_id AS "targetTicketId",
+  verification_verdict AS "verificationVerdict", operation_impact AS "operationImpact",
+  resolution_reason AS "resolutionReason",
   due_date::text AS "dueDate",
   completion_criteria AS "completionCriteria", decision_pending AS "decisionPending",
   parent_ticket_id AS "parentTicketId",
@@ -333,10 +378,116 @@ async function lockProject(client, projectId) {
   return result.rows[0];
 }
 
-function requireDeliveryEvidence(project, state, pushedCommitSha) {
-  if (project.projectKey !== "toss-trading" && state === "done" && !pushedCommitSha) {
-    throw new WorkBoardError("오피스 티켓 완료에는 원격 푸시를 확인한 커밋 SHA가 필요합니다.");
+const typedTransitions = {
+  open: new Set(["in_progress", "deferred", "canceled"]),
+  in_progress: new Set(["review", "deferred", "canceled"]),
+  review: new Set(["in_progress", "done", "deferred", "canceled"]),
+  deferred: new Set(["open", "canceled"]),
+  canceled: new Set(),
+  done: new Set(),
+};
+
+function requireDeliveryEvidence(project, ticket) {
+  if (project.projectKey !== "toss-trading" && ticket.state === "done"
+      && ["general", "implementation"].includes(ticket.ticketType) && !ticket.pushedCommitSha) {
+    throw new WorkBoardError("구현·미분류 티켓 완료에는 원격 푸시를 확인한 커밋 SHA가 필요합니다.");
   }
+}
+
+async function validateLifecycle(client, project, before, next, ticketId = null) {
+  const typed = next.ticketType !== "general";
+  if (before?.state === "done" && before.ticketType !== "general"
+      && Object.keys(next).some((field) => field !== "reportedActorId"
+        && JSON.stringify(next[field]) !== JSON.stringify(before[field]))) {
+    throw new WorkBoardError("완료된 유형 티켓은 변경할 수 없습니다. 후속 티켓을 만드세요.");
+  }
+  if (!before && typed && next.state !== "open") {
+    throw new WorkBoardError("유형을 지정한 새 티켓은 오픈 상태로 만듭니다.");
+  }
+  if (before && next.ticketType !== before.ticketType
+      && !["open", "in_progress"].includes(before.state)) {
+    throw new WorkBoardError(["done", "canceled"].includes(before.state)
+      ? "완료·취소된 티켓은 유형을 바꿀 수 없습니다. 후속 티켓을 만드세요."
+      : "오픈·진행 상태에서만 유형을 바꿀 수 있습니다. 진행으로 돌린 뒤 수정하세요.");
+  }
+  if (before && (typed || before.ticketType !== "general") && next.state !== before.state
+      && !typedTransitions[before.state].has(next.state)) {
+    throw new WorkBoardError("이 유형의 상태 전이가 허용되지 않습니다.");
+  }
+  if (typed && ["review", "done"].includes(next.state)) {
+    if (!next.completionCriteria || !next.completionEvidence || !next.completedById) {
+      throw new WorkBoardError("검토·완료에는 완료 조건·결과 근거·완료자가 필요합니다.");
+    }
+  }
+  if (typed && ["deferred", "canceled"].includes(next.state) && !next.resolutionReason) {
+    throw new WorkBoardError("대기·취소에는 사유가 필요합니다.");
+  }
+  if (next.userReview !== "none") {
+    const allowedStates = next.userReview === "changes_requested"
+      ? ["review", "in_progress"] : ["review", "done"];
+    if (!allowedStates.includes(next.state) || !next.userReviewNote) {
+      throw new WorkBoardError("사용자 검토 기록에는 검토 상태와 메모가 필요합니다.");
+    }
+    if (next.userReview !== (before?.userReview ?? "none")) {
+      if (!next.reportedActorId) {
+        throw new WorkBoardError("사용자 검토 결과 변경에는 기록자 신고값이 필요합니다.");
+      }
+      if (next.reportedActorId !== "user") {
+        const actor = await client.query("SELECT id FROM characters WHERE id = $1", [next.reportedActorId]);
+        if (!actor.rows[0]) throw new WorkBoardError("검토 기록자는 사용자 또는 등록된 직원이어야 합니다.");
+      }
+    }
+  }
+  if (next.ticketType !== "operations" && next.operationImpact !== null) {
+    throw new WorkBoardError("operationImpact는 운영 유형에서만 사용합니다.");
+  }
+  if (next.ticketType === "operations" && ["review", "done"].includes(next.state)
+      && next.operationImpact === null) {
+    throw new WorkBoardError("운영 티켓은 내부·외부 영향 범위를 정해야 합니다.");
+  }
+  if (next.ticketType !== "verification"
+      && (next.targetTicketId !== null || next.verificationVerdict !== null)) {
+    throw new WorkBoardError("검증 대상과 판정은 독립검증 유형에서만 사용합니다.");
+  }
+  let target = null;
+  if (next.ticketType === "verification" && next.targetTicketId !== null) {
+    if (next.targetTicketId === ticketId) throw new WorkBoardError("자기 티켓은 검증 대상이 될 수 없습니다.");
+    const result = await client.query(
+      `SELECT id, project_id AS "projectId", assignee_id AS "assigneeId",
+              completed_by_id AS "completedById", state
+       FROM work_board_tickets WHERE id = $1 FOR UPDATE`, [next.targetTicketId],
+    );
+    target = result.rows[0];
+    if (!target || target.projectId !== project.id) {
+      throw new WorkBoardError("검증 대상은 같은 프로젝트의 티켓이어야 합니다.");
+    }
+  }
+  if (next.ticketType === "verification" && ["review", "done"].includes(next.state)
+      && !target) {
+    throw new WorkBoardError("독립검증 티켓에는 검증 대상이 필요합니다.");
+  }
+  if (next.state === "done" && typed) {
+    if (before?.state !== "review" && before?.state !== "done") {
+      throw new WorkBoardError("완료 전에 검토 상태를 거쳐야 합니다.");
+    }
+    if (next.decisionPending) throw new WorkBoardError("사용자 결정 대기 중에는 완료할 수 없습니다.");
+    if ((["planning", "content"].includes(next.ticketType)
+        || (next.ticketType === "operations" && next.operationImpact === "external"))
+        && next.userReview !== "approved") {
+      throw new WorkBoardError("이 유형의 완료에는 사용자 검토 승인 기록이 필요합니다.");
+    }
+    if (next.ticketType === "verification") {
+      if (!next.verificationVerdict) throw new WorkBoardError("독립검증 완료에는 합격·불합격 판정이 필요합니다.");
+      if (!["review", "done"].includes(target.state)) {
+        throw new WorkBoardError("검증 대상은 검토 또는 완료 상태여야 합니다.");
+      }
+      if ([target.assigneeId, target.completedById].includes(next.completedById)) {
+        throw new WorkBoardError("검증 완료자는 대상 티켓의 담당자·완료자와 달라야 합니다.");
+      }
+    }
+  }
+  requireDeliveryEvidence(project, next);
+  return target;
 }
 
 async function requireProjectTickets(client, projectId, ids, field) {
@@ -502,6 +653,10 @@ export async function listTicketActivity(pool, id) {
   const labels = {
     title: "제목", description: "설명", assigneeId: "담당자",
     completedById: "완료자", verifiedById: "검증자", state: "상태",
+    ticketType: "유형", completionEvidence: "완료 근거", userReview: "사용자 검토",
+    userReviewNote: "사용자 검토 메모", userReviewedAt: "사용자 검토 시각",
+    targetTicketId: "검증 대상", verificationVerdict: "검증 판정",
+    operationImpact: "운영 영향", resolutionReason: "대기·취소 사유",
     dueDate: "기한", completionCriteria: "완료 조건", decisionPending: "사용자 결정 대기",
     parentTicketId: "상위 작업", predecessorIds: "선행 작업", goalIds: "목표 연결",
     workRecordIds: "업무 기록 연결", pushedCommitSha: "푸시된 커밋 SHA",
@@ -544,16 +699,22 @@ async function writeChangeActivity(client, id, kind, changes, reportedActorId = 
 export async function createTicket(pool, body) {
   const value = normalizeTicketInput(body);
   const project = await lockProject(pool, value.projectId);
-  requireDeliveryEvidence(project, value.state, value.pushedCommitSha);
+  await validateLifecycle(pool, project, null, value);
   try {
     const result = await pool.query(
       `INSERT INTO work_board_tickets
        (project_id, title, description, assignee_id, completed_by_id, verified_by_id, state, due_date,
-        completion_criteria, parent_ticket_id, decision_pending, pushed_commit_sha)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
+        completion_criteria, parent_ticket_id, decision_pending, pushed_commit_sha,
+        ticket_type, completion_evidence, user_review, user_review_note, user_reviewed_at,
+        target_ticket_id, verification_verdict, operation_impact, resolution_reason)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+               $13, $14, $15, $16, $17, $18, $19, $20, $21) RETURNING id`,
       [value.projectId, value.title, value.description, value.assigneeId,
         value.completedById, value.verifiedById, value.state, value.dueDate,
-        value.completionCriteria, value.parentTicketId, value.decisionPending, value.pushedCommitSha],
+        value.completionCriteria, value.parentTicketId, value.decisionPending, value.pushedCommitSha,
+        value.ticketType, value.completionEvidence, value.userReview, value.userReviewNote,
+        value.userReview === "none" ? null : new Date(), value.targetTicketId,
+        value.verificationVerdict, value.operationImpact, value.resolutionReason],
     );
     const id = result.rows[0].id;
     await validateTicketPlan(pool, value.projectId, id, value);
@@ -576,26 +737,75 @@ export async function updateTicket(pool, id, body) {
   const projectId = existing.rows[0].projectId;
   const project = await lockProject(pool, projectId);
   const before = await readTicket(pool, id);
-  requireDeliveryEvidence(project, value.state ?? before.state,
-    Object.hasOwn(value, "pushedCommitSha") ? value.pushedCommitSha : before.pushedCommitSha);
+  const reviewMaterialChanged = ["description", "completionCriteria", "completionEvidence",
+    "ticketType", "operationImpact", "targetTicketId"].some((field) =>
+    Object.hasOwn(value, field) && JSON.stringify(value[field]) !== JSON.stringify(before[field]));
+  if ((before.state === "review" && value.state === "in_progress"
+       && value.userReview !== "changes_requested")
+      || (before.userReview === "approved" && reviewMaterialChanged
+          && value.userReview !== "changes_requested")) {
+    value.userReview = "none";
+    value.userReviewNote = "";
+  }
+  if (value.userReview === "none") value.userReviewNote = "";
+  const next = { ...before, ...value };
+  const target = await validateLifecycle(pool, project, before, next, id);
   await validateTicketPlan(pool, projectId, id, value);
   const columns = {
     title: "title", description: "description", assigneeId: "assignee_id",
     completedById: "completed_by_id", verifiedById: "verified_by_id",
     state: "state", dueDate: "due_date", completionCriteria: "completion_criteria",
     parentTicketId: "parent_ticket_id", decisionPending: "decision_pending",
-    pushedCommitSha: "pushed_commit_sha",
+    pushedCommitSha: "pushed_commit_sha", ticketType: "ticket_type",
+    completionEvidence: "completion_evidence", userReview: "user_review",
+    userReviewNote: "user_review_note", targetTicketId: "target_ticket_id",
+    verificationVerdict: "verification_verdict", operationImpact: "operation_impact",
+    resolutionReason: "resolution_reason",
   };
   const keys = Object.keys(value).filter((key) => columns[key]);
   const assignments = keys.map((key, index) => `${columns[key]} = $${index + 2}`);
+  let reviewedAt = before.userReviewedAt;
+  if (Object.hasOwn(value, "userReview") && value.userReview !== before.userReview) {
+    reviewedAt = value.userReview === "none" ? null : new Date();
+    assignments.push(`user_reviewed_at = $${keys.length + 2}`);
+  }
   try {
     const result = await pool.query(
       `UPDATE work_board_tickets SET ${assignments.length ? `${assignments.join(", ")}, ` : ""}updated_at = now()
        WHERE id = $1 RETURNING id`,
-      [id, ...keys.map((key) => value[key])],
+      [id, ...keys.map((key) => value[key]),
+        ...(Object.hasOwn(value, "userReview") && value.userReview !== before.userReview ? [reviewedAt] : [])],
     );
     if (!result.rows[0]) throw new WorkBoardError("티켓이 없습니다.", 404);
     await replaceTicketLinks(pool, projectId, id, value);
+    if (before.state !== "done" && next.state === "done"
+        && next.ticketType === "verification") {
+      const targetBefore = await readTicket(pool, target.id);
+      if (next.verificationVerdict === "fail") {
+        await pool.query(
+          `UPDATE work_board_tickets SET state = 'in_progress', completed_by_id = NULL,
+           verified_by_id = NULL, completion_evidence = '', pushed_commit_sha = NULL,
+           user_review = 'none', user_review_note = '', user_reviewed_at = NULL,
+           decision_pending = false, updated_at = now() WHERE id = $1`, [target.id],
+        );
+      } else {
+        await pool.query(
+          `UPDATE work_board_tickets SET verified_by_id = $2, updated_at = now()
+           WHERE id = $1`, [target.id, next.completedById],
+        );
+      }
+      const targetAfter = await readTicket(pool, target.id);
+      const targetChanges = {};
+      for (const field of ["state", "completedById", "verifiedById", "completionEvidence",
+        "pushedCommitSha", "userReview", "userReviewNote", "userReviewedAt", "decisionPending"]) {
+        if (JSON.stringify(targetBefore[field]) !== JSON.stringify(targetAfter[field])) {
+          targetChanges[field] = { before: targetBefore[field], after: targetAfter[field] };
+        }
+      }
+      if (Object.keys(targetChanges).length) {
+        await writeChangeActivity(pool, target.id, "changed", targetChanges, value.reportedActorId ?? null);
+      }
+    }
     const after = await readTicket(pool, id);
     const changes = {};
     for (const key of Object.keys(value)) {

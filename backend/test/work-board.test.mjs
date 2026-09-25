@@ -35,6 +35,8 @@ test("프로젝트·티켓 입력은 상태, 날짜, 필드와 담당자를 검�
   assert.equal(ticket.assigneeId, null);
   assert.equal(ticket.completedById, null);
   assert.equal(ticket.verifiedById, null);
+  assert.equal(ticket.ticketType, "general");
+  assert.equal(ticket.userReview, "none");
   assert.deepEqual(normalizeTicketInput({ completedById: "left-man", verifiedById: "left-woman" }, { patch: true }), {
     completedById: "left-man", verifiedById: "left-woman",
   });
@@ -67,6 +69,178 @@ test("프로젝트·티켓 입력은 상태, 날짜, 필드와 담당자를 검�
     decisionPending: true,
   });
   assert.throws(() => normalizeTicketInput({ decisionPending: "true" }, { patch: true }), WorkBoardError);
+  assert.deepEqual(normalizeTicketInput({ ticketType: "pretest", userReview: "approved",
+    userReviewNote: "사용자 화면 확인" }, { patch: true }), {
+    ticketType: "pretest", userReview: "approved", userReviewNote: "사용자 화면 확인",
+  });
+  for (const bad of [{ ticketType: "bugfix" }, { userReview: "yes" },
+    { verificationVerdict: "maybe" }, { operationImpact: "unknown" },
+    { targetTicketId: "not-a-uuid" }]) {
+    assert.throws(() => normalizeTicketInput(bad, { patch: true }), WorkBoardError);
+  }
+});
+
+test("유형별 완료 조건과 사용자 검토 기록은 기존 미분류 완료를 소급하지 않는다", {
+  skip: !process.env.OFFICE_TEST_DATABASE_URL,
+}, async () => {
+  const pool = new pg.Pool({ connectionString: process.env.OFFICE_TEST_DATABASE_URL });
+  const client = await pool.connect();
+  const query = { query: client.query.bind(client) };
+  try {
+    await client.query("BEGIN");
+    const project = await createProject(query, {
+      projectKey: `lifecycle-${randomUUID().slice(0, 12)}`, title: "완료 규칙",
+    });
+    const legacy = await createTicket(query, { projectId: project.id, title: "이전 완료",
+      state: "done", pushedCommitSha: "a".repeat(40) });
+    assert.equal(legacy.ticketType, "general");
+    assert.equal(legacy.state, "done");
+    const plan = await createTicket(query, { projectId: project.id, title: "기획",
+      ticketType: "planning", completionCriteria: "결정문 승인" });
+    await assert.rejects(updateTicket(query, plan.id, { state: "done" }), /상태 전이/);
+    await updateTicket(query, plan.id, { state: "in_progress" });
+    await updateTicket(query, plan.id, { state: "review", completedById: "left-man",
+      completionEvidence: "범위와 선택지 문서 작성" });
+    await assert.rejects(updateTicket(query, plan.id, { state: "done" }), /사용자 검토/);
+    await assert.rejects(updateTicket(query, plan.id, { state: "done",
+      userReview: "approved", userReviewNote: "사용자가 선택지 승인" }), /기록자/);
+    const completed = await updateTicket(query, plan.id, { state: "done",
+      userReview: "approved", userReviewNote: "사용자가 선택지 승인",
+      reportedActorId: "user" });
+    assert.equal(completed.pushedCommitSha, null);
+    assert.equal(completed.userReview, "approved");
+    assert.ok(completed.userReviewedAt);
+    const events = await listTicketActivity(query, plan.id);
+    assert.ok(events.some((item) => item.changes.userReview?.after === "approved"
+      && item.reportedActorId === "user"));
+    await assert.rejects(updateTicket(query, plan.id, { description: "승인 뒤 변경",
+      userReview: "approved", userReviewNote: "옛 승인" }), /완료된 유형 티켓/);
+    const implementation = await createTicket(query, { projectId: project.id,
+      title: "구현", ticketType: "implementation", completionCriteria: "테스트 통과" });
+    await updateTicket(query, implementation.id, { state: "in_progress" });
+    await updateTicket(query, implementation.id, { state: "review", completedById: "left-man",
+      completionEvidence: "코드와 로컬 테스트 결과" });
+    await assert.rejects(updateTicket(query, implementation.id, { ticketType: "pretest" }), /유형을 바꿀 수/);
+    await assert.rejects(updateTicket(query, implementation.id, { state: "done" }), /커밋 SHA/);
+    assert.equal((await updateTicket(query, implementation.id, { state: "done",
+      pushedCommitSha: "b".repeat(40) })).state, "done");
+    const pretest = await createTicket(query, { projectId: project.id,
+      title: "사전테스트", ticketType: "pretest", completionCriteria: "실행 결과 기록" });
+    await updateTicket(query, pretest.id, { state: "in_progress" });
+    await updateTicket(query, pretest.id, { state: "review", completedById: "left-man",
+      completionEvidence: "재현 절차와 11/11 결과" });
+    assert.equal((await updateTicket(query, pretest.id, { state: "done" })).pushedCommitSha, null);
+    const operations = await createTicket(query, { projectId: project.id,
+      title: "외부 운영", ticketType: "operations", completionCriteria: "실행 결과 확인" });
+    await updateTicket(query, operations.id, { state: "in_progress" });
+    await updateTicket(query, operations.id, { state: "review", completedById: "left-man",
+      operationImpact: "external", completionEvidence: "실행 로그와 영향 범위" });
+    await assert.rejects(updateTicket(query, operations.id, { state: "done" }), /사용자 검토/);
+    assert.equal((await updateTicket(query, operations.id, { state: "done",
+      userReview: "approved", userReviewNote: "사용자 확인",
+      reportedActorId: "user" })).state, "done");
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+    await pool.end();
+  }
+});
+
+test("미분류 검토 티켓은 진행 복귀 뒤에만 유형을 지정하고 생성 승인도 기록자를 요구한다", {
+  skip: !process.env.OFFICE_TEST_DATABASE_URL,
+}, async () => {
+  const pool = new pg.Pool({ connectionString: process.env.OFFICE_TEST_DATABASE_URL });
+  const client = await pool.connect();
+  const query = { query: client.query.bind(client) };
+  try {
+    await client.query("BEGIN");
+    const project = await createProject(query, {
+      projectKey: `retype-${randomUUID().slice(0, 12)}`, title: "유형 변경 검증",
+    });
+    const legacy = await createTicket(query, { projectId: project.id,
+      title: "기존 검토", state: "review", completionCriteria: "실행 결과" });
+    await assert.rejects(updateTicket(query, legacy.id, { ticketType: "pretest",
+      state: "done", completedById: "left-man", completionEvidence: "11/11 통과" }), /유형을 바꿀 수/);
+    assert.equal((await listBoard(query)).tickets.find((item) => item.id === legacy.id)?.state, "review");
+    await updateTicket(query, legacy.id, { state: "in_progress" });
+    await updateTicket(query, legacy.id, { ticketType: "pretest" });
+    await updateTicket(query, legacy.id, { state: "review",
+      completedById: "left-man", completionEvidence: "11/11 통과" });
+    const completed = await updateTicket(query, legacy.id, { state: "done" });
+    assert.equal(completed.state, "done");
+    assert.equal(completed.pushedCommitSha, null);
+
+    const approved = { projectId: project.id, title: "기존 형식 승인", state: "review",
+      userReview: "approved", userReviewNote: "사용자 확인" };
+    await assert.rejects(createTicket(query, approved), /기록자/);
+    await assert.rejects(createTicket(query, { ...approved,
+      reportedActorId: "unknown-actor" }), /등록된 직원/);
+    const created = await createTicket(query, { ...approved, reportedActorId: "user" });
+    assert.equal(created.userReview, "approved");
+    assert.ok(created.userReviewedAt);
+    assert.ok((await listTicketActivity(query, created.id))
+      .some((item) => item.kind === "created" && item.reportedActorId === "user"));
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+    await pool.end();
+  }
+});
+
+test("불합격 독립검증은 자기 검증을 막고 대상의 완료 근거를 원자적으로 철회한다", {
+  skip: !process.env.OFFICE_TEST_DATABASE_URL,
+}, async () => {
+  const pool = new pg.Pool({ connectionString: process.env.OFFICE_TEST_DATABASE_URL });
+  const client = await pool.connect();
+  const query = { query: client.query.bind(client) };
+  try {
+    await client.query("BEGIN");
+    const project = await createProject(query, {
+      projectKey: `verify-${randomUUID().slice(0, 12)}`, title: "독립검증",
+    });
+    const target = await createTicket(query, { projectId: project.id, title: "대상",
+      ticketType: "implementation", assigneeId: "left-man", completionCriteria: "검증 통과" });
+    await updateTicket(query, target.id, { state: "in_progress" });
+    await updateTicket(query, target.id, { state: "review", completedById: "left-man",
+      completionEvidence: "코드 변경과 테스트" });
+    await updateTicket(query, target.id, { state: "done", pushedCommitSha: "c".repeat(40) });
+    const check = await createTicket(query, { projectId: project.id, title: "독립검증",
+      ticketType: "verification", completionCriteria: "판정 근거 기록", targetTicketId: target.id });
+    await updateTicket(query, check.id, { state: "in_progress" });
+    await updateTicket(query, check.id, { state: "review", completedById: "left-man",
+      completionEvidence: "재현 결과 불일치" });
+    await assert.rejects(updateTicket(query, check.id, { state: "done",
+      verificationVerdict: "fail" }), /담당자·완료자/);
+    assert.equal((await listBoard(query)).tickets.find((item) => item.id === target.id).state, "done");
+    await updateTicket(query, check.id, { completedById: "left-woman" });
+    assert.equal((await updateTicket(query, check.id, { state: "done",
+      verificationVerdict: "fail" })).state, "done");
+    const reopened = (await listBoard(query)).tickets.find((item) => item.id === target.id);
+    assert.equal(reopened.state, "in_progress");
+    assert.equal(reopened.pushedCommitSha, null);
+    assert.equal(reopened.completedById, null);
+    assert.equal(reopened.completionEvidence, "");
+    assert.ok((await listTicketActivity(query, target.id))
+      .some((item) => item.changes.state?.after === "in_progress"));
+    await updateTicket(query, target.id, { state: "review", completedById: "left-man",
+      completionEvidence: "결함 수정과 재시험" });
+    await updateTicket(query, target.id, { state: "done", pushedCommitSha: "d".repeat(40) });
+    const recheck = await createTicket(query, { projectId: project.id, title: "재검증",
+      ticketType: "verification", completionCriteria: "수정 확인", targetTicketId: target.id });
+    await updateTicket(query, recheck.id, { state: "in_progress" });
+    await updateTicket(query, recheck.id, { state: "review", completedById: "left-woman",
+      completionEvidence: "독립 재현 11/11" });
+    await updateTicket(query, recheck.id, { state: "done", verificationVerdict: "pass" });
+    const verified = (await listBoard(query)).tickets.find((item) => item.id === target.id);
+    assert.equal(verified.state, "done");
+    assert.equal(verified.verifiedById, "left-woman");
+    assert.ok((await listTicketActivity(query, target.id))
+      .some((item) => item.changes.verifiedById?.after === "left-woman"));
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+    await pool.end();
+  }
 });
 
 test("진행 기록은 본문과 신고된 작성자만 받는다", () => {

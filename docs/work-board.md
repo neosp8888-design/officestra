@@ -15,9 +15,28 @@
 | GET | `/api/work-board/tickets/:id/activity` | 티켓의 최근 진행·변경 기록 100건 조회 |
 | POST | `/api/work-board/tickets/:id/activity` | 진행·결정·검증 메모 추가 |
 
-프로젝트 생성에는 `projectKey`(소문자·숫자·하이픈 고유 키)와 `title`이 필요합니다. 티켓 생성에는 `projectId`(UUID)와 `title`이 필요합니다. 선택 필드는 `description`, `assigneeId`(직원 ID 또는 null), `completedById`(완료자 ID 또는 null), `verifiedById`(검증자 ID 또는 null), `state`, `dueDate`(`YYYY-MM-DD` 또는 null), `completionCriteria`, `pushedCommitSha`(40자리 소문자 SHA 또는 null)입니다. 상태는 `open`(오픈), `in_progress`(진행), `review`(검토), `done`(완료·반영), `canceled`(취소·반영 안 함), `deferred`(대기·추후 반영) 중 하나이며 기본값은 `open`입니다. PATCH는 보낸 필드만 바꿉니다. 담당자·완료자·검증자는 서로 다른 의미이고, 근거가 없는 과거 티켓의 완료자·검증자는 미확인으로 남깁니다. 이 값은 업무 근거를 보고 수동으로 지정하며 로그인 신원 인증을 뜻하지 않습니다. 변경 요청은 `Content-Type: application/json`을 사용합니다.
+프로젝트 생성에는 `projectKey`(소문자·숫자·하이픈 고유 키)와 `title`이 필요합니다. 티켓 생성에는 `projectId`(UUID)와 `title`이 필요합니다. 선택 필드는 `description`, `assigneeId`(직원 ID 또는 null), `completedById`(완료자 ID 또는 null), `verifiedById`(검증자 ID 또는 null), `state`, `ticketType`, `dueDate`(`YYYY-MM-DD` 또는 null), `completionCriteria`, `completionEvidence`, `pushedCommitSha`(40자리 소문자 SHA 또는 null)입니다. 상태는 `open`(오픈), `in_progress`(진행), `review`(검토), `done`(완료·반영), `canceled`(취소·반영 안 함), `deferred`(대기·추후 반영) 중 하나이며 기본값은 `open`입니다. PATCH는 보낸 필드만 바꿉니다. 담당자·완료자·검증자는 직원 ID로 서로 다른 의미를 가지며, 사용자 검토는 별도 필드로 기록합니다. 근거 없는 과거 티켓의 완료자·검증자·유형은 미확인으로 남깁니다. 이 값은 업무 근거를 보고 수동으로 지정하며 로그인 신원 인증을 뜻하지 않습니다. 변경 요청은 `Content-Type: application/json`을 사용합니다.
 
-오피스 프로젝트의 티켓은 `오픈 → 진행 → 검토` 뒤 코드 변경이 커밋·원격 푸시까지 끝났을 때만 `done`으로 저장합니다. `done` 요청에는 원격에서 확인한 `pushedCommitSha`가 필요합니다. API는 SHA 형식과 필수 여부를 확인하며 실제 원격 포함 여부는 작업자가 별도로 검증해야 합니다. 060 마이그레이션은 푸시 근거가 없는 기존 오피스 `done`을 `review`로 옮깁니다. Toss는 별도 저장소이므로 이 완료 근거 규칙을 적용하지 않습니다. 이전 `todo`와 `blocked`는 각각 `open`과 `deferred`로 이름을 바꿉니다.
+## 유형·생명주기·완료 판정
+
+`ticketType`은 **일의 산출물**, `state`는 **현재 단계**입니다. `general`은 기존 티켓과 구형 API를 위한 미분류 기본값이며 063 마이그레이션은 과거 완료를 재판정하거나 유형을 추측하지 않습니다. 앱에서 새 티켓을 만들 때는 유형을 선택해야 합니다. 유형을 지정한 새 티켓은 `open`으로 만들고 `open → in_progress → review → done`을 따릅니다. 검토에서 수정하면 `in_progress`로 되돌립니다. 진행 중에는 `deferred`·`canceled`로 옮길 수 있고 `resolutionReason`이 필요합니다. 대기에서 재개할 때는 `open`으로 돌아갑니다. 완료·취소는 종료 상태입니다. 검토에 올린 티켓은 미분류를 포함해 진행으로 먼저 되돌린 뒤 별도 요청에서 유형을 지정해야 합니다. 한 번의 요청으로 유형과 완료 상태를 함께 바꿔 SHA 조건을 피할 수 없습니다. 기존 미분류 티켓의 전이 관용성은 유지하지만, 직원이 선택한 유형의 실제 적합성을 인증하거나 자동 판정하지는 않습니다.
+
+| 유형 | 코드 | 검토에 올릴 결과 근거 | 완료에 추가로 필요한 조건 |
+| --- | --- | --- | --- |
+| 일반·미분류 | `general` | 기존 규칙 유지 | Toss 외 프로젝트는 원격 푸시 SHA |
+| 기획 | `planning` | 범위·대안·결정문 | 사용자 검토 승인 기록 |
+| 구현 | `implementation` | 변경 내용·로컬 테스트 결과 | Toss 외 프로젝트는 원격 푸시 SHA |
+| 사전테스트 | `pretest` | 재현 절차·실행 결과·남은 실패 | 사용자 검토 선택 |
+| 독립검증 | `verification` | 대상·재현 결과·합격/불합격 판정 | 대상 담당자·완료자와 다른 검증 완료자 |
+| 조사 | `research` | 출처·확인 시각·결론·불확실성 | 사용자 검토 선택 |
+| 콘텐츠 제작 | `content` | 결과물과 검토 내용 | 사용자 검토 승인 기록 |
+| 운영 | `operations` | 실행 결과와 영향 범위(`operationImpact`) | 외부 영향이면 사용자 검토 승인 기록 |
+
+유형이 있는 티켓은 `review`에 들어갈 때 `completionCriteria`, `completionEvidence`, `completedById`가 필요합니다. `done`은 반드시 `review`를 거치고 `decisionPending=false`여야 합니다. `verification`은 `targetTicketId`(같은 프로젝트)와 완료 시 `verificationVerdict`(`pass`/`fail`)가 필요합니다. 대상은 검토 또는 완료 상태여야 합니다. 합격이면 대상의 `verifiedById`를 검증 완료자로 기록하고, 불합격이면 같은 트랜잭션에서 대상을 `in_progress`로 돌려 이전 완료자·완료 근거·푸시 SHA·사용자 검토 기록을 비웁니다. 검증 티켓을 다시 독립검증하는 중복 관문은 두지 않습니다.
+
+`userReview`는 `none`, `approved`, `changes_requested` 중 하나이며 `approved` 또는 `changes_requested`에는 `userReviewNote`가 필요합니다. 생성과 수정 모두 검토 결과를 기록할 때 `reportedActorId`로 `user` 또는 등록된 직원 ID를 신고해야 합니다. 서버가 `userReviewedAt`을 기록하고 티켓 이력에도 신고된 기록자를 남깁니다. 앱의 **사용자 검토(기록)**에는 사용자·직원 선택지가 있지만, 사용자의 직접 승인과 동일한 인증 증명이 아닙니다. API에 호출자 인증이 없으므로 기록 주체는 신고값과 메모로만 추적합니다. 직원 검증자 `verifiedById`와 혼용하지 않습니다. 승인 후 검토에서 진행으로 되돌리거나 결과물을 바꾸면 승인 기록은 초기화됩니다.
+
+Toss 외 프로젝트의 `implementation`·`general`만 `done`에 원격에서 확인한 `pushedCommitSha`가 필요합니다. 다른 유형은 SHA 없이 유형별 결과와 검토 조건으로 완료할 수 있습니다. API는 SHA 형식과 필수 여부만 검사하며 실제 원격 포함 여부는 작업자가 별도로 검증해야 합니다. 060 마이그레이션은 당시 푸시 근거가 없는 기존 `done`을 `review`로 옮겼고, 063은 그 판정을 다시 바꾸지 않습니다. Toss는 별도 저장소이므로 이 SHA 규칙을 적용하지 않습니다.
 
 ## 2단계 관계와 목표
 

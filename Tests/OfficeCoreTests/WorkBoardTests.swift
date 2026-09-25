@@ -12,6 +12,14 @@ final class WorkBoardTests: XCTestCase {
             completedById: nil,
             verifiedById: nil,
             state: "deferred",
+            ticketType: "research",
+            completionEvidence: "출처와 결론",
+            userReview: "none",
+            userReviewNote: "",
+            targetTicketId: nil,
+            verificationVerdict: nil,
+            operationImpact: nil,
+            resolutionReason: "추가 자료 대기",
             pushedCommitSha: nil,
             dueDate: nil,
             completionCriteria: "결과 확인",
@@ -19,7 +27,8 @@ final class WorkBoardTests: XCTestCase {
             parentTicketId: nil,
             predecessorIds: [],
             goalIds: [],
-            workRecordIds: []
+            workRecordIds: [],
+            reportedActorId: "user"
         )
         let data = try JSONEncoder().encode(input)
         let object = try XCTUnwrap(
@@ -35,8 +44,13 @@ final class WorkBoardTests: XCTestCase {
         XCTAssertEqual(object["goalIds"] as? [String], [])
         XCTAssertEqual(object["workRecordIds"] as? [String], [])
         XCTAssertEqual(object["state"] as? String, "deferred")
+        XCTAssertEqual(object["ticketType"] as? String, "research")
+        XCTAssertEqual(object["completionEvidence"] as? String, "출처와 결론")
+        XCTAssertEqual(object["resolutionReason"] as? String, "추가 자료 대기")
+        XCTAssertTrue(object["targetTicketId"] is NSNull)
         XCTAssertTrue(object["pushedCommitSha"] is NSNull)
         XCTAssertEqual(object["decisionPending"] as? Bool, true)
+        XCTAssertEqual(object["reportedActorId"] as? String, "user")
     }
 
     func testGoalEditClearsOptionalKPIMeasures() throws {
