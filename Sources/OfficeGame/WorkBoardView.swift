@@ -395,6 +395,28 @@ private extension View {
     func workBoardSurface() -> some View { modifier(WorkBoardSurface()) }
 }
 
+private struct WorkBoardActionStyle: ButtonStyle {
+    var prominent = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(prominent ? Color.white : DashboardPalette.accent)
+            .padding(.horizontal, 12)
+            .background(
+                prominent
+                    ? DashboardPalette.accent.opacity(configuration.isPressed ? 0.82 : 1)
+                    : Color(nsColor: .controlBackgroundColor).opacity(configuration.isPressed ? 0.65 : 0.9),
+                in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .strokeBorder(prominent ? Color.clear : DashboardPalette.accent.opacity(0.16))
+            }
+            .opacity(isEnabled ? 1 : 0.45)
+    }
+}
+
 // 좁은 정보 패널에는 프로젝트 요약만 놓고, 상세는 별도 큰 창에서 연다.
 struct WorkBoardProjectLauncher: View {
     let databaseBaseURL: URL
@@ -599,6 +621,7 @@ struct WorkBoardView: View {
             } else if let snapshot {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
+                        boardActions
                         HStack(alignment: .top, spacing: 12) {
                             ForEach(snapshot.projects) { project in
                                 projectButton(project, tickets: snapshot.tickets)
@@ -673,24 +696,60 @@ struct WorkBoardView: View {
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(DashboardPalette.accent)
             Spacer()
+            Text("프로젝트와 진행 작업을 한곳에서 관리합니다")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 20)
+        .frame(height: 54)
+    }
+
+    private var boardActions: some View {
+        HStack(spacing: 10) {
             Button {
                 projectDraft = WorkBoardProjectDraft(project: nil)
             } label: {
-                Label("프로젝트 추가", systemImage: "plus")
+                boardActionLabel("프로젝트 추가", systemImage: "folder.badge.plus")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(WorkBoardActionStyle())
             .accessibilityIdentifier("workBoardAddProject")
             Button {
                 Task { await reload() }
             } label: {
-                Label("새로고침", systemImage: "arrow.clockwise")
+                boardActionLabel("새로고침", systemImage: "arrow.clockwise")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(WorkBoardActionStyle())
             .disabled(isLoading)
             .accessibilityIdentifier("workBoardRefresh")
+            Button {
+                if let selectedProject {
+                    projectDraft = WorkBoardProjectDraft(project: selectedProject)
+                }
+            } label: {
+                boardActionLabel("프로젝트 수정", systemImage: "square.and.pencil")
+            }
+            .buttonStyle(WorkBoardActionStyle())
+            .disabled(selectedProject == nil)
+            .accessibilityIdentifier("workBoardEditProject")
+            Button {
+                if let selectedProjectId {
+                    draft = WorkBoardDraft(projectId: selectedProjectId)
+                }
+            } label: {
+                boardActionLabel("티켓 추가", systemImage: "plus.circle.fill")
+            }
+            .buttonStyle(WorkBoardActionStyle(prominent: true))
+            .disabled(selectedProjectId == nil)
+            .accessibilityIdentifier("workBoardAddTicket")
         }
-        .padding(.horizontal, 20)
-        .frame(height: 54)
+        .accessibilityIdentifier("workBoardActions")
+    }
+
+    private func boardActionLabel(_ title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.system(size: 13, weight: .semibold))
+            .frame(maxWidth: .infinity, minHeight: 40)
+            .contentShape(Rectangle())
     }
 
     private var projectHeading: some View {
@@ -703,26 +762,6 @@ struct WorkBoardView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if let selectedProject {
-                Button {
-                    projectDraft = WorkBoardProjectDraft(project: selectedProject)
-                } label: {
-                    Label("프로젝트 수정", systemImage: "pencil")
-                }
-                .buttonStyle(.bordered)
-                .accessibilityIdentifier("workBoardEditProject")
-            }
-            Button {
-                if let selectedProjectId {
-                    draft = WorkBoardDraft(projectId: selectedProjectId)
-                }
-            } label: {
-                Label("티켓 추가", systemImage: "plus")
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(DashboardPalette.accent)
-            .disabled(selectedProjectId == nil)
-            .accessibilityIdentifier("workBoardAddTicket")
         }
     }
 

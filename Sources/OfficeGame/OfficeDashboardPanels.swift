@@ -63,76 +63,58 @@ enum UsageBoardLayout {
     }
 }
 
+struct OfficeDetailNavigation: View {
+    @Binding var selection: OfficeDetailSelection
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(OfficeDetailSelection.allCases) { item in
+                Button {
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        selection = item
+                    }
+                } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: item.icon)
+                            .font(.system(size: 13, weight: .semibold))
+                        Text(item.title)
+                            .font(.system(size: 10, weight: .semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 46)
+                    .foregroundStyle(
+                        selection == item ? DashboardPalette.accent : Color.secondary
+                    )
+                    .background(
+                        selection == item
+                            ? DashboardPalette.accent.opacity(0.12)
+                            : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(item.title)
+                .accessibilityValue(selection == item ? OfficeLocalization.string("선택됨") : "")
+                .accessibilityIdentifier("officeDetailTab-\(item.rawValue)")
+                .help(item.title)
+            }
+        }
+        .padding(5)
+        .accessibilityIdentifier("officeDetailNavigation")
+    }
+}
+
 struct OfficeDetailPanel: View {
     let director: AgentDirector
     @Binding var selection: OfficeDetailSelection
-    @State private var usageRefreshRequestID = UUID()
-    @State private var usageIsRefreshing = false
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 11) {
-                Image(systemName: selection.icon)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(DashboardPalette.accent)
-                    .frame(width: 34, height: 34)
-                    .background(
-                        DashboardPalette.accent.opacity(0.10),
-                        in: RoundedRectangle(
-                            cornerRadius: 10,
-                            style: .continuous
-                        )
-                    )
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(selection.title)
-                        .font(.system(size: 15, weight: .bold))
-                    HStack(spacing: 4) {
-                        Text(selection.subtitle)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.secondary)
-
-                        if selection == .usage {
-                            Button {
-                                usageRefreshRequestID = UUID()
-                            } label: {
-                                // 옆 부제목과 같은 크기·색으로 맞춘다.
-                                // 두 상태의 크기를 고정해 눌러도 글자가 밀리지 않는다.
-                                Group {
-                                    if usageIsRefreshing {
-                                        ProgressView()
-                                            .controlSize(.mini)
-                                            .scaleEffect(0.62)
-                                    } else {
-                                        Image(systemName: "arrow.clockwise")
-                                            .font(
-                                                .system(
-                                                    size: 9.5,
-                                                    weight: .semibold
-                                                )
-                                            )
-                                    }
-                                }
-                                .frame(width: 12, height: 12)
-                                .foregroundStyle(.secondary)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(usageIsRefreshing)
-                            .accessibilityLabel(OfficeLocalization.string("한도 새로고침"))
-                            .accessibilityValue(
-                                usageIsRefreshing ? OfficeLocalization.string("새로고침 중") : ""
-                            )
-                            .help(OfficeLocalization.string("한도 새로고침"))
-                        }
-                    }
-                }
-                Spacer()
-
-                detailTabs
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 13)
+            OfficeDetailNavigation(selection: $selection)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
 
             Divider()
                 .opacity(0.55)
@@ -143,8 +125,6 @@ struct OfficeDetailPanel: View {
                     ArchiveShelfContent(director: director)
                 case .usage:
                     UsageBoardContent(
-                        refreshRequestID: usageRefreshRequestID,
-                        isRefreshing: $usageIsRefreshing,
                         databaseBaseURL: director.databaseBaseURL,
                         director: director
                     )
@@ -169,45 +149,6 @@ struct OfficeDetailPanel: View {
         .officePanelStyle()
     }
 
-    private var detailTabs: some View {
-        HStack(spacing: 3) {
-            ForEach(OfficeDetailSelection.allCases) { item in
-                Button {
-                    withAnimation(.easeInOut(duration: 0.16)) {
-                        selection = item
-                    }
-                } label: {
-                    Image(systemName: item.icon)
-                        .font(.system(size: 10.5, weight: .semibold))
-                        .frame(width: 25, height: 25)
-                        .background(
-                            selection == item
-                                ? DashboardPalette.accent.opacity(0.14)
-                                : Color.clear,
-                            in: RoundedRectangle(
-                                cornerRadius: 7,
-                                style: .continuous
-                            )
-                        )
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(
-                    selection == item
-                        ? DashboardPalette.accent
-                        : Color.secondary
-                )
-                .accessibilityLabel(item.title)
-                .accessibilityValue(selection == item ? OfficeLocalization.string("선택됨") : "")
-                .accessibilityIdentifier("officeDetailTab-\(item.rawValue)")
-                .help(item.title)
-            }
-        }
-        .padding(3)
-        .background(
-            Color.primary.opacity(0.04),
-            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-        )
-    }
 }
 
 private struct ArchiveShelfContent: View {
@@ -590,10 +531,9 @@ private struct ArchiveShelfContent: View {
 }
 
 private struct UsageBoardContent: View {
-    let refreshRequestID: UUID
-    @Binding var isRefreshing: Bool
     let databaseBaseURL: URL
     let director: AgentDirector
+    @State private var isRefreshing = false
     @State private var snapshot: AIUsageSnapshot?
     @State private var errorMessage: String?
     /// 카드를 누르면 그 제공자의 사용 현황 상세 시트를 연다.
@@ -609,6 +549,24 @@ private struct UsageBoardContent: View {
                 GeometryReader { proxy in
                     ScrollView {
                         VStack(spacing: 12) {
+                            HStack {
+                                Spacer()
+                                Button {
+                                    Task {
+                                        await refresh(force: true)
+                                        await refreshUpdateStatus(force: false)
+                                    }
+                                } label: {
+                                    Label(
+                                        OfficeLocalization.string("한도 새로고침"),
+                                        systemImage: "arrow.clockwise"
+                                    )
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(isRefreshing)
+                                .accessibilityIdentifier("usageBoardRefresh")
+                            }
                             if UsageBoardLayout.usesSingleColumn(
                                 for: proxy.size.width
                             ) {
@@ -647,7 +605,7 @@ private struct UsageBoardContent: View {
                 ProgressView(OfficeLocalization.string("계정 한도를 확인하는 중"))
             }
         }
-        .task(id: refreshRequestID) {
+        .task {
             await refresh(force: snapshot != nil)
             await refreshUpdateStatus(force: false)
         }
