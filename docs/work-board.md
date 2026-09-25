@@ -15,7 +15,9 @@
 | GET | `/api/work-board/tickets/:id/activity` | 티켓의 최근 진행·변경 기록 100건 조회 |
 | POST | `/api/work-board/tickets/:id/activity` | 진행·결정·검증 메모 추가 |
 
-프로젝트 생성에는 `projectKey`(소문자·숫자·하이픈 고유 키)와 `title`이 필요합니다. 티켓 생성에는 `projectId`(UUID)와 `title`이 필요합니다. 선택 필드는 `description`, `assigneeId`(직원 ID 또는 null), `completedById`(완료자 ID 또는 null), `verifiedById`(검증자 ID 또는 null), `state`, `dueDate`(`YYYY-MM-DD` 또는 null), `completionCriteria`입니다. 상태는 `todo`, `in_progress`, `blocked`, `done` 중 하나이며 기본값은 `todo`입니다. PATCH는 보낸 필드만 바꿉니다. 담당자·완료자·검증자는 서로 다른 의미이고, 근거가 없는 과거 티켓의 완료자·검증자는 미확인으로 남깁니다. 이 값은 업무 근거를 보고 수동으로 지정하며 로그인 신원 인증을 뜻하지 않습니다. 변경 요청은 `Content-Type: application/json`을 사용합니다.
+프로젝트 생성에는 `projectKey`(소문자·숫자·하이픈 고유 키)와 `title`이 필요합니다. 티켓 생성에는 `projectId`(UUID)와 `title`이 필요합니다. 선택 필드는 `description`, `assigneeId`(직원 ID 또는 null), `completedById`(완료자 ID 또는 null), `verifiedById`(검증자 ID 또는 null), `state`, `dueDate`(`YYYY-MM-DD` 또는 null), `completionCriteria`, `pushedCommitSha`(40자리 소문자 SHA 또는 null)입니다. 상태는 `open`(오픈), `in_progress`(진행), `review`(검토), `done`(완료·반영), `canceled`(취소·반영 안 함), `deferred`(대기·추후 반영) 중 하나이며 기본값은 `open`입니다. PATCH는 보낸 필드만 바꿉니다. 담당자·완료자·검증자는 서로 다른 의미이고, 근거가 없는 과거 티켓의 완료자·검증자는 미확인으로 남깁니다. 이 값은 업무 근거를 보고 수동으로 지정하며 로그인 신원 인증을 뜻하지 않습니다. 변경 요청은 `Content-Type: application/json`을 사용합니다.
+
+오피스 프로젝트의 티켓은 `오픈 → 진행 → 검토` 뒤 코드 변경이 커밋·원격 푸시까지 끝났을 때만 `done`으로 저장합니다. `done` 요청에는 원격에서 확인한 `pushedCommitSha`가 필요합니다. API는 SHA 형식과 필수 여부를 확인하며 실제 원격 포함 여부는 작업자가 별도로 검증해야 합니다. 060 마이그레이션은 푸시 근거가 없는 기존 오피스 `done`을 `review`로 옮깁니다. Toss는 별도 저장소이므로 이 완료 근거 규칙을 적용하지 않습니다. 이전 `todo`와 `blocked`는 각각 `open`과 `deferred`로 이름을 바꿉니다.
 
 ## 2단계 관계와 목표
 

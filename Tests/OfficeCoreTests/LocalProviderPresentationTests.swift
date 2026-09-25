@@ -13,6 +13,17 @@ final class LocalProviderPresentationTests: XCTestCase {
         XCTAssertEqual(selected?.isLoaded, false)
         XCTAssertEqual(selected?.isChangingModel, false)
     }
+    func testVoiceFollowStatusIsActiveOnlyForItsEmployeeWhileStartingOrRunning() throws {
+        let decode = { (json: String) in try JSONDecoder().decode(VoiceFollowStatus.self, from: Data(json.utf8)) }
+        let running = try decode(#"{"characterId":"right-woman","state":"running","error":null}"#)
+        XCTAssertTrue(running.isActive(for: "right-woman"))
+        XCTAssertFalse(running.isActive(for: "left-man"))
+        XCTAssertTrue(try decode(#"{"characterId":"right-woman","state":"starting","error":null}"#).isActive(for: "right-woman"))
+        let failed = try decode(#"{"characterId":"right-woman","state":"failed","error":"없음"}"#)
+        XCTAssertFalse(failed.isActive(for: "right-woman"))
+        XCTAssertEqual(failed.error, "없음")
+        XCTAssertFalse(try decode(#"{"characterId":null,"state":"stopped","error":null}"#).isActive(for: "right-woman"))
+    }
     func testMeroMeroNativeToggleAndDefaultDecodeForBothRunners() throws {
         for runner in ["claude", "codex"] {
             let json = "{\"id\":\"mero-\(runner)\",\"enabled\":true,\"backend\":\"\(runner)\",\"model\":\"meromero\",\"contextWindow\":32768,\"kvCacheQuantization\":\"q8_0\",\"reasoningOptions\":[\"default\",\"off\",\"on\"],\"defaultReasoning\":\"off\"}"

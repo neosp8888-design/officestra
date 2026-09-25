@@ -332,6 +332,30 @@ final class SelectableMarkdownTextViewTests: XCTestCase {
         )
     }
 
+    func testUnboundedHeightRequestsPreserveTheMeasuredViewportWidth() {
+        let documentView = SelectableMarkdownDocumentView(fontSize: 14)
+        documentView.apply(
+            source: String(repeating: "확정된 긴 본문을 실제 창 폭으로 조판합니다.\n\n", count: 40),
+            fallbackDirectory: nil,
+            isDark: false
+        )
+        let width: CGFloat = 496
+        let height = documentView.heightThatFits(width: width)
+        documentView.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        documentView.layoutSubtreeIfNeeded()
+        let measurementCount = documentView.textLayoutMeasurementCount
+        let containerWidth = documentView.textView.textContainer?.containerSize.width
+
+        for _ in 0..<30 {
+            XCTAssertEqual(documentView.heightThatFits(width: .infinity), height)
+            XCTAssertEqual(documentView.heightThatFits(width: .greatestFiniteMagnitude), height)
+            XCTAssertEqual(documentView.heightThatFits(width: width), height)
+        }
+
+        XCTAssertEqual(documentView.textView.textContainer?.containerSize.width, containerWidth)
+        XCTAssertEqual(documentView.textLayoutMeasurementCount, measurementCount)
+    }
+
     func testTableUsesNativeTextTableBlocks() {
         let rendered = SelectableMarkdownAttributedRenderer.render(
             source: """

@@ -1229,7 +1229,11 @@ private struct LiveWorkspaceHeader: View {
 
                 ReplyRoutingControl(director: director)
 
-                if let target = localModelTarget {
+                if let character = characterSelectionStore.selectedCharacterID {
+                    VoiceFollowToggle(director: director, character: character)
+                }
+
+                if localModelTarget != nil {
                     HStack(spacing: 6) {
                         LocalModelStatusChip(status: localModelStatus)
                         Button {
@@ -1290,6 +1294,7 @@ private struct LiveWorkspaceHeader: View {
             .task {
                 while !Task.isCancelled {
                     await director.refreshLocalProviderStatuses()
+                    await director.refreshVoiceFollowStatus()
                     do { try await Task.sleep(for: .seconds(5)) }
                     catch { break }
                 }

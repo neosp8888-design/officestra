@@ -11,7 +11,8 @@ final class WorkBoardTests: XCTestCase {
             assigneeId: nil,
             completedById: nil,
             verifiedById: nil,
-            state: "blocked",
+            state: "deferred",
+            pushedCommitSha: nil,
             dueDate: nil,
             completionCriteria: "결과 확인",
             decisionPending: true,
@@ -33,7 +34,8 @@ final class WorkBoardTests: XCTestCase {
         XCTAssertEqual(object["predecessorIds"] as? [String], [])
         XCTAssertEqual(object["goalIds"] as? [String], [])
         XCTAssertEqual(object["workRecordIds"] as? [String], [])
-        XCTAssertEqual(object["state"] as? String, "blocked")
+        XCTAssertEqual(object["state"] as? String, "deferred")
+        XCTAssertTrue(object["pushedCommitSha"] is NSNull)
         XCTAssertEqual(object["decisionPending"] as? Bool, true)
     }
 

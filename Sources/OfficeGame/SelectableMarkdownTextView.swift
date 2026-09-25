@@ -56,7 +56,8 @@ struct SelectableMarkdownTextView: NSViewRepresentable {
         nsView: SelectableMarkdownDocumentView,
         context: Context
     ) -> CGSize? {
-        guard let width = proposal.width, width > 0 else {
+        guard let width = proposal.width, width.isFinite,
+              width > 0, width < 100_000 else {
             return nil
         }
         return CGSize(
@@ -269,8 +270,8 @@ final class SelectableMarkdownDocumentView: NSView, NSTextViewDelegate {
 
     func heightThatFits(width: CGFloat) -> CGFloat {
         heightRequestCount += 1
-        guard width > 0 else {
-            return minimumTextHeight
+        guard width.isFinite, width > 0, width < 100_000 else {
+            return max(measuredHeight, minimumTextHeight)
         }
         updateTextContainerWidth(layoutWidth(for: width))
         if hasValidTextMeasurement {

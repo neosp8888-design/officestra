@@ -805,6 +805,7 @@ final class AgentDirector: ObservableObject {
     @Published private(set) var terminalSessionRevision = 0
     @Published private(set) var localProviderStatuses: [LocalProviderStatus] = []
     @Published private(set) var isControllingLocalModel = false
+    @Published private(set) var voiceFollowStatus: VoiceFollowStatus?
     @Published private(set) var localModelOptions: [LocalModelOption] = []
     @Published private(set) var localProfileAssignments: [String: String] = [:]
     @Published private(set) var localHostAddresses: [String: String] = [:]
@@ -2779,6 +2780,16 @@ final class AgentDirector: ObservableObject {
             await refreshLocalProviderStatuses()
             throw error
         }
+    }
+
+    func refreshVoiceFollowStatus() async {
+        if let status = try? await database.fetchVoiceFollowStatus(), voiceFollowStatus != status {
+            voiceFollowStatus = status
+        }
+    }
+
+    func setVoiceFollow(_ enabled: Bool, for character: OfficeCharacter) async throws {
+        voiceFollowStatus = try await database.setVoiceFollow(enabled, for: character)
     }
 
     func localModelOption(for character: OfficeCharacter) -> LocalModelOption? {

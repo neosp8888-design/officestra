@@ -8,6 +8,27 @@ import XCTest
 
 @MainActor
 final class StreamingTextPacerTests: XCTestCase {
+    func testUnboundedWidthProbePreservesStreamingViewport() {
+        let view = IncrementalStreamingTextView(fontSize: 14, lineSpacing: 3)
+        view.apply(
+            source: String(repeating: "실시간으로 늘어나는 긴 본문입니다. ", count: 40),
+            animates: false
+        )
+        let width: CGFloat = 496
+        let height = view.heightThatFits(width: width)
+        view.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        let textView = view.subviews.compactMap { $0 as? NSTextView }.first
+        let containerWidth = textView?.textContainer?.containerSize.width
+
+        for _ in 0..<30 {
+            XCTAssertEqual(view.heightThatFits(width: .infinity), height)
+            XCTAssertEqual(view.heightThatFits(width: .greatestFiniteMagnitude), height)
+            XCTAssertEqual(view.heightThatFits(width: width), height)
+        }
+
+        XCTAssertEqual(textView?.textContainer?.containerSize.width, containerWidth)
+    }
+
     func testEmptyBacklogHasNoImmediatePrefix() {
         XCTAssertEqual(
             StreamingTextPacer.immediatelyVisibleCharacterCount(

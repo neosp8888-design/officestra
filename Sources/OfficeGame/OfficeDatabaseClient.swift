@@ -129,6 +129,22 @@ struct OfficeDatabaseClient: Sendable {
         try validate(response, data: data)
     }
 
+    func fetchVoiceFollowStatus() async throws -> VoiceFollowStatus {
+        let (data, response) = try await URLSession.shared.data(from: baseURL.appending(path: "api/voice-follow"))
+        try validate(response, data: data)
+        return try JSONDecoder().decode(VoiceFollowStatus.self, from: data)
+    }
+
+    func setVoiceFollow(_ enabled: Bool, for character: OfficeCharacter) async throws -> VoiceFollowStatus {
+        var request = URLRequest(url: baseURL.appending(path: "api/voice-follow"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["enabled": enabled, "characterId": character.rawValue])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response, data: data)
+        return try JSONDecoder().decode(VoiceFollowStatus.self, from: data)
+    }
+
     func setLocalReasoning(_ reasoning: String, for character: OfficeCharacter) async throws {
         var request = URLRequest(url: baseURL.appending(path: "api/characters/\(character.rawValue)/local-reasoning"))
         request.httpMethod = "PUT"
@@ -1069,6 +1085,17 @@ private struct ActiveSessionListResponse: Decodable {
 
 private struct TerminalSessionListResponse: Decodable {
     let sessions: [StoredTerminalSession]
+}
+
+/// 음성 따라 읽기 상태. state는 stopped·starting·running·failed 중 하나다.
+struct VoiceFollowStatus: Decodable, Equatable, Sendable {
+    let characterId: String?
+    let state: String
+    let error: String?
+
+    func isActive(for characterID: String) -> Bool {
+        characterId == characterID && (state == "starting" || state == "running")
+    }
 }
 
 struct LocalProviderList: Decodable {

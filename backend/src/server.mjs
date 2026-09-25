@@ -6,6 +6,8 @@ import { randomUUID } from "node:crypto";
 import { LocalProviderService, normalizeLocalDefinition, localProfileTitle, localProfileReasoningOptions, localProfileDefaultReasoning, LOCAL_TURN_EFFORT_SQL } from './local-provider-service.mjs';
 import { selectLocalProfile, setLocalReasoning, setLocalHostAddress, assignedLocalDefinition, controlLocalModel } from './local-profile-selection.mjs';
 import { LocalHostBusyError } from './local-provider-host.mjs';
+import { VoiceFollowControl } from './voice-follow-control.mjs';
+import { readVoiceTurn } from './voice-feed.mjs';
 import { WebSocket, WebSocketServer } from "ws";
 
 import {
@@ -148,6 +150,7 @@ const readUsageSummary = createUsageSummaryReader({ pool });
 const turnCostSummaryCache = new CharacterTurnCostSummaryCache(pool);
 const cliUpdateChecker = createCLIUpdateChecker();
 const localEmbeddingService = new LocalEmbeddingService();
+const voiceFollow = new VoiceFollowControl();
 
 async function hasRunningWork(backends) {
   const result = await pool.query(
@@ -2413,6 +2416,21 @@ const server = createServer(async (request, response) => {
       const body=await readJSON(request);
       try{send(response,200,await controlLocalModel({pool,runtime,localProviders,characterID:decodeURIComponent(url.pathname.split('/')[3]),action:body.action}));}
       catch(error){send(response,error instanceof AgentBusyError||error instanceof LocalHostBusyError?409:400,{error:error.message});}
+    } else if (request.method === 'GET' && url.pathname === '/api/voice-feed') {
+      const characterId = url.searchParams.get('characterId');
+      const since = url.searchParams.get('since');
+      if (!characterId || !/^[\w-]+$/.test(characterId) || !since || !Number.isFinite(Date.parse(since))) {
+        send(response, 400, { error: 'characterId와 유효한 since가 필요합니다.' });
+      } else {
+        send(response, 200, { turn: await readVoiceTurn(pool, { characterId, since: new Date(since).toISOString() }) });
+      }
+    } else if (request.method === 'GET' && url.pathname === '/api/voice-follow') {
+      send(response,200,voiceFollow.status());
+    } else if (request.method === 'POST' && url.pathname === '/api/voice-follow') {
+      if(!trustedJSONMutation(request,response))return;
+      const body=await readJSON(request);
+      try{send(response,200,voiceFollow.set({enabled:body.enabled,characterId:body.characterId}));}
+      catch(error){send(response,400,{error:error.message});}
     } else if (request.method === 'PUT' && /^\/api\/characters\/[^/]+\/local-address$/.test(url.pathname)) {
       if(!trustedJSONMutation(request,response))return;
       const body=await readJSON(request);
@@ -2807,6 +2825,7 @@ async function shutdown(signal) {
   console.log(`${signal} 신호를 받아 사무실 백엔드를 종료합니다.`);
   modelCatalogService?.stop();
   pricingCatalogService?.stop();
+  voiceFollow.stop();
   await replyDeliveries?.stop();
   await terminalSessions?.shutdown();
   await localProviders?.shutdown();

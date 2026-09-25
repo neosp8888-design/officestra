@@ -218,7 +218,7 @@ final class WikiKnowledgeTests: XCTestCase {
     func testDetailPanelIncludesCompactWikiDestination() {
         XCTAssertEqual(
             OfficeDetailSelection.allCases,
-            [.archive, .usage, .wiki]
+            [.archive, .usage, .wiki, .workBoard]
         )
         XCTAssertEqual(OfficeDetailSelection.wiki.title, "사내 위키")
         XCTAssertEqual(
@@ -237,5 +237,6 @@ final class WikiKnowledgeTests: XCTestCase {
             OfficeDetailSelection.wiki.icon,
             "text.book.closed.fill"
         )
+        XCTAssertEqual(OfficeDetailSelection.workBoard.title, "업무 보드")
     }
 }

@@ -5,6 +5,7 @@
   {"source":"직원 설정은 JSON 객체여야 합니다.","translation":"Teammate settings must be a JSON object."},
   {"source":"직원 식별자를 입력하세요.","translation":"Enter a teammate ID."},
   {"source":"지원하지 않는 CLI입니다.","translation":"This CLI is not supported."},
+  {"source":"지원하지 않는 업무 보드 요청입니다.","translation":"This work board request is not supported."},
   {"source":"지원하지 않는 모델입니다.","translation":"This model is not supported."},
   {"source":"지원하지 않는 추론 레벨입니다.","translation":"This reasoning level is not supported."},
   {"source":"Fast 모드 설정은 참 또는 거짓이어야 합니다.","translation":"Fast mode must be true or false."},

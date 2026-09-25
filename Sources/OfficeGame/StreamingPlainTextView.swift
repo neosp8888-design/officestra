@@ -49,7 +49,8 @@ struct StreamingPlainTextView: NSViewRepresentable {
         nsView: IncrementalStreamingTextView,
         context: Context
     ) -> CGSize? {
-        guard let width = proposal.width, width > 0 else {
+        guard let width = proposal.width, width.isFinite,
+              width > 0, width < 100_000 else {
             return nil
         }
         return CGSize(
@@ -192,8 +193,8 @@ final class IncrementalStreamingTextView: NSView {
     }
 
     func heightThatFits(width: CGFloat) -> CGFloat {
-        guard width > 0 else {
-            return minimumTextHeight
+        guard width.isFinite, width > 0, width < 100_000 else {
+            return max(measuredHeight, minimumTextHeight)
         }
         updateTextContainerWidth(width)
         let height = measuredTextHeight()

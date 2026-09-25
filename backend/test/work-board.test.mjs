@@ -29,7 +29,8 @@ test("프로젝트·티켓 입력은 상태, 날짜, 필드와 담당자를 검�
   const projectId = randomUUID();
   const ticket = normalizeTicketInput({ projectId, title: " 확인 " });
   assert.equal(ticket.title, "확인");
-  assert.equal(ticket.state, "todo");
+  assert.equal(ticket.state, "open");
+  assert.equal(ticket.pushedCommitSha, null);
   assert.equal(ticket.dueDate, null);
   assert.equal(ticket.assigneeId, null);
   assert.equal(ticket.completedById, null);
@@ -48,6 +49,17 @@ test("프로젝트·티켓 입력은 상태, 날짜, 필드와 담당자를 검�
     dueDate: null, assigneeId: null,
   });
   assert.throws(() => normalizeTicketInput({ state: "active" }, { patch: true }), WorkBoardError);
+  assert.throws(() => normalizeTicketInput({ state: "todo" }, { patch: true }), WorkBoardError);
+  assert.throws(() => normalizeTicketInput({ state: "blocked" }, { patch: true }), WorkBoardError);
+  for (const state of ["open", "in_progress", "review", "done", "canceled", "deferred"]) {
+    assert.equal(normalizeTicketInput({ state }, { patch: true }).state, state);
+  }
+  assert.deepEqual(normalizeTicketInput({ pushedCommitSha: "a".repeat(40) }, { patch: true }), {
+    pushedCommitSha: "a".repeat(40),
+  });
+  for (const sha of ["abc", "A".repeat(40), "g".repeat(40), 42]) {
+    assert.throws(() => normalizeTicketInput({ pushedCommitSha: sha }, { patch: true }), WorkBoardError);
+  }
   assert.throws(() => normalizeTicketInput({ state: null }, { patch: true }), WorkBoardError);
   assert.throws(() => normalizeTicketInput({ projectId }, { patch: true }), WorkBoardError);
   assert.equal(ticket.decisionPending, false);
@@ -68,6 +80,39 @@ test("진행 기록은 본문과 신고된 작성자만 받는다", () => {
   ]) assert.throws(() => normalizeActivityInput(bad), WorkBoardError);
 });
 
+test("오피스 완료에는 푸시 커밋 근거가 필요하고 Toss는 별도 정책을 쓴다", {
+  skip: !process.env.OFFICE_TEST_DATABASE_URL,
+}, async () => {
+  const pool = new pg.Pool({ connectionString: process.env.OFFICE_TEST_DATABASE_URL });
+  const client = await pool.connect();
+  const query = { query: client.query.bind(client) };
+  try {
+    await client.query("BEGIN");
+    const office = await createProject(query, {
+      projectKey: `delivery-${randomUUID().slice(0, 12)}`, title: "오피스 반영",
+    });
+    await assert.rejects(createTicket(query, {
+      projectId: office.id, title: "근거 없는 완료", state: "done",
+    }), (error) => error instanceof WorkBoardError && /커밋 SHA/.test(error.message));
+    const ticket = await createTicket(query, { projectId: office.id, title: "검토" });
+    await updateTicket(query, ticket.id, { state: "review" });
+    await assert.rejects(updateTicket(query, ticket.id, { state: "done" }), WorkBoardError);
+    const pushedCommitSha = "a".repeat(40);
+    const completed = await updateTicket(query, ticket.id, { state: "done", pushedCommitSha });
+    assert.equal(completed.state, "done");
+    assert.equal(completed.pushedCommitSha, pushedCommitSha);
+    await assert.rejects(updateTicket(query, ticket.id, { pushedCommitSha: null }), WorkBoardError);
+    const toss = await query.query("SELECT id FROM work_board_projects WHERE project_key = 'toss-trading'");
+    assert.equal((await createTicket(query, {
+      projectId: toss.rows[0].id, title: "별도 저장소", state: "done",
+    })).pushedCommitSha, null);
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+    await pool.end();
+  }
+});
+
 test("진행 메모와 티켓 수정 이력을 누적하고 결정 대기를 상태와 분리한다", {
   skip: !process.env.OFFICE_TEST_DATABASE_URL,
 }, async () => {
@@ -79,18 +124,18 @@ test("진행 메모와 티켓 수정 이력을 누적하고 결정 대기를 상
     const project = await createProject(query, {
       projectKey: `activity-${randomUUID().slice(0, 12)}`, title: "이력 검증",
     });
-    const ticket = await createTicket(query, { projectId: project.id, title: "TTS", state: "todo" });
+    const ticket = await createTicket(query, { projectId: project.id, title: "TTS", state: "open" });
     const first = await addTicketActivity(query, ticket.id, {
       kind: "progress", body: "첫 측정 2.1초", reportedActorId: "left-woman",
     });
     await addTicketActivity(query, ticket.id, { kind: "verification", body: "두 번째 측정 1.8초" });
-    await updateTicket(query, ticket.id, { state: "blocked", decisionPending: true });
-    await updateTicket(query, ticket.id, { state: "blocked" });
+    await updateTicket(query, ticket.id, { state: "deferred", decisionPending: true });
+    await updateTicket(query, ticket.id, { state: "deferred" });
     const events = await listTicketActivity(query, ticket.id);
     assert.equal(events.length, 4); // 생성, 메모 2건, 실제 변경 1건
     assert.equal(events.find((item) => item.id === first.id)?.reportedActorId, "left-woman");
     const change = events.find((item) => item.kind === "changed");
-    assert.deepEqual(change.changes.state, { before: "todo", after: "blocked" });
+    assert.deepEqual(change.changes.state, { before: "open", after: "deferred" });
     assert.deepEqual(change.changes.decisionPending, { before: false, after: true });
     assert.equal((await listBoard(query)).tickets.find((item) => item.id === ticket.id)?.decisionPending, true);
     await assert.rejects(listTicketActivity(query, randomUUID()),
@@ -224,12 +269,12 @@ test("프로젝트·티켓의 실제 저장, 상태 변경, 담당 미정을 조
       completionCriteria: "사용자가 직접 확인",
       dueDate: null,
     });
-    assert.equal(ticket.state, "todo");
+    assert.equal(ticket.state, "open");
     assert.equal(ticket.assigneeId, null);
     const updated = await updateTicket(query, ticket.id, {
-      state: "blocked", dueDate: "2026-10-01", description: "외부 결정 대기",
+      state: "deferred", dueDate: "2026-10-01", description: "외부 결정 대기",
     });
-    assert.equal(updated.state, "blocked");
+    assert.equal(updated.state, "deferred");
     assert.equal(updated.dueDate, "2026-10-01");
     const snapshot = await listBoard(query);
     assert.equal(snapshot.tickets.find((item) => item.id === ticket.id)?.description, "외부 결정 대기");

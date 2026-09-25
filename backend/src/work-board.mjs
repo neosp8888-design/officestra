@@ -8,7 +8,8 @@ export class WorkBoardError extends Error {
   }
 }
 
-const states = new Set(["todo", "in_progress", "blocked", "done"]);
+const states = new Set(["open", "in_progress", "review", "done", "canceled", "deferred"]);
+const commitPattern = /^[0-9a-f]{40}$/;
 const activityKinds = new Set(["progress", "decision", "verification"]);
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const keyPattern = /^[a-z0-9-]{2,64}$/;
@@ -92,7 +93,7 @@ export function normalizeTicketInput(body, { patch = false } = {}) {
   const value = object(body);
   const fields = ["title", "description", "assigneeId", "completedById", "verifiedById", "state", "dueDate",
     "completionCriteria", "parentTicketId", "predecessorIds", "goalIds", "workRecordIds",
-    "decisionPending", "reportedActorId"];
+    "decisionPending", "reportedActorId", "pushedCommitSha"];
   allowedFields(value, patch ? fields : ["projectId", ...fields]);
   if (patch && Object.keys(value).length === 0) throw new WorkBoardError("수정할 필드가 없습니다.");
   const result = {};
@@ -111,11 +112,18 @@ export function normalizeTicketInput(body, { patch = false } = {}) {
     }
   }
   if (!patch || Object.hasOwn(value, "state")) {
-    const state = !patch && value.state === undefined ? "todo" : value.state;
+    const state = !patch && value.state === undefined ? "open" : value.state;
     if (!states.has(state)) throw new WorkBoardError("state가 올바르지 않습니다.");
     result.state = state;
   }
   if (!patch || Object.hasOwn(value, "dueDate")) result.dueDate = dueDate(value.dueDate ?? null);
+  if (!patch || Object.hasOwn(value, "pushedCommitSha")) {
+    const sha = value.pushedCommitSha ?? null;
+    if (sha !== null && (typeof sha !== "string" || !commitPattern.test(sha))) {
+      throw new WorkBoardError("pushedCommitSha는 원격에 푸시된 40자리 소문자 커밋 SHA여야 합니다.");
+    }
+    result.pushedCommitSha = sha;
+  }
   if (!patch || Object.hasOwn(value, "decisionPending")) {
     const pending = value.decisionPending ?? (!patch ? false : null);
     if (typeof pending !== "boolean") throw new WorkBoardError("decisionPending은 불리언이어야 합니다.");
@@ -218,7 +226,8 @@ const projectColumns = `id, project_key AS "projectKey", title, description,
   created_at AS "createdAt", updated_at AS "updatedAt"`;
 const ticketColumns = `id, project_id AS "projectId", title, description,
   assignee_id AS "assigneeId", completed_by_id AS "completedById",
-  verified_by_id AS "verifiedById", state, due_date::text AS "dueDate",
+  verified_by_id AS "verifiedById", state, pushed_commit_sha AS "pushedCommitSha",
+  due_date::text AS "dueDate",
   completion_criteria AS "completionCriteria", decision_pending AS "decisionPending",
   parent_ticket_id AS "parentTicketId",
   created_at AS "createdAt", updated_at AS "updatedAt"`;
@@ -318,9 +327,16 @@ export async function updateProject(pool, id, body) {
 
 async function lockProject(client, projectId) {
   const result = await client.query(
-    "SELECT id FROM work_board_projects WHERE id = $1 FOR UPDATE", [projectId],
+    'SELECT id, project_key AS "projectKey" FROM work_board_projects WHERE id = $1 FOR UPDATE', [projectId],
   );
   if (!result.rows[0]) throw new WorkBoardError("프로젝트가 없습니다.", 404);
+  return result.rows[0];
+}
+
+function requireDeliveryEvidence(project, state, pushedCommitSha) {
+  if (project.projectKey !== "toss-trading" && state === "done" && !pushedCommitSha) {
+    throw new WorkBoardError("오피스 티켓 완료에는 원격 푸시를 확인한 커밋 SHA가 필요합니다.");
+  }
 }
 
 async function requireProjectTickets(client, projectId, ids, field) {
@@ -488,7 +504,7 @@ export async function listTicketActivity(pool, id) {
     completedById: "완료자", verifiedById: "검증자", state: "상태",
     dueDate: "기한", completionCriteria: "완료 조건", decisionPending: "사용자 결정 대기",
     parentTicketId: "상위 작업", predecessorIds: "선행 작업", goalIds: "목표 연결",
-    workRecordIds: "업무 기록 연결",
+    workRecordIds: "업무 기록 연결", pushedCommitSha: "푸시된 커밋 SHA",
   };
   const display = (value) => {
     const serialized = JSON.stringify(value);
@@ -527,16 +543,17 @@ async function writeChangeActivity(client, id, kind, changes, reportedActorId = 
 
 export async function createTicket(pool, body) {
   const value = normalizeTicketInput(body);
-  await lockProject(pool, value.projectId);
+  const project = await lockProject(pool, value.projectId);
+  requireDeliveryEvidence(project, value.state, value.pushedCommitSha);
   try {
     const result = await pool.query(
       `INSERT INTO work_board_tickets
        (project_id, title, description, assignee_id, completed_by_id, verified_by_id, state, due_date,
-        completion_criteria, parent_ticket_id, decision_pending)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+        completion_criteria, parent_ticket_id, decision_pending, pushed_commit_sha)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
       [value.projectId, value.title, value.description, value.assigneeId,
         value.completedById, value.verifiedById, value.state, value.dueDate,
-        value.completionCriteria, value.parentTicketId, value.decisionPending],
+        value.completionCriteria, value.parentTicketId, value.decisionPending, value.pushedCommitSha],
     );
     const id = result.rows[0].id;
     await validateTicketPlan(pool, value.projectId, id, value);
@@ -557,14 +574,17 @@ export async function updateTicket(pool, id, body) {
   );
   if (!existing.rows[0]) throw new WorkBoardError("티켓이 없습니다.", 404);
   const projectId = existing.rows[0].projectId;
-  await lockProject(pool, projectId);
+  const project = await lockProject(pool, projectId);
   const before = await readTicket(pool, id);
+  requireDeliveryEvidence(project, value.state ?? before.state,
+    Object.hasOwn(value, "pushedCommitSha") ? value.pushedCommitSha : before.pushedCommitSha);
   await validateTicketPlan(pool, projectId, id, value);
   const columns = {
     title: "title", description: "description", assigneeId: "assignee_id",
     completedById: "completed_by_id", verifiedById: "verified_by_id",
     state: "state", dueDate: "due_date", completionCriteria: "completion_criteria",
     parentTicketId: "parent_ticket_id", decisionPending: "decision_pending",
+    pushedCommitSha: "pushed_commit_sha",
   };
   const keys = Object.keys(value).filter((key) => columns[key]);
   const assignments = keys.map((key, index) => `${columns[key]} = $${index + 2}`);

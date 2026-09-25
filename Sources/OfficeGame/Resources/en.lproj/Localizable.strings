@@ -798,3 +798,9 @@
 "대화 분할 해제" = "Merge conversation panes";
 "대화 좌우 분할" = "Split conversations side by side";
 "%@에게 보내기" = "Send to %@";
+"음성 지원" = "Voice";
+"음성 모델을 준비하는 중입니다." = "Preparing the voice model.";
+"음성 지원을 끕니다." = "Turn voice off.";
+"이 직원의 응답을 맥에서 음성으로 읽어 줍니다." = "Read this teammate's replies aloud on this Mac.";
+"켜짐" = "On";
+"꺼짐" = "Off";

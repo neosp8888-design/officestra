@@ -3980,7 +3980,7 @@ struct LiveWorkspaceFeedJumpButton: View {
                     radius: 2,
                     y: 1
                 )
-                .opacity(0.65)
+                .opacity(0.75)
                 .frame(width: 44, height: 20)
                 .contentShape(Rectangle())
         }

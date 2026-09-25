@@ -1,0 +1,10 @@
+{
+  "default": {
+    "voice": "sohee",
+    "instruct": "자연스럽고 또렷한 말투"
+  },
+  "emotion": {
+    "exclaim": "조금 들뜨고 힘 있는 톤으로",
+    "question": "궁금해하며 끝을 올리는 억양으로"
+  }
+}

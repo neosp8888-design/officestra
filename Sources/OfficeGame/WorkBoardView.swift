@@ -85,6 +85,7 @@ private struct WorkBoardTicket: Decodable, Identifiable {
     let completedById: String?
     let verifiedById: String?
     let state: String
+    let pushedCommitSha: String?
     let dueDate: String?
     let completionCriteria: String
     let decisionPending: Bool
@@ -115,6 +116,7 @@ struct WorkBoardTicketInput: Encodable {
     let completedById: String?
     let verifiedById: String?
     let state: String
+    let pushedCommitSha: String?
     let dueDate: String?
     let completionCriteria: String
     let decisionPending: Bool
@@ -124,7 +126,7 @@ struct WorkBoardTicketInput: Encodable {
     let workRecordIds: [String]
 
     private enum CodingKeys: String, CodingKey {
-        case projectId, title, description, assigneeId, completedById, verifiedById, state, dueDate,
+        case projectId, title, description, assigneeId, completedById, verifiedById, state, pushedCommitSha, dueDate,
             completionCriteria, decisionPending, parentTicketId, predecessorIds, goalIds, workRecordIds
     }
 
@@ -139,6 +141,7 @@ struct WorkBoardTicketInput: Encodable {
         try values.encode(completedById, forKey: .completedById)
         try values.encode(verifiedById, forKey: .verifiedById)
         try values.encode(state, forKey: .state)
+        try values.encode(pushedCommitSha, forKey: .pushedCommitSha)
         try values.encode(dueDate, forKey: .dueDate)
         try values.encode(completionCriteria, forKey: .completionCriteria)
         try values.encode(decisionPending, forKey: .decisionPending)
@@ -307,28 +310,34 @@ private enum WorkBoardClientError: LocalizedError {
 }
 
 private enum WorkBoardState: String, CaseIterable, Hashable, Identifiable {
-    case todo
+    case open
     case inProgress = "in_progress"
-    case blocked
+    case review
     case done
+    case canceled
+    case deferred
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .todo: "할 일"
+        case .open: "오픈"
         case .inProgress: "진행"
-        case .blocked: "막힘"
-        case .done: "완료"
+        case .review: "검토"
+        case .done: "완료 · 반영"
+        case .canceled: "취소"
+        case .deferred: "대기"
         }
     }
 
     var tint: Color {
         switch self {
-        case .todo: .secondary
+        case .open: .secondary
         case .inProgress: .blue
-        case .blocked: .orange
+        case .review: .orange
         case .done: .green
+        case .canceled: .red
+        case .deferred: .gray
         }
     }
 }
@@ -453,7 +462,7 @@ struct WorkBoardProjectLauncher: View {
                                     }
                                     Text(tickets.isEmpty
                                          ? "현황 미확인"
-                                         : "할 일 \(tickets.filter { $0.state == "todo" }.count) · 진행 \(tickets.filter { $0.state == "in_progress" }.count) · 막힘 \(tickets.filter { $0.state == "blocked" }.count) · 완료 \(tickets.filter { $0.state == "done" }.count)")
+                                         : "오픈 \(tickets.filter { $0.state == "open" }.count) · 진행 \(tickets.filter { $0.state == "in_progress" }.count) · 검토 \(tickets.filter { $0.state == "review" }.count) · 반영 완료 \(tickets.filter { $0.state == "done" }.count) · 대기/취소 \(tickets.filter { ["deferred", "canceled"].contains($0.state) }.count)")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                     if !project.description.isEmpty {
@@ -634,6 +643,7 @@ struct WorkBoardView: View {
             WorkBoardTicketEditor(
                 client: client,
                 draft: draft,
+                projectKey: selectedProject?.projectKey ?? "",
                 assignees: assignees,
                 tickets: selectedTickets,
                 goals: selectedGoals,
@@ -785,7 +795,7 @@ struct WorkBoardView: View {
                     Label("진행할 일", systemImage: "bolt.fill")
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(DashboardPalette.accent)
-                    let openTickets = selectedTickets.filter { $0.state != WorkBoardState.done.rawValue }
+                    let openTickets = selectedTickets.filter { ["open", "in_progress", "review"].contains($0.state) }
                     if openTickets.isEmpty {
                         Text("등록된 진행 작업 없음").font(.caption).foregroundStyle(.secondary)
                     }
@@ -793,7 +803,7 @@ struct WorkBoardView: View {
                 }
                 .workBoardSurface()
                 VStack(alignment: .leading, spacing: 8) {
-                    Label("최근 완료", systemImage: "checkmark.circle.fill")
+                    Label("최근 반영 완료", systemImage: "checkmark.circle.fill")
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(DashboardPalette.accent)
                     ForEach(Array(selectedTickets.filter { $0.state == WorkBoardState.done.rawValue }.reversed().prefix(8))) { ticket in
@@ -802,6 +812,17 @@ struct WorkBoardView: View {
                     if selectedTickets.contains(where: { $0.state == WorkBoardState.done.rawValue }) {
                         Text("나머지 완료 티켓은 WBS·칸반에서 확인")
                             .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .workBoardSurface()
+            }
+            if selectedTickets.contains(where: { ["deferred", "canceled"].contains($0.state) }) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("대기 · 취소", systemImage: "pause.circle")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(DashboardPalette.accent)
+                    ForEach(selectedTickets.filter { ["deferred", "canceled"].contains($0.state) }) { ticket in
+                        ticketButton(ticket)
                     }
                 }
                 .workBoardSurface()
@@ -925,9 +946,9 @@ struct WorkBoardView: View {
                     .frame(width: 70)
                 Text(assignees.first { $0.id == ticket.assigneeId }?.name ?? "미정")
                     .frame(width: 92)
-                Text(ticket.state == "done" ? name(ticket.completedById) : "—")
+                Text(["review", "done"].contains(ticket.state) ? name(ticket.completedById) : "—")
                     .frame(width: 92)
-                Text(ticket.state == "done" ? name(ticket.verifiedById) : "—")
+                Text(["review", "done"].contains(ticket.state) ? name(ticket.verifiedById) : "—")
                     .frame(width: 92)
                 Text(ticket.dueDate ?? "미정").frame(width: 100)
             }
@@ -971,9 +992,14 @@ struct WorkBoardView: View {
                     Text(ticket.dueDate ?? "기한 미정")
                 }
                 .font(.system(size: 11))
-                if ticket.state == WorkBoardState.done.rawValue {
+                if [WorkBoardState.review.rawValue, WorkBoardState.done.rawValue].contains(ticket.state) {
                     Text("완료: \(assignees.first { $0.id == ticket.completedById }?.name ?? "미확인") · 검증: \(assignees.first { $0.id == ticket.verifiedById }?.name ?? "미확인")")
                         .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                if let sha = ticket.pushedCommitSha {
+                    Text("푸시 커밋: \(sha.prefix(12))")
+                        .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
                 if ticket.decisionPending {
@@ -1255,6 +1281,7 @@ private struct WorkBoardGoalEditor: View {
 private struct WorkBoardTicketEditor: View {
     let client: WorkBoardClient
     let draft: WorkBoardDraft
+    let projectKey: String
     let assignees: [WorkBoardAssignee]
     let tickets: [WorkBoardTicket]
     let goals: [WorkBoardGoal]
@@ -1268,6 +1295,7 @@ private struct WorkBoardTicketEditor: View {
     @State private var completedById: String
     @State private var verifiedById: String
     @State private var state: WorkBoardState
+    @State private var pushedCommitSha: String
     @State private var dueDate: String
     @State private var completionCriteria: String
     @State private var decisionPending: Bool
@@ -1289,6 +1317,7 @@ private struct WorkBoardTicketEditor: View {
     init(
         client: WorkBoardClient,
         draft: WorkBoardDraft,
+        projectKey: String,
         assignees: [WorkBoardAssignee],
         tickets: [WorkBoardTicket],
         goals: [WorkBoardGoal],
@@ -1297,6 +1326,7 @@ private struct WorkBoardTicketEditor: View {
     ) {
         self.client = client
         self.draft = draft
+        self.projectKey = projectKey
         self.assignees = assignees
         self.tickets = tickets
         self.goals = goals
@@ -1307,7 +1337,8 @@ private struct WorkBoardTicketEditor: View {
         _assigneeId = State(initialValue: draft.ticket?.assigneeId ?? "")
         _completedById = State(initialValue: draft.ticket?.completedById ?? "")
         _verifiedById = State(initialValue: draft.ticket?.verifiedById ?? "")
-        _state = State(initialValue: WorkBoardState(rawValue: draft.ticket?.state ?? "todo") ?? .todo)
+        _state = State(initialValue: WorkBoardState(rawValue: draft.ticket?.state ?? "open") ?? .open)
+        _pushedCommitSha = State(initialValue: draft.ticket?.pushedCommitSha ?? "")
         _dueDate = State(initialValue: draft.ticket?.dueDate ?? "")
         _completionCriteria = State(initialValue: draft.ticket?.completionCriteria ?? "")
         _decisionPending = State(initialValue: draft.ticket?.decisionPending ?? false)
@@ -1353,7 +1384,7 @@ private struct WorkBoardTicketEditor: View {
                                         Text(person.name).tag(person.id)
                                     }
                                 }
-                                if state == .done {
+                                if state == .review || state == .done {
                                     Picker("완료자", selection: $completedById) {
                                         Text("미확인").tag("")
                                         ForEach(assignees) { person in
@@ -1373,9 +1404,15 @@ private struct WorkBoardTicketEditor: View {
                             editorSection("완료 기준", systemImage: "checkmark.seal") {
                                 TextField("완료 조건", text: $completionCriteria, axis: .vertical)
                                     .lineLimit(3...6)
+                                if projectKey != "toss-trading" {
+                                    Text("오피스 티켓은 검토 후 커밋·푸시까지 마쳐야 완료(반영 완료)입니다.")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                    TextField("원격에 푸시된 40자리 커밋 SHA", text: $pushedCommitSha)
+                                        .font(.system(.caption, design: .monospaced))
+                                }
                                 TextField("기한 미정 · 입력 시 YYYY-MM-DD", text: $dueDate)
                                 Toggle("사용자 결정 대기", isOn: $decisionPending)
-                                    .help("할 일·진행·막힘 상태와 별도로 표시합니다")
+                                    .help("티켓 상태와 별도로 표시합니다")
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -1617,9 +1654,10 @@ private struct WorkBoardTicketEditor: View {
                     title: title,
                     description: description,
                     assigneeId: assigneeId.isEmpty ? nil : assigneeId,
-                    completedById: state == .done && !completedById.isEmpty ? completedById : nil,
-                    verifiedById: state == .done && !verifiedById.isEmpty ? verifiedById : nil,
+                    completedById: (state == .review || state == .done) && !completedById.isEmpty ? completedById : nil,
+                    verifiedById: (state == .review || state == .done) && !verifiedById.isEmpty ? verifiedById : nil,
                     state: state.rawValue,
+                    pushedCommitSha: pushedCommitSha.isEmpty ? nil : pushedCommitSha,
                     dueDate: dueDate.isEmpty ? nil : dueDate,
                     completionCriteria: completionCriteria,
                     decisionPending: decisionPending,
