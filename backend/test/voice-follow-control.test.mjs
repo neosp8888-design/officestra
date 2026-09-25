@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { VoiceFollowControl } from '../src/voice-follow-control.mjs';
+import { VoiceFollowControl, spawnVoiceFollower } from '../src/voice-follow-control.mjs';
 
 const FOLLOW_SCRIPT = fileURLToPath(new URL('../src/voice/voice-follow.mjs', import.meta.url));
 
@@ -23,6 +23,25 @@ function fakeSpawner() {
   };
   return { children, spawnFollower };
 }
+
+test('따라 읽기 자식은 백엔드 작업 폴더 대신 고정 음성 폴더에서 시작한다', () => {
+  const home = mkdtempSync(join(tmpdir(), 'officestra-voice-cwd-test-'));
+  let observed;
+  try {
+    spawnVoiceFollower('right-woman', {
+      workingDirectory: home,
+      forkProcess: (script, args, options) => {
+        observed = { script, args, cwd: options.cwd };
+        return new EventEmitter();
+      },
+    });
+    assert.equal(observed.script, FOLLOW_SCRIPT);
+    assert.deepEqual(observed.args, ['--follow', 'right-woman']);
+    assert.equal(observed.cwd, home);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
 
 test('켜면 준비 신호를 받을 때까지 starting, 받은 뒤 running이 된다', () => {
   const { children, spawnFollower } = fakeSpawner();
@@ -65,7 +84,10 @@ test('예기치 않은 종료와 실행 오류는 실패 상태와 이유로 남
   assert.equal(control.status().state, 'failed');
   assert.match(control.status().error, /파이썬 환경이 없습니다/);
   control.set({ enabled: true, characterId: 'right-woman' });
-  children[1].emit('error', new Error('spawn failed'));
+  children[1].emit('exit', 4);
+  assert.match(control.status().error, /음성 모델 초기화/);
+  control.set({ enabled: true, characterId: 'right-woman' });
+  children[2].emit('error', new Error('spawn failed'));
   assert.deepEqual(control.status(), { characterId: 'right-woman', state: 'failed', error: 'spawn failed' });
 });
 

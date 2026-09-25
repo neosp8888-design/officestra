@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import wave
+from contextlib import redirect_stdout
 
 import numpy as np
 from mlx_audio.tts.utils import load_model
@@ -35,7 +36,16 @@ def synthesize(model, text, voice, instruct, ref_audio=None, ref_text=None):
 
 def main():
     started = time.time()
-    model = load_model(MODEL)
+    try:
+        # mlx-audio는 토크나이저 적재 오류를 stdout 경고로만 남길 수 있다.
+        # stdout은 JSON 프로토콜로 유지하고, 미적재 모델은 준비 완료로 알리지 않는다.
+        with redirect_stdout(sys.stderr):
+            model = load_model(MODEL)
+        if getattr(model, "tokenizer", None) is None:
+            raise RuntimeError("텍스트 토크나이저를 불러오지 못했습니다.")
+    except Exception as error:
+        reply({"ready": False, "error": f"{type(error).__name__}: {error}"})
+        return 4
     # 첫 합성은 그래프 준비로 느리므로 호출 쪽이 직원 설정으로 한 번 예열 요청을 보낸다.
     reply({"ready": True, "model": MODEL, "loadMs": round((time.time() - started) * 1000),
            "sampleRate": model.sample_rate})
@@ -54,7 +64,8 @@ def main():
                    "audioMs": round(len(audio) / model.sample_rate / rate * 1000)})
         except Exception as error:  # 한 문장 실패로 작업자 전체를 끝내지 않는다.
             reply({"id": request.get("id"), "error": f"{type(error).__name__}: {error}"})
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

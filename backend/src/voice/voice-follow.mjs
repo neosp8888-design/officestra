@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, rmSync } from 'node:fs';
 import { appendFile, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { PARAGRAPH_BREAK, createSentenceStream, parseDirections } from './speakable.mjs';
@@ -15,10 +15,11 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const args = parseArgs(process.argv.slice(2));
 const backend = args.backend ?? `http://127.0.0.1:${process.env.OFFICE_BACKEND_PORT ?? 4317}`;
 const characterId = args.follow ?? 'right-woman';
-const localVoices = join(voiceHomeDirectory(), 'voices.json');
+const voiceDirectory = resolve(voiceHomeDirectory());
+const localVoices = join(voiceDirectory, 'voices.json');
 const voicesPath = existsSync(localVoices) ? localVoices : join(HERE, 'voices.json');
 const voices = JSON.parse(await readFile(voicesPath, 'utf8'));
-const logDir = join(voiceHomeDirectory(), 'logs');
+const logDir = join(voiceDirectory, 'logs');
 // 수동 시제품과 앱 제어기가 동시에 실행돼도 s1.wav 같은 파일명이 충돌하지 않는다.
 const audioDir = await mkdtemp(join(tmpdir(), 'officestra-local-voice-'));
 process.on('exit', () => rmSync(audioDir, { recursive: true, force: true }));
@@ -52,22 +53,36 @@ async function startWorker(model) {
     process.exit(2);
   }
   const child = spawn(python, [join(HERE, 'tts_worker.py')], {
-    stdio: ['pipe', 'pipe', 'ignore'],
+    cwd: voiceDirectory,
+    // 모델 적재 경고는 stderr로 보내 follow.log에 남긴다. stdout은 JSON 응답 전용이다.
+    stdio: ['pipe', 'pipe', 'inherit'],
     env: model ? { ...process.env, LOCAL_VOICE_MODEL: model } : process.env,
   });
   const waiting = new Map();
   let onReady;
   const ready = new Promise(resolve => { onReady = resolve; });
+  let readySettled = false;
+  const settleReady = message => {
+    if (readySettled) return;
+    readySettled = true;
+    onReady(message);
+  };
   createInterface({ input: child.stdout }).on('line', line => {
     let message;
     try { message = JSON.parse(line); } catch { return; }
-    if (message.ready) onReady(message);
+    if (Object.hasOwn(message, 'ready')) settleReady(message);
     else waiting.get(message.id)?.(message);
   });
   child.on('exit', code => {
+    const wasReady = readySettled;
+    if (!wasReady) settleReady({ ready: false, error: `합성 작업자 종료 (코드 ${code})` });
     if (stopping) return;
+    if (!wasReady) return;
     log(`합성 작업자가 예기치 않게 종료됨 (코드 ${code})`);
     process.exit(1);
+  });
+  child.on('error', error => {
+    settleReady({ ready: false, error: error.message });
   });
   let counter = 0;
   return {
@@ -275,9 +290,20 @@ for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, stop);
 if (process.send) process.on('disconnect', stop);
 if (worker) {
   const ready = await worker.ready;
+  if (!ready.ready) {
+    log(`합성 초기화 실패: ${ready.error ?? '원인을 확인할 수 없습니다.'}`);
+    stopping = true;
+    worker.child.kill();
+    process.exit(4);
+  }
   const warmup = await worker.synthesize('준비됐습니다.', voiceFor('준비됐습니다.'));
-  if (warmup.error) log(`예열 실패: ${warmup.error}`);
-  else rm(warmup.path, { force: true });
+  if (warmup.error) {
+    log(`예열 실패: ${warmup.error}`);
+    stopping = true;
+    worker.child.kill();
+    process.exit(4);
+  }
+  rm(warmup.path, { force: true });
   log(`합성 준비 완료 · ${ready.model} · 적재 ${ready.loadMs}ms · 예열 ${warmup.synthMs ?? '-'}ms`);
 }
 process.send?.({ ready: true });

@@ -1,7 +1,7 @@
 // 앱의 음성 지원 토글에 맞춰 직원 응답 따라 읽기(voice/voice-follow.mjs) 자식 프로세스를 켜고 끈다.
 import { fork } from 'node:child_process';
 import { closeSync, mkdirSync, openSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { voiceHomeDirectory } from './voice/voice-paths.mjs';
 
@@ -9,20 +9,25 @@ const FOLLOW_SCRIPT = fileURLToPath(new URL('./voice/voice-follow.mjs', import.m
 // voice-follow.mjs가 파이썬 환경을 찾지 못하면 이 코드로 끝난다.
 const MISSING_PYTHON_EXIT = 2;
 const FOLLOW_BUSY_EXIT = 3;
+const MODEL_START_FAILURE_EXIT = 4;
 
-function defaultSpawn(characterId) {
-  const logDir = join(voiceHomeDirectory(), 'logs');
+export function spawnVoiceFollower(characterId, {
+  forkProcess = fork, workingDirectory = resolve(voiceHomeDirectory()),
+} = {}) {
+  const logDir = join(workingDirectory, 'logs');
   mkdirSync(logDir, { recursive: true });
   const logFd = openSync(join(logDir, 'follow.log'), 'a');
   try {
-    return fork(FOLLOW_SCRIPT, ['--follow', characterId], { stdio: ['ignore', logFd, logFd, 'ipc'] });
+    return forkProcess(FOLLOW_SCRIPT, ['--follow', characterId], {
+      cwd: workingDirectory, stdio: ['ignore', logFd, logFd, 'ipc'],
+    });
   } finally {
     closeSync(logFd);
   }
 }
 
 export class VoiceFollowControl {
-  constructor({ spawnFollower = defaultSpawn } = {}) {
+  constructor({ spawnFollower = spawnVoiceFollower } = {}) {
     this.spawnFollower = spawnFollower;
     this.child = null;
     this.state = { characterId: null, state: 'stopped', error: null };
@@ -60,6 +65,8 @@ export class VoiceFollowControl {
         ? `음성 파이썬 환경이 없습니다 (${join(voiceHomeDirectory(), '.venv')}).`
         : code === FOLLOW_BUSY_EXIT
           ? '음성 따라 읽기가 이미 다른 프로세스에서 실행 중입니다. 기존 실행을 종료한 뒤 다시 켜 주세요.'
+        : code === MODEL_START_FAILURE_EXIT
+          ? `음성 모델 초기화 또는 예열에 실패했습니다. 기록은 ${join(voiceHomeDirectory(), 'logs', 'follow.log')}에 있습니다.`
         : `음성 따라 읽기가 종료되었습니다 (코드 ${code}). 기록은 ${join(voiceHomeDirectory(), 'logs', 'follow.log')}에 있습니다.`;
       this.state = { characterId, state: 'failed', error };
     });
