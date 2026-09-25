@@ -180,6 +180,9 @@ mkdir -p \
 /usr/bin/rsync \
     -a \
     --delete \
+    --delete-excluded \
+    --exclude 'voice/refs/***' \
+    --exclude 'voice/__pycache__/***' \
     "$PROJECT_DIR/backend/src/" \
     "$BACKEND_RUNTIME_DIR/src/"
 cp "$PROJECT_DIR/backend/package.json" "$BACKEND_RUNTIME_DIR/package.json"
