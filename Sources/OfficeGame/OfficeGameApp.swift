@@ -15,6 +15,19 @@ struct OfficeGameApp: App {
         }
         .defaultSize(OfficeWindowPlacementStore.shared.initialContentSize)
         .windowResizability(.contentMinSize)
+
+        WindowGroup("프로젝트 현황", id: "work-board-project", for: WorkBoardWindowRoute.self) { $route in
+            if let route, let baseURL = URL(string: route.baseURL) {
+                WorkBoardView(
+                    databaseBaseURL: baseURL,
+                    assignees: route.assignees,
+                    initialProjectId: route.projectId
+                )
+                .environment(\.locale, OfficeLocalization.locale)
+            }
+        }
+        .defaultSize(width: 1220, height: 820)
+        .windowResizability(.contentMinSize)
     }
 }
 

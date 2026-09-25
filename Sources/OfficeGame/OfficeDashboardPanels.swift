@@ -9,6 +9,7 @@ enum OfficeDetailSelection: String, CaseIterable, Identifiable {
     case archive
     case usage
     case wiki
+    case workBoard
 
     var id: String {
         rawValue
@@ -22,6 +23,8 @@ enum OfficeDetailSelection: String, CaseIterable, Identifiable {
             OfficeLocalization.string("화이트보드")
         case .wiki:
             OfficeLocalization.string("사내 위키")
+        case .workBoard:
+            OfficeLocalization.string("업무 보드")
         }
     }
 
@@ -33,6 +36,8 @@ enum OfficeDetailSelection: String, CaseIterable, Identifiable {
             OfficeLocalization.string("현재 사용 가능량")
         case .wiki:
             OfficeLocalization.string("승인된 지식과 확인")
+        case .workBoard:
+            OfficeLocalization.string("프로젝트와 실행 티켓")
         }
     }
 
@@ -44,6 +49,8 @@ enum OfficeDetailSelection: String, CaseIterable, Identifiable {
             "rectangle.and.pencil.and.ellipsis"
         case .wiki:
             "text.book.closed.fill"
+        case .workBoard:
+            "square.grid.2x2.fill"
         }
     }
 }
@@ -144,6 +151,16 @@ struct OfficeDetailPanel: View {
                 case .wiki:
                     WikiKnowledgeView(
                         databaseBaseURL: director.databaseBaseURL
+                    )
+                case .workBoard:
+                    WorkBoardProjectLauncher(
+                        databaseBaseURL: director.databaseBaseURL,
+                        assignees: director.characters.map {
+                            WorkBoardAssignee(
+                                id: $0.id.rawValue,
+                                name: director.displayName(for: $0.id)
+                            )
+                        }
                     )
                 }
             }

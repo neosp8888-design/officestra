@@ -37,6 +37,19 @@ import {
 } from "./work-record-provenance.mjs";
 import { pool, withTransaction } from "./db.mjs";
 import {
+  WorkBoardError,
+  createProject as createBoardProject,
+  createTicket as createBoardTicket,
+  createGoal as createBoardGoal,
+  listBoard,
+  listTicketActivity,
+  addTicketActivity,
+  readBoardWorkRecord,
+  updateProject as updateBoardProject,
+  updateTicket as updateBoardTicket,
+  updateGoal as updateBoardGoal,
+} from "./work-board.mjs";
+import {
   officeBackendHealth,
   officeBackendMaintenanceStatus,
 } from "./health.mjs";
@@ -2267,6 +2280,67 @@ async function searchRAG(response, body) {
   send(response, 200, { documents: result.documents });
 }
 
+async function workBoardEndpoint(request, response, pathname) {
+  try {
+    if (request.method === "GET" && pathname === "/api/work-board") {
+      send(response, 200, await listBoard(pool));
+      return;
+    }
+    if (request.method === "GET" && /^\/api\/work-board\/records\/[^/]+$/.test(pathname)) {
+      send(response, 200, {
+        record: await readBoardWorkRecord(pool, decodeURIComponent(pathname.split("/")[4])),
+      });
+      return;
+    }
+    if (request.method === "GET" && /^\/api\/work-board\/tickets\/[^/]+\/activity$/.test(pathname)) {
+      send(response, 200, {
+        activity: await listTicketActivity(pool, decodeURIComponent(pathname.split("/")[4])),
+      });
+      return;
+    }
+    if (!trustedJSONMutation(request, response)) return;
+    const body = await readJSON(request);
+    if (request.method === "POST" && pathname === "/api/work-board/projects") {
+      send(response, 201, { project: await createBoardProject(pool, body) });
+    } else if (request.method === "POST" && pathname === "/api/work-board/tickets") {
+      send(response, 201, {
+        ticket: await withTransaction((client) => createBoardTicket(client, body)),
+      });
+    } else if (request.method === "POST" && /^\/api\/work-board\/tickets\/[^/]+\/activity$/.test(pathname)) {
+      send(response, 201, {
+        activity: await withTransaction((client) =>
+          addTicketActivity(client, decodeURIComponent(pathname.split("/")[4]), body)),
+      });
+    } else if (request.method === "POST" && pathname === "/api/work-board/goals") {
+      send(response, 201, {
+        goal: await withTransaction((client) => createBoardGoal(client, body)),
+      });
+    } else if (request.method === "PATCH" && /^\/api\/work-board\/projects\/[^/]+$/.test(pathname)) {
+      send(response, 200, {
+        project: await updateBoardProject(pool, decodeURIComponent(pathname.split("/")[4]), body),
+      });
+    } else if (request.method === "PATCH" && /^\/api\/work-board\/tickets\/[^/]+$/.test(pathname)) {
+      send(response, 200, {
+        ticket: await withTransaction((client) =>
+          updateBoardTicket(client, decodeURIComponent(pathname.split("/")[4]), body)),
+      });
+    } else if (request.method === "PATCH" && /^\/api\/work-board\/goals\/[^/]+$/.test(pathname)) {
+      send(response, 200, {
+        goal: await withTransaction((client) =>
+          updateBoardGoal(client, decodeURIComponent(pathname.split("/")[4]), body)),
+      });
+    } else {
+      send(response, 405, { error: "지원하지 않는 업무 보드 요청입니다." });
+    }
+  } catch (error) {
+    if (error instanceof WorkBoardError) {
+      send(response, error.status, { error: error.message });
+      return;
+    }
+    throw error;
+  }
+}
+
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -2362,6 +2436,8 @@ const server = createServer(async (request, response) => {
       if (localProviders?.status().some(s=>(s.profileId??s.id)===definition.profile.id)) {send(response,409,{error:'Close local sessions before changing a profile'});return;}
       await pool.query('INSERT INTO local_agent_profiles(id,definition,enabled) VALUES($1,$2::jsonb,$3) ON CONFLICT(id) DO UPDATE SET definition=EXCLUDED.definition,enabled=EXCLUDED.enabled,updated_at=now()', [definition.profile.id,JSON.stringify(definition),body.enabled===true]);
       send(response,200,{id:definition.profile.id});
+    } else if (url.pathname === "/api/work-board" || url.pathname.startsWith("/api/work-board/")) {
+      await workBoardEndpoint(request, response, url.pathname);
     } else if (
       request.method === "GET" &&
       url.pathname === "/api/characters"
