@@ -86,4 +86,13 @@ final class WorkBoardTests: XCTestCase {
             from: JSONEncoder().encode(route)
         ), route)
     }
+
+    func testProjectIsCompleteOnlyWithoutOpenWorkAndWithDoneTicket() {
+        XCTAssertTrue(workBoardProjectIsComplete(ticketStates: ["done", "canceled", "deferred"]))
+        XCTAssertFalse(workBoardProjectIsComplete(ticketStates: ["done", "review"]))
+        XCTAssertFalse(workBoardProjectIsComplete(ticketStates: ["done", "in_progress"]))
+        XCTAssertFalse(workBoardProjectIsComplete(ticketStates: ["done", "open"]))
+        XCTAssertFalse(workBoardProjectIsComplete(ticketStates: ["canceled", "deferred"]))
+        XCTAssertFalse(workBoardProjectIsComplete(ticketStates: []))
+    }
 }

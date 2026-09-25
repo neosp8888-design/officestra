@@ -341,6 +341,38 @@ private enum WorkBoardClientError: LocalizedError {
     }
 }
 
+/// 오픈·진행·검토 티켓이 없고 완료 티켓이 하나 이상이면 완료 프로젝트로 본다.
+func workBoardProjectIsComplete(ticketStates: [String]) -> Bool {
+    ticketStates.contains("done")
+        && !ticketStates.contains { ["open", "in_progress", "review"].contains($0) }
+}
+
+/// 완료 숨김이면 완료 프로젝트를 빼되, 지금 보고 있는 프로젝트는 남긴다.
+private func workBoardVisibleProjects(
+    _ snapshot: WorkBoardSnapshot,
+    showCompleted: Bool,
+    keeping keptProjectId: String? = nil
+) -> [WorkBoardProject] {
+    guard !showCompleted else { return snapshot.projects }
+    return snapshot.projects.filter { project in
+        project.id == keptProjectId || !workBoardProjectIsComplete(
+            ticketStates: snapshot.tickets.filter { $0.projectId == project.id }.map(\.state)
+        )
+    }
+}
+
+private struct WorkBoardCompletedBadge: View {
+    var body: some View {
+        Text("완료")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(.green)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Color.green.opacity(0.12), in: Capsule())
+            .accessibilityIdentifier("workBoardProjectCompleted")
+    }
+}
+
 private enum WorkBoardState: String, CaseIterable, Hashable, Identifiable {
     case open
     case inProgress = "in_progress"
@@ -502,6 +534,11 @@ struct WorkBoardProjectLauncher: View {
     @State private var projectDraft: WorkBoardProjectDraft?
     @State private var errorMessage: String?
     @State private var isLoading = false
+    @AppStorage("workBoardShowCompletedProjects") private var showCompletedProjects = false
+
+    private func listedProjects(_ snapshot: WorkBoardSnapshot) -> [WorkBoardProject] {
+        workBoardVisibleProjects(snapshot, showCompleted: showCompletedProjects)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -531,15 +568,25 @@ struct WorkBoardProjectLauncher: View {
             Text("프로젝트를 누르면 넓은 업무 창에서 대시보드·WBS·칸반을 볼 수 있습니다.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Toggle("완료 프로젝트 보기", isOn: $showCompletedProjects)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .font(.caption)
+                .accessibilityIdentifier("workBoardShowCompletedProjects")
             if let errorMessage {
                 Text(errorMessage).font(.caption).foregroundStyle(.red)
             }
             if isLoading && snapshot == nil {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let snapshot {
+                if listedProjects(snapshot).isEmpty && !snapshot.projects.isEmpty {
+                    Text("진행 중인 프로젝트가 없습니다. 완료 프로젝트는 스위치를 켜면 보입니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 ScrollView {
                     LazyVStack(spacing: 9) {
-                        ForEach(snapshot.projects) { project in
+                        ForEach(listedProjects(snapshot)) { project in
                             let tickets = snapshot.tickets.filter { $0.projectId == project.id }
                             Button {
                                 openWindow(id: "work-board-project", value: WorkBoardWindowRoute(
@@ -553,6 +600,9 @@ struct WorkBoardProjectLauncher: View {
                                         Text(project.title)
                                             .font(.system(size: 13, weight: .bold))
                                             .foregroundStyle(DashboardPalette.accent)
+                                        if workBoardProjectIsComplete(ticketStates: tickets.map(\.state)) {
+                                            WorkBoardCompletedBadge()
+                                        }
                                         Spacer()
                                         Image(systemName: "arrow.up.forward.square")
                                             .foregroundStyle(DashboardPalette.accent)
@@ -635,6 +685,7 @@ struct WorkBoardView: View {
     @State private var displayMode: WorkBoardDisplayMode = .dashboard
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @AppStorage("workBoardShowCompletedProjects") private var showCompletedProjects = false
 
     init(databaseBaseURL: URL, assignees: [WorkBoardAssignee], initialProjectId: String) {
         self.databaseBaseURL = databaseBaseURL
@@ -698,7 +749,11 @@ struct WorkBoardView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         boardActions
                         HStack(alignment: .top, spacing: 12) {
-                            ForEach(snapshot.projects) { project in
+                            ForEach(workBoardVisibleProjects(
+                                snapshot,
+                                showCompleted: showCompletedProjects,
+                                keeping: selectedProjectId
+                            )) { project in
                                 projectButton(project, tickets: snapshot.tickets)
                             }
                         }
@@ -816,6 +871,12 @@ struct WorkBoardView: View {
             .buttonStyle(WorkBoardActionStyle(prominent: true))
             .disabled(selectedProjectId == nil)
             .accessibilityIdentifier("workBoardAddTicket")
+            Spacer()
+            Toggle("완료 프로젝트 보기", isOn: $showCompletedProjects)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .font(.caption)
+                .accessibilityIdentifier("workBoardDetailShowCompletedProjects")
         }
         .accessibilityIdentifier("workBoardActions")
     }
@@ -866,12 +927,11 @@ struct WorkBoardView: View {
             .workBoardSurface()
             .accessibilityIdentifier("workBoardWBS")
         case .kanban:
-            ScrollView(.horizontal) {
-                HStack(alignment: .top, spacing: 12) {
-                    ForEach(WorkBoardState.allCases) { state in
-                        stateSection(state)
-                            .frame(width: 265, alignment: .topLeading)
-                    }
+            // 상태 열 여섯 개를 창 폭에 똑같이 나눠 담아 취소·대기 열이 창 밖으로 밀리지 않게 한다.
+            HStack(alignment: .top, spacing: 10) {
+                ForEach(WorkBoardState.allCases) { state in
+                    stateSection(state)
+                        .frame(minWidth: 150, maxWidth: .infinity, alignment: .topLeading)
                 }
             }
             .accessibilityIdentifier("workBoardKanban")
@@ -986,6 +1046,9 @@ struct WorkBoardView: View {
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(selected ? DashboardPalette.accent : .primary)
                         .lineLimit(1)
+                    if workBoardProjectIsComplete(ticketStates: projectTickets.map(\.state)) {
+                        WorkBoardCompletedBadge()
+                    }
                     Spacer()
                     if selected {
                         Image(systemName: "checkmark.circle.fill")
