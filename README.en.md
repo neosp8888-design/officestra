@@ -7,15 +7,15 @@
 Run Claude Code, Codex, and Antigravity together in one macOS app.<br>
 **Five independent sessions · Coworker collaboration · English / Korean**
 
-[Download v1.6.0](https://github.com/neosp8888-design/officestra/releases/tag/v1.6.0) · [Release notes](docs/releases/v1.6.0.md)
+[Download v1.7.0](https://github.com/neosp8888-design/officestra/releases/tag/v1.7.0) · [Release notes](docs/releases/v1.7.0.md)
 
-## What's new in v1.6.0
+## What's new in v1.7.0
 
-- **Two conversations side by side:** click a pane to target its coworker while keeping drafts and attachments per coworker.
-- **Automatic reply forwarding:** select multiple recipients, retain them across turns, and inspect or cancel pending deliveries.
-- **More comfortable long conversations:** less redundant work during rapid scrolling and window resizing. The jump-to-bottom button appears after you manually scroll at least one viewport away from the bottom.
-- **A persistent workspace:** restore window size and position, refresh model discovery after CLI installation or updates, and see reported developer-tool activity in conversations.
-- **Local model controls:** start and stop provisioned profiles and choose model-specific reasoning options. Local AI remains optional and experimental.
+- **Work board:** store projects and tickets in the local database and view them as a dashboard, WBS, or kanban. Every CLI and model reads and writes through the same local API.
+- **Ticket types and review:** each ticket type requires matching completion evidence, and user review is recorded separately from coworker verification.
+- **Completed projects:** projects with no open work get a completed badge and are hidden by default, with a switch to show them.
+- **Voice readout (experimental):** read the selected coworker's reply sentence by sentence with Qwen3-TTS on the Mac. The synthesis Python environment is installed separately.
+- **Information panel:** the whiteboard tab is now **Usage** and opens by default; limit refresh is a compact icon with the fetch time.
 
 <p align="center">
   <img src="docs/images/officestra-social-preview.png" alt="OFFICESTRA bringing Claude Code, Codex, and Antigravity into one office" width="100%">
@@ -190,7 +190,7 @@ This README describes features on the current `main` branch.
 
 ## Get started
 
-The latest DMG release is **v1.6.0**. To run from source, use the AI-assisted setup below.
+The latest DMG release is **v1.7.0**. To run from source, use the AI-assisted setup below.
 
 ### Easiest path: ask an AI to do it
 
@@ -204,7 +204,7 @@ use one of them:
 
 ### Download the app
 
-[Download OFFICESTRA v1.6.0 DMG](https://github.com/neosp8888-design/officestra/releases/tag/v1.6.0)
+[Download OFFICESTRA v1.7.0 DMG](https://github.com/neosp8888-design/officestra/releases/tag/v1.7.0)
 — Apple silicon · macOS 14 or later · English/Korean.
 
 Open the DMG and drag OFFICESTRA into Applications. Node.js is included. You still

@@ -7,15 +7,15 @@
 Claude Code · Codex · Antigravity를 한 화면에서 운영하는 macOS 앱입니다.<br>
 **다섯 독립 세션 · 직원 간 협업 · 영어 / 한국어**
 
-[v1.6.0 다운로드](https://github.com/neosp8888-design/officestra/releases/tag/v1.6.0) · [변경 사항](docs/releases/v1.6.0.md)
+[v1.7.0 다운로드](https://github.com/neosp8888-design/officestra/releases/tag/v1.7.0) · [변경 사항](docs/releases/v1.7.0.md)
 
-## v1.6.0에서 달라진 점
+## v1.7.0에서 달라진 점
 
-- **두 대화를 나란히:** 분할 화면에서 클릭한 직원에게 입력하고, 직원별 작성 중인 글과 첨부를 유지합니다.
-- **선택한 직원에게 자동 전달:** 여러 수신자를 지정하고 다음 대화에서도 유지하며, 대기 중 전달을 확인·취소할 수 있습니다.
-- **긴 대화를 더 편하게:** 빠른 스크롤과 창 크기 변경의 중복 처리를 줄였습니다. 하단에서 한 화면 이상 직접 스크롤해 올라가면 맨 아래 이동 버튼이 나타납니다.
-- **작업 환경 유지:** 창 크기·위치를 복원하고, CLI 설치·업데이트 뒤 모델 목록을 다시 확인합니다. 개발 도구가 보고한 활동도 대화에 표시합니다.
-- **로컬 모델 제어:** 준비된 프로필의 실행·중지와 모델별 추론 옵션을 제공합니다. 로컬 AI는 계속 선택형 실험 기능입니다.
+- **업무 보드:** 프로젝트와 티켓을 로컬 DB에 저장하고 대시보드·WBS·칸반으로 봅니다. 모든 CLI·모델이 같은 로컬 API로 읽고 씁니다.
+- **티켓 유형과 검토:** 기획·구현·사전테스트·독립검증·조사·콘텐츠 제작·운영 유형별로 완료 근거를 받고, 사용자 검토를 직원 검증과 따로 기록합니다.
+- **완료 프로젝트 정리:** 열린 티켓이 없는 프로젝트에 완료 배지를 달고 기본적으로 숨기며, 스위치로 다시 볼 수 있습니다.
+- **음성 지원(실험):** 선택한 직원의 응답을 완성된 문장부터 맥에서 Qwen3-TTS로 읽습니다. 합성용 Python 환경은 따로 설치해야 합니다.
+- **정보 패널:** 화이트보드 탭을 **사용량**으로 바꿔 기본으로 열고, 한도 새로고침을 작은 아이콘과 조회 시각으로 표시합니다.
 
 <p align="center">
   <img src="docs/images/officestra-social-preview.png" alt="Claude Code, Codex, Antigravity를 한곳에서 운영하는 OFFICESTRA" width="100%">
@@ -184,7 +184,7 @@ OFFICESTRA는 자신이 시작한 로컬 프로세스만 관리하며, 다른 GP
 
 ## 시작하기
 
-최신 배포 DMG는 **v1.6.0**입니다. 소스에서 실행하려면 아래 AI 설치 요청을 사용하세요.
+최신 배포 DMG는 **v1.7.0**입니다. 소스에서 실행하려면 아래 AI 설치 요청을 사용하세요.
 
 ### 가장 쉬운 방법: AI에게 맡기기
 
@@ -196,7 +196,7 @@ OFFICESTRA는 자신이 시작한 로컬 프로세스만 관리하며, 다른 GP
 
 ### 앱으로 내려받기
 
-[OFFICESTRA v1.6.0 DMG 다운로드](https://github.com/neosp8888-design/officestra/releases/tag/v1.6.0)
+[OFFICESTRA v1.7.0 DMG 다운로드](https://github.com/neosp8888-design/officestra/releases/tag/v1.7.0)
 — Apple silicon · macOS 14 이상 · 영문/한글.
 
 DMG를 열고 OFFICESTRA를 응용 프로그램 폴더로 옮기세요. Node.js는 앱에 포함되어
