@@ -139,8 +139,8 @@ struct ConversationWorkspaceView: View {
                     let focusedCharacter = layout.selected
                     if let focusedCharacter, let frame = layout.frames(in: CGRect(origin: .zero, size: geometry.size))[focusedCharacter] {
                         CoreAnimationFocusLine(isAnimated: !reduceMotion)
-                            .frame(width: frame.width, height: 2)
-                            .offset(x: frame.minX, y: max(0, geometry.size.height - 2))
+                            .frame(width: frame.width, height: 4)
+                            .offset(x: frame.minX, y: max(0, geometry.size.height - 4))
                             .allowsHitTesting(false)
                             .accessibilityHidden(true)
                     }

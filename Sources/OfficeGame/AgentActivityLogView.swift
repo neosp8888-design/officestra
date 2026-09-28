@@ -1772,7 +1772,7 @@ private struct CodexActivityGroupView: View, Equatable {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
-        .officeGameSurface(cornerRadius: 10)
+        .officeGameSurface(emphasis: .transcript, cornerRadius: 10)
     }
 
     private var groupHeader: some View {

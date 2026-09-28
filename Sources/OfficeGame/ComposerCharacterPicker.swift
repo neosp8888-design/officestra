@@ -29,13 +29,14 @@ struct ComposerCharacterPicker: View {
                     HStack(spacing: 3) {
                         Text(director.displayName(for: current))
                             .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(director.selectedCharacter?.backend == .codex ? palette.codexForeground : palette.foreground)
                             .lineLimit(1)
                         status(for: current)
                     }
                     Text((director.selectedCharacter?.backend.title ?? "Codex").uppercased())
                         .font(.system(size: 8, weight: .bold, design: .rounded))
                         .tracking(1.2)
-                        .foregroundStyle(palette.secondary)
+                        .foregroundStyle(director.selectedCharacter?.backend == .codex ? palette.codexForeground : palette.secondary)
                 }
                 Spacer(minLength: 1)
                 Image(systemName: "chevron.up.chevron.down")
@@ -79,6 +80,7 @@ struct ComposerCharacterPicker: View {
                             HStack(spacing: 3) {
                                 Text(director.displayName(for: character.id))
                                     .font(.system(size: 12, weight: .bold))
+                                    .foregroundStyle(character.backend == .codex ? palette.codexForeground : palette.foreground)
                                     .lineLimit(1)
                                 status(for: character.id)
                             }
@@ -86,7 +88,7 @@ struct ComposerCharacterPicker: View {
                             Text(character.backend.title.uppercased())
                                 .font(.system(size: 8, weight: .bold, design: .rounded))
                                 .tracking(1)
-                                .foregroundStyle(palette.secondary)
+                                .foregroundStyle(character.backend == .codex ? palette.codexForeground : palette.secondary)
                         }
                         .frame(maxWidth: .infinity)
                         .frame(height: 124)

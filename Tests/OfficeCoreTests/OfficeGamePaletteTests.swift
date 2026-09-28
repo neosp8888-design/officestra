@@ -20,7 +20,9 @@ final class OfficeGamePaletteTests: XCTestCase {
                             : tinted
                         // Check both ends of the gradient and its brightest facet.
                         for background in [base, tinted, facet] {
-                            for text in [palette.foreground, palette.secondary] {
+                            let foregrounds = [palette.foreground, palette.secondary]
+                                + (backend == .codex ? [palette.codexForeground] : [])
+                            for text in foregrounds {
                                 let ratio = contrast(try rgb(text), background)
                                 XCTAssertGreaterThanOrEqual(ratio, 4.5,
                                     "dark=\(dark), provider=\(backend), emphasis=\(emphasis), highlighted=\(highlighted)")

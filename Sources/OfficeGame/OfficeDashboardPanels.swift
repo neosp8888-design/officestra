@@ -4616,7 +4616,8 @@ private struct LiveTurnCard: View {
                 value: turn.response.isEmpty
             )
             .padding(14)
-            .officeGameSurface(accent: DashboardPalette.providerAccent(for: effectiveBackend), cornerRadius: 17)
+            .officeGameSurface(accent: DashboardPalette.providerAccent(for: effectiveBackend),
+                emphasis: effectiveBackend == .codex ? .transcript : .panel, cornerRadius: 17)
         }
         .conversationTextSelectionRegion("live-turn-\(turn.id)")
     }

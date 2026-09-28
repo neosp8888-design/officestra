@@ -3,7 +3,7 @@ import SwiftUI
 /// Shared game-card vocabulary. Large reading surfaces stay quiet; interactive
 /// controls and character cards use progressively stronger model-colored light.
 enum OfficeGameEmphasis: CaseIterable {
-    case panel, control, hero
+    case panel, control, hero, transcript
 }
 
 struct OfficeGamePalette {
@@ -21,11 +21,17 @@ struct OfficeGamePalette {
             : Color(red: 0.29, green: 0.34, blue: 0.40)
     }
 
+    var codexForeground: Color {
+        isDark ? Color(red: 0.65, green: 0.95, blue: 0.84)
+            : Color(red: 0.045, green: 0.38, blue: 0.30)
+    }
+
     func tintOpacity(for emphasis: OfficeGameEmphasis, highlighted: Bool) -> Double {
         switch emphasis {
         case .hero: isDark ? (highlighted ? 0.66 : 0.48) : (highlighted ? 0.22 : 0.12)
         case .control: isDark ? (highlighted ? 0.34 : 0.14) : (highlighted ? 0.17 : 0.06)
         case .panel: isDark ? 0.065 : 0.025
+        case .transcript: isDark ? 0.18 : 0.10
         }
     }
 }
@@ -43,7 +49,9 @@ struct OfficeGameSurface: View {
             palette.base
             LinearGradient(
                 colors: [accent.opacity(palette.tintOpacity(for: emphasis, highlighted: highlighted)),
-                    accent.opacity(emphasis == .hero ? (palette.isDark ? 0.12 : 0.025) : 0.015), .clear],
+                    accent.opacity(emphasis == .hero ? (palette.isDark ? 0.12 : 0.025)
+                        : (emphasis == .transcript ? (palette.isDark ? 0.09 : 0.05) : 0.015)),
+                    accent.opacity(emphasis == .transcript ? (palette.isDark ? 0.06 : 0.035) : 0)],
                 startPoint: .topLeading, endPoint: .bottomTrailing
             )
             if emphasis == .hero {
@@ -93,8 +101,7 @@ struct OfficeGameButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         let highlighted = isEnabled && (isHovered || isSelected)
-        configuration.label
-            .foregroundStyle(OfficeGamePalette(isDark: colorScheme == .dark).foreground)
+        label(configuration)
             .padding(.horizontal, horizontalPadding)
             .background {
                 OfficeGameSurface(accent: accent, emphasis: emphasis,
@@ -108,6 +115,17 @@ struct OfficeGameButtonStyle: ButtonStyle {
             .animation(reduceMotion ? nil : .easeOut(duration: 0.10), value: configuration.isPressed)
             .opacity(isEnabled ? 1 : 0.5)
             .onHover { isHovered = $0 }
+    }
+
+    @ViewBuilder
+    private func label(_ configuration: Configuration) -> some View {
+        if compact {
+            // Preserve model/status colors supplied by the caller.
+            configuration.label
+        } else {
+            configuration.label
+                .foregroundStyle(OfficeGamePalette(isDark: colorScheme == .dark).foreground)
+        }
     }
 }
 
