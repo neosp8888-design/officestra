@@ -189,7 +189,7 @@ test('unconfirmed generation cancellation unloads and reloads before a new reque
   assert.equal(s.counts().starts,2);assert.equal(s.counts().releases,1);
 });
 test('warm model with no bridge still releases on ComfyUI reservation or memory guard',async()=>{
-  for(const sample of [{busy:true,vramPct:95,ramPct:50},{busy:false,vramPct:98,ramPct:50},{busy:false,vramPct:95,ramPct:78}]){
+  for(const sample of [{busy:true,vramPct:95,ramPct:50},{busy:false,vramPct:98,ramPct:50},{busy:false,vramPct:95,ramPct:90}]){
     const pool=new LocalModelPool({idleMs:1000,warmPollMs:5}),group=pool.group(definition),signal=new AbortController().signal;
     let releases=0;const released=deferred(),unlock=await pool.acquire(group,signal);
     const resource=await pool.borrow(group,async()=>({alive:()=>true,waitForIdle:async()=>{},sample:async()=>sample,release:async()=>{releases++;released.resolve();}}));

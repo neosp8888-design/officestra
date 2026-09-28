@@ -125,14 +125,14 @@ test('a live 32K entry cannot silently be reused as a 64K model',async t=>{
   const s=await setup(t);
   await assert.rejects(()=>s.service.launch({character:{...character,localProfile:{...definition,profile:{...definition.profile,contextWindow:65536}}},mode:'gui',workdir:'/tmp',executable:'/test/claude'}),/Close existing/);
 });
-async function setup(t,{busy=0,fail=false,idleMs=10000,vramPct=70,onRequest,onRelease,cleanupWaitMs=15000,mode='terminal'}={}) {
+async function setup(t,{busy=0,fail=false,idleMs=10000,vramPct=70,ramPct=55,onRequest,onRelease,cleanupWaitMs=15000,mode='terminal'}={}) {
   let starts=0,releases=0,requests=0;
   const server=createServer(async(req,res)=>{for await(const _ of req){} requests++;if(onRequest?.(req,res,requests)===false)return;if(fail){fail=false;res.destroy();return;}res.setHeader('content-type','application/json');res.end(JSON.stringify({type:'message',content:[{type:'text',text:'ok'}],usage:{input_tokens:100,cache_read_input_tokens:20,output_tokens:2}}));});
   await new Promise(r=>server.listen(0,'127.0.0.1',r));
   const events=[];
   const service=new LocalProviderService({pool:{},stateDirectory:'/tmp/unused',idleMs,cleanupWaitMs,retryMs:10,waitMs:200,broadcast:e=>events.push(e),hostFactory:()=>({start:async()=>{
     starts++;if(busy-->0)throw new LocalHostBusyError('busy');
-    return {upstream:`http://127.0.0.1:${server.address().port}`,sample:async()=>({vramPct,ramPct:55,busy:false,sampledAt:Date.now()}),alive:()=>true,release:async()=>{releases++;await onRelease?.();}};
+    return {upstream:`http://127.0.0.1:${server.address().port}`,sample:async()=>({vramPct,ramPct,busy:false,sampledAt:Date.now()}),alive:()=>true,release:async()=>{releases++;await onRelease?.();}};
   }})});
   const spec=await service.launch({character,mode,workdir:'/tmp',executable:'/test/claude',prompt:'hello'});
   t.after(async()=>{
@@ -188,6 +188,13 @@ test('lazy startup, authenticated front door, raw usage normalizes and final rel
 test('production service passes the user-approved GPU 98 budget through to its bridge',async t=>{
   const s=await setup(t,{vramPct:96.12});assert.equal((await s.post()).status,200);
 });
+test('production service accepts the observed RAM 77.86 failure sample and stops at RAM 90',async t=>{
+  const normal=await setup(t,{vramPct:96.05,ramPct:77.86});
+  const response=await normal.post();assert.equal(response.status,200);await response.text();
+  const full=await setup(t,{vramPct:96.05,ramPct:90});
+  const rejected=await full.post();assert.equal(rejected.status,503);await rejected.text();
+  assert.equal(full.counts().requests,0);
+});
 test('reasoning changes preserve session identity; other model/profile changes do not',()=>{
   const original={profile:{id:'test',contextWindow:65536,model:'qwen'},host:{modelKey:'qwen3.8-27b'}};
   assert.equal(localResumeCompatible(original,{...original,profile:{...original.profile,reasoning:'on'}}),true);
@@ -197,12 +204,14 @@ test('host requests full GPU at 32K with no silent partial offload policy',()=>{
   assert.equal(LOCAL_HOST_LOAD_CONFIG.gpu.ratio,1);
   assert.equal(LOCAL_HOST_LOAD_CONFIG.gpuStrictVramCap,false);
   assert.equal(LOCAL_HOST_LOAD_CONFIG.contextLength,32768);
-  assert.deepEqual(LOCAL_HOST_MEMORY_BUDGET,{vramGuardPercent:98,ramGuardPercent:77});
+  assert.deepEqual(LOCAL_HOST_MEMORY_BUDGET,{vramGuardPercent:98,ramGuardPercent:90});
   assert.equal(localHostMemoryExceeded({vramPct:94.9,ramPct:76.9}),false);
   assert.equal(localHostMemoryExceeded({vramPct:96.12,ramPct:55}),false);
   assert.equal(localHostMemoryExceeded({vramPct:97.99,ramPct:55}),false);
   assert.equal(localHostMemoryExceeded({vramPct:98,ramPct:55}),true);
-  assert.equal(localHostMemoryExceeded({vramPct:90,ramPct:77}),true);
+  assert.equal(localHostMemoryExceeded({vramPct:96.05,ramPct:77.86}),false);
+  assert.equal(localHostMemoryExceeded({vramPct:97.99,ramPct:89.99}),false);
+  assert.equal(localHostMemoryExceeded({vramPct:90,ramPct:90}),true);
 });
 test('resource sampling avoids slow WMI inventory and gives SSH cleanup headroom',()=>{
   const script=localHostResourceSampleScript(8188);

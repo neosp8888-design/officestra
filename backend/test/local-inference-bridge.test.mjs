@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { LocalInferenceBridge, LOCAL_INFERENCE_REQUEST_TIMEOUT_MS, normalizeLocalMessageRequest, applyLocalReasoning, normalizeLocalResponsesRequest, normalizeLlamaMessagesRequest } from '../src/local-inference-bridge.mjs';
 import { INCLUSIVE_INPUT_PROFILE, LLAMA_MESSAGES_PROFILE, createUsageNormalizer, createUsageSSETransform } from '../src/local-usage-normalizer.mjs';
 import { RESPONSES_INCLUSIVE_PROFILE, LLAMA_RESPONSES_PROFILE } from '../src/local-responses-usage.mjs';
+import { LOCAL_HOST_MEMORY_BUDGET } from '../src/local-provider-host.mjs';
 const token='isolated-bridge-test-token-32bytes';
 test('pinned Messages keeps exclusive cache accounting distinct from LM Studio',()=>{
  const audits=[];const normalize=createUsageNormalizer({profile:LLAMA_MESSAGES_PROFILE,onUsage:r=>audits.push(r)});
@@ -225,6 +226,18 @@ test('GPU tolerance accepts 96 percent but still stops at 98',async t=>{
   const s=await setup(t,jsonReply,{vramGuardPercent:98,ramGuardPercent:77,readResources:()=>({...current,sampledAt:Date.now()})});
   assert.equal((await s.post()).status,200);
   current={...current,vramPct:98};await until(()=>s.bridge.status.state==='fault');assert.equal(s.released(),1);
+});
+test('production budget accepts RAM below 90 while keeping independent RAM and GPU stops',async t=>{
+  for(const exceeded of [{ramPct:90},{vramPct:98}]){
+    let current={...sample(),vramPct:96.05,ramPct:77.86};
+    const s=await setup(t,jsonReply,{...LOCAL_HOST_MEMORY_BUDGET,readResources:()=>({...current,sampledAt:Date.now()})});
+    const first=await s.post();assert.equal(first.status,200);await first.text();
+    current={...current,ramPct:89.99};
+    const next=await s.post();assert.equal(next.status,200);await next.text();
+    assert.equal(s.released(),0);
+    current={...current,...exceeded};
+    await until(()=>s.bridge.status.state==='fault');assert.equal(s.released(),1);
+  }
 });
 test('VRAM budgets above 98, RAM above 95 or non-numeric values are rejected',()=>{
   const options={upstream:'http://127.0.0.1:1234',token,model:'test-model',usageProfile:INCLUSIVE_INPUT_PROFILE,readResources:sample,audit:()=>{}};

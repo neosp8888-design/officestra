@@ -7,10 +7,10 @@ import { LMStudioClient } from '@lmstudio/sdk';
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 export class LocalHostBusyError extends Error {}
-// GPU memory budget only: CPU RAM retains its existing safety threshold.
-// User-approved tolerance above 95%; this remains a sampled stop threshold,
-// not a driver-enforced allocation cap. Preserve CPU RAM protection.
-export const LOCAL_HOST_MEMORY_BUDGET=Object.freeze({vramGuardPercent:98,ramGuardPercent:77});
+// User-approved RAM relaxation leaves roughly 3.2 GiB free on a 32 GiB host.
+// Keep the existing GPU threshold unchanged. These are sampled stop thresholds,
+// not allocator-enforced caps; startup, inference and warm residency share them.
+export const LOCAL_HOST_MEMORY_BUDGET=Object.freeze({vramGuardPercent:98,ramGuardPercent:90});
 export const LOCAL_HOST_RESOURCE_SAMPLE_TIMEOUT_MS=30000;
 export const QWEN38_LMSTUDIO_MODEL_KEYS=Object.freeze(['qwen3.8-27b','qwen3.8-27b-uncensored']);
 export function isQwen38LMStudioModelKey(value){return QWEN38_LMSTUDIO_MODEL_KEYS.includes(value);}
