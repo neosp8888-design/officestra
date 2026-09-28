@@ -83,7 +83,7 @@ struct ConversationCodeBlockView: View {
                         design: .rounded
                     )
                 )
-                .foregroundStyle(Color.white.opacity(0.68))
+                .foregroundStyle(.secondary)
 
             Spacer(minLength: 12)
 
@@ -98,18 +98,18 @@ struct ConversationCodeBlockView: View {
                 .foregroundStyle(
                     didCopy
                         ? ConversationCodePalette.success
-                        : Color.white.opacity(0.60)
+                        : Color.secondary
                 )
                 .contentTransition(.symbolEffect(.replace))
             }
-            .buttonStyle(.plain)
+            .officeGameTool()
             .help(OfficeLocalization.string("코드 복사"))
             .accessibilityLabel(OfficeLocalization.string("코드 복사"))
             .accessibilityIdentifier("conversationCodeBlockCopyButton")
         }
         .padding(.horizontal, 13)
         .frame(height: 34)
-        .background(ConversationCodePalette.headerBackground)
+        .officeGameSurface(cornerRadius: 0)
     }
 
     private var displayLanguage: String {

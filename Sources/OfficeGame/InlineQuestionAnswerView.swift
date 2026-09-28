@@ -78,14 +78,7 @@ struct InlineQuestionAnswerView: View {
             answerField(isSending: isSending)
         }
         .padding(11)
-        .background(
-            Color.orange.opacity(0.06),
-            in: RoundedRectangle(cornerRadius: 11, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .stroke(Color.orange.opacity(0.28))
-        }
+        .officeGameSurface(accent: .orange, cornerRadius: 11)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(OfficeLocalization.string("확인 질문 답변"))
     }
@@ -122,7 +115,7 @@ struct InlineQuestionAnswerView: View {
             .padding(.vertical, 8)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .officeGameTool()
         .background(
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .fill(Color.primary.opacity(0.04))
@@ -174,7 +167,7 @@ struct InlineQuestionAnswerView: View {
                         )
                     )
             }
-            .buttonStyle(.plain)
+            .officeGameTool()
             .disabled(isSending || trimmedAnswer.isEmpty)
             .opacity(isSending || trimmedAnswer.isEmpty ? 0.42 : 1)
             .help(OfficeLocalization.string("답변 보내기"))

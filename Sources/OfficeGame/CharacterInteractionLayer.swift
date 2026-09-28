@@ -11,6 +11,8 @@ struct CharacterInteractionPresentationState: Equatable {
     let questionCharacters: Set<OfficeCharacter>
     let failedCharacters: Set<OfficeCharacter>
     let offDutyCharacters: Set<OfficeCharacter>
+    let compactingCharacters: Set<OfficeCharacter>
+    let completedCharacters: Set<OfficeCharacter>
 
     init(
         characters: [CharacterConfiguration],
@@ -19,7 +21,9 @@ struct CharacterInteractionPresentationState: Equatable {
         runningCharacters: Set<OfficeCharacter>,
         questionCharacters: Set<OfficeCharacter>,
         failedCharacters: Set<OfficeCharacter>,
-        offDutyCharacters: Set<OfficeCharacter>
+        offDutyCharacters: Set<OfficeCharacter>,
+        compactingCharacters: Set<OfficeCharacter> = [],
+        completedCharacters: Set<OfficeCharacter> = []
     ) {
         self.characters = characters
         self.displayNames = displayNames
@@ -28,6 +32,8 @@ struct CharacterInteractionPresentationState: Equatable {
         self.questionCharacters = questionCharacters
         self.failedCharacters = failedCharacters
         self.offDutyCharacters = offDutyCharacters
+        self.compactingCharacters = compactingCharacters
+        self.completedCharacters = completedCharacters
     }
 
     @MainActor
@@ -46,8 +52,33 @@ struct CharacterInteractionPresentationState: Equatable {
             runningCharacters: director.runningCharacters,
             questionCharacters: Set(director.pendingQuestions.keys),
             failedCharacters: Set(director.failedCharacters.keys),
-            offDutyCharacters: Set(director.offDutyCharacters.keys)
+            offDutyCharacters: Set(director.offDutyCharacters.keys),
+            compactingCharacters: director.compactingCharacters,
+            completedCharacters: director.unreviewedCompletedCharacters
         )
+    }
+
+    func bubbleStatus(for character: OfficeCharacter, hasMessage: Bool) -> OfficeCharacterBubbleStatus? {
+        if hasMessage && questionCharacters.contains(character) { return .question }
+        if runningCharacters.contains(character) || compactingCharacters.contains(character) { return .working }
+        if hasMessage && failedCharacters.contains(character) { return .failed }
+        if hasMessage && offDutyCharacters.contains(character) { return .offDuty }
+        if completedCharacters.contains(character) { return .completed }
+        return nil
+    }
+}
+
+enum OfficeCharacterBubbleStatus: Equatable {
+    case working, completed, question, failed, offDuty
+
+    var label: String {
+        switch self {
+        case .working: "업무 중"
+        case .completed: "응답 완료 · 미확인"
+        case .question: "질문에 답변하기"
+        case .failed: "중단 원인 보기"
+        case .offDuty: "퇴근 사유 보기"
+        }
     }
 }
 
@@ -233,6 +264,7 @@ struct CharacterInteractionLayer: View, Equatable {
                     artStyle: artStyle,
                     fittedFrame: fittedFrame,
                     scale: scale,
+                    selectCharacter: selectCharacter,
                     onBubbleTapped: onBubbleTapped
                 )
             }
@@ -246,23 +278,15 @@ struct CharacterSpeechBubbleLayer: View {
     let artStyle: OfficeArtStyle
     let fittedFrame: CGRect
     let scale: CGFloat
+    let selectCharacter: (CharacterConfiguration) -> Void
     let onBubbleTapped: (OfficeCharacter, String) -> Void
 
     var body: some View {
         ForEach(presentation.characters) { character in
-            if let message = speechBubbleStore.bubbles[character.id] {
-                let isThinking = presentation.runningCharacters.contains(
-                    character.id
-                )
-                let isQuestion = presentation.questionCharacters.contains(
-                    character.id
-                )
-                let isFailure = presentation.failedCharacters.contains(
-                    character.id
-                )
-                let isOffDuty = presentation.offDutyCharacters.contains(
-                    character.id
-                )
+            if let status = presentation.bubbleStatus(
+                for: character.id,
+                hasMessage: speechBubbleStore.bubbles[character.id] != nil
+            ) {
                 let bubbleAnchor = OfficeInteractionGeometry.bubbleAnchor(
                     for: character.id,
                     artStyle: artStyle,
@@ -270,21 +294,21 @@ struct CharacterSpeechBubbleLayer: View {
                 )
 
                 Button {
-                    onBubbleTapped(character.id, message)
+                    if status == .working || status == .completed {
+                        selectCharacter(character)
+                    } else if let message = speechBubbleStore.bubbles[character.id] {
+                        onBubbleTapped(character.id, message)
+                    }
                 } label: {
                     CharacterSpeechBubble(
                         name: presentation.displayNames[character.id]
                             ?? character.name,
-                        message: message,
-                        isThinking: isThinking,
-                        isQuestion: isQuestion,
-                        isFailure: isFailure,
-                        isOffDuty: isOffDuty,
+                        status: status,
+                        accent: DashboardPalette.providerAccent(for: character.backend),
                         tailEdge: character.id == .boss
                             ? .leading
                             : .bottom
                     )
-                    .id(message)
                     .transition(
                         .asymmetric(
                             insertion: .scale(scale: 0.88)
@@ -304,63 +328,18 @@ struct CharacterSpeechBubbleLayer: View {
                         fallbackHitbox: character.hitbox.rect
                     )
                 )
-                .allowsHitTesting(!isThinking)
                 .transition(.scale(scale: 0.88).combined(with: .opacity))
                 .accessibilityLabel(
-                    bubbleAccessibilityLabel(
-                        for: character,
-                        isQuestion: isQuestion,
-                        isOffDuty: isOffDuty,
-                        isFailure: isFailure
-                    )
+                    displayName(for: character) + " · " + OfficeLocalization.string(status.label)
                 )
-                .help(
-                    bubbleHelpText(
-                        isQuestion: isQuestion,
-                        isOffDuty: isOffDuty,
-                        isFailure: isFailure
-                    )
-                )
+                .accessibilityIdentifier("officeStatusBubble-\(character.id.rawValue)")
+                .help(OfficeLocalization.string(status.label))
             }
         }
         .animation(
             .spring(response: 0.30, dampingFraction: 0.72),
-            value: speechBubbleStore.bubbles
+            value: presentation
         )
-    }
-
-    private func bubbleAccessibilityLabel(
-        for character: CharacterConfiguration,
-        isQuestion: Bool,
-        isOffDuty: Bool,
-        isFailure: Bool
-    ) -> String {
-        let name = displayName(for: character)
-        if isQuestion {
-            return OfficeLocalization.format("%@ 질문에 답변하기", name)
-        } else if isOffDuty {
-            return OfficeLocalization.format("%@ 퇴근 사유 보기", name)
-        } else if isFailure {
-            return OfficeLocalization.format("%@ 중단 원인 보기", name)
-        } else {
-            return OfficeLocalization.format("%@ 응답 전문 보기", name)
-        }
-    }
-
-    private func bubbleHelpText(
-        isQuestion: Bool,
-        isOffDuty: Bool,
-        isFailure: Bool
-    ) -> String {
-        if isQuestion {
-            return OfficeLocalization.string("질문에 답변하기")
-        } else if isOffDuty {
-            return OfficeLocalization.string("퇴근 사유 보기")
-        } else if isFailure {
-            return OfficeLocalization.string("중단 원인 보기")
-        } else {
-            return OfficeLocalization.string("응답 전문 보기")
-        }
     }
 
     private func displayName(for character: CharacterConfiguration) -> String {
@@ -421,12 +400,10 @@ enum OfficeBubbleLayout {
 
 private struct CharacterSpeechBubble: View {
     let name: String
-    let message: String
-    let isThinking: Bool
-    let isQuestion: Bool
-    let isFailure: Bool
-    let isOffDuty: Bool
+    let status: OfficeCharacterBubbleStatus
+    let accent: Color
     let tailEdge: SpeechBubbleTailEdge
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
@@ -446,26 +423,15 @@ private struct CharacterSpeechBubble: View {
                 }
             }
         }
-        .opacity(isThinking ? 0.9 : 1)
     }
 
     private var bubbleCard: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 3) {
-                Text(name)
-                    .font(.system(size: 8.5, weight: .bold))
-                    .foregroundStyle(Color.black.opacity(0.62))
-                    .lineLimit(1)
-
-                statusLabel
-            }
-
-            Text(message)
-                .font(.system(size: 9.5, weight: .semibold))
-                .foregroundStyle(Color.black.opacity(0.86))
-                .lineLimit(isThinking ? 1 : 5)
-                .minimumScaleFactor(isThinking ? 0.78 : 1)
-                .multilineTextAlignment(.leading)
+        HStack(spacing: 5) {
+            Text(name)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(Color.black.opacity(0.68))
+                .lineLimit(1)
+            statusLabel
         }
         .padding(.horizontal, 7)
         .padding(.vertical, 5)
@@ -476,7 +442,7 @@ private struct CharacterSpeechBubble: View {
                 .shadow(color: .black.opacity(0.16), radius: 4, y: 2)
         )
         .overlay {
-            if isQuestion || isFailure || isOffDuty {
+            if status == .question || status == .failed || status == .offDuty {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(statusColor, lineWidth: 1)
             }
@@ -485,50 +451,35 @@ private struct CharacterSpeechBubble: View {
 
     @ViewBuilder
     private var statusLabel: some View {
-        if isQuestion {
-            Label(
-                OfficeLocalization.string("답장 픽"),
-                systemImage: "questionmark.bubble.fill"
+        if status == .working {
+            CoreAnimationDotsView(
+                dotSize: 3, spacing: 2.5, travel: 1.5,
+                color: NSColor(accent), isAnimated: !reduceMotion
             )
-            .font(.system(size: 7, weight: .bold))
-            .foregroundStyle(
-                Color(red: 0.56, green: 0.35, blue: 0.08)
-            )
-        } else if isOffDuty {
-            Label(
-                OfficeLocalization.string("오늘 마감"),
-                systemImage: "moon.zzz.fill"
-            )
-            .font(.system(size: 7, weight: .bold))
-            .foregroundStyle(
-                Color(red: 0.23, green: 0.32, blue: 0.57)
-            )
-        } else if isFailure {
-            Label(
-                OfficeLocalization.string("앗차"),
-                systemImage: "exclamationmark.triangle.fill"
-            )
-            .font(.system(size: 7, weight: .bold))
-            .foregroundStyle(
-                Color(red: 0.67, green: 0.14, blue: 0.12)
-            )
+            .frame(width: 20, height: 16)
+        } else {
+            Image(systemName: status == .question ? "questionmark"
+                : status == .offDuty ? "moon.zzz.fill" : "exclamationmark")
+                .font(.system(size: 11, weight: .heavy))
+                .foregroundStyle(statusColor)
+                .frame(width: 16, height: 16)
         }
     }
 
     private var statusColor: Color {
-        isOffDuty
+        status == .offDuty
             ? Color(red: 0.33, green: 0.43, blue: 0.72)
-            : isFailure
+            : status == .failed
             ? Color(red: 0.78, green: 0.20, blue: 0.17)
-            : Color(red: 0.78, green: 0.52, blue: 0.16)
+            : Color(red: 0.94, green: 0.52, blue: 0.16)
     }
 
     private var bubbleColor: Color {
-        isQuestion
+        status == .question
             ? Color(red: 1.0, green: 0.97, blue: 0.86).opacity(0.98)
-            : isOffDuty
+            : status == .offDuty
             ? Color(red: 0.91, green: 0.94, blue: 1.0).opacity(0.98)
-            : isFailure
+            : status == .failed
             ? Color(red: 1.0, green: 0.91, blue: 0.90).opacity(0.98)
             : .white.opacity(0.96)
     }

@@ -271,7 +271,7 @@ struct UsageReportSheet: View {
                     .frame(height: 26)
                     .background(Color.primary.opacity(0.055), in: Capsule())
             }
-            .buttonStyle(.plain)
+            .officeGameTool()
             .keyboardShortcut(.cancelAction)
             .accessibilityLabel(OfficeLocalization.string("닫기"))
         }

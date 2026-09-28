@@ -168,7 +168,7 @@ struct ConversationWorkspaceView: View {
                                     Label(director.displayName(for: character.id), systemImage: "person.crop.circle")
                                         .frame(maxWidth: .infinity).padding(.vertical, 5)
                                 }
-                                .buttonStyle(.bordered)
+                                .buttonStyle(OfficeGameButtonStyle(accent: DashboardPalette.providerAccent(for: character.backend), emphasis: .hero))
                             }
                         }
                         .padding(18)
@@ -179,7 +179,7 @@ struct ConversationWorkspaceView: View {
             }
         }
         .background { ConversationPaneFocusObserver(director: director) }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .officeGameSurface(cornerRadius: 0)
     }
 
 }

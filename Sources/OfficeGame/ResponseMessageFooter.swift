@@ -46,7 +46,7 @@ struct ResponseMessageFooter: View {
                         .frame(width: 18, height: 18)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .officeGameTool()
                     .disabled(isUpdatingFeedback)
                     .accessibilityLabel(
                         feedback == .disliked
@@ -73,7 +73,7 @@ struct ResponseMessageFooter: View {
                         .frame(width: 18, height: 18)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .officeGameTool()
                     .disabled(isUpdatingFeedback)
                     .accessibilityLabel(
                         feedback == .liked
@@ -95,7 +95,7 @@ struct ResponseMessageFooter: View {
                         .frame(width: 18, height: 18)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .officeGameTool()
                 .accessibilityLabel(
                     copied
                         ? OfficeLocalization.string("복사됨")

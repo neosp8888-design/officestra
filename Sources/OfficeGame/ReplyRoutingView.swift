@@ -83,9 +83,8 @@ struct ReplyRoutingControl: View {
                     }
                     .font(.system(size: 11, weight: .semibold))
                     .padding(.horizontal, 9).frame(height: 30)
-                    .background(DashboardPalette.accent.opacity(recipients.isEmpty ? 0.05 : 0.12), in: Capsule())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(OfficeGameButtonStyle(isSelected: isPresented || !recipients.isEmpty, cornerRadius: 10))
                 .accessibilityLabel(OfficeLocalization.string("자동 전달 대상 설정"))
                 .help(OfficeLocalization.string("입력창에서 @로 선택하거나 직원을 끌어 넣으세요. 선택은 계속 유지됩니다."))
                 .popover(isPresented: $isPresented, arrowEdge: .bottom) {
@@ -122,13 +121,14 @@ struct ReplyRoutingControl: View {
                         }
                     }
                     .padding(16).frame(width: 300)
+                    .officeGameSurface(cornerRadius: 0)
                 }
                 if !recipients.isEmpty {
                     Button { director.toggleReplyRoutePause(for: source) } label: {
                         Image(systemName: paused ? "play.fill" : "pause.fill")
                             .font(.system(size: 11)).frame(width: 28, height: 30)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(OfficeGameButtonStyle(isSelected: paused, cornerRadius: 10))
                     .help(paused ? OfficeLocalization.string("자동 전달 재개") : OfficeLocalization.string("자동 전달 일시정지"))
                     .accessibilityLabel(paused ? OfficeLocalization.string("자동 전달 재개") : OfficeLocalization.string("자동 전달 일시정지"))
                 }
@@ -168,7 +168,7 @@ private struct EmployeeMentionSuggestions: View {
                                 in: RoundedRectangle(cornerRadius: 8))
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .officeGameTool()
             }
         }
         .padding(6).frame(width: 250)

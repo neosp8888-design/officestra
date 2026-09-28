@@ -177,10 +177,7 @@ private struct SessionHistoryCard: View {
             }
         }
         .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.primary.opacity(0.045))
-        )
+        .officeGameSurface(cornerRadius: 14)
         .conversationTextSelectionRegion("history-session-\(session.id)")
     }
 }
@@ -244,10 +241,7 @@ private struct TurnDisclosure: View {
             }
         }
         .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.primary.opacity(0.035))
-        )
+        .officeGameSurface(cornerRadius: 10)
     }
 
     private var promptPresentation: TaskPromptPresentation {
@@ -637,10 +631,7 @@ private struct ArchiveTurnCard: View {
             }
         }
         .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.primary.opacity(0.045))
-        )
+        .officeGameSurface(cornerRadius: 12)
         .conversationTextSelectionRegion("archive-turn-\(turn.id)")
     }
 

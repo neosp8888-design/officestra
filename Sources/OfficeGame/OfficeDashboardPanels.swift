@@ -83,18 +83,9 @@ struct OfficeDetailNavigation: View {
                             .minimumScaleFactor(0.85)
                     }
                     .frame(maxWidth: .infinity, minHeight: 46)
-                    .foregroundStyle(
-                        selection == item ? DashboardPalette.accent : Color.secondary
-                    )
-                    .background(
-                        selection == item
-                            ? DashboardPalette.accent.opacity(0.12)
-                            : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    )
                     .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(OfficeGameButtonStyle(isSelected: selection == item, cornerRadius: 12))
                 .accessibilityLabel(item.title)
                 .accessibilityValue(selection == item ? OfficeLocalization.string("선택됨") : "")
                 .accessibilityIdentifier("officeDetailTab-\(item.rawValue)")
@@ -308,7 +299,7 @@ private struct ArchiveShelfContent: View {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.tertiary)
                 }
-                .buttonStyle(.plain)
+                .officeGameTool()
                 .accessibilityLabel(OfficeLocalization.string("검색어 지우기"))
             }
 
@@ -371,7 +362,7 @@ private struct ArchiveShelfContent: View {
                 )
             )
         }
-        .buttonStyle(.plain)
+        .officeGameTool()
         .disabled(isLoadingMore)
         .accessibilityLabel(OfficeLocalization.string("다음 12개 기록 보기"))
     }
@@ -860,13 +851,12 @@ private struct UsageProviderCard: View {
     let openDetail: () -> Void
 
     var body: some View {
-        // 보관함·위키 칸과 같은 plain 버튼이라 누를 때 같은 눌림 효과가 난다.
-        // 안의 Update 버튼은 안쪽 버튼이 먼저 받으므로 상세가 같이 열리지 않는다.
+        // Inner Update keeps its own plain style and action.
         Button(action: openDetail) {
             card
                 .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(OfficeGameButtonStyle(accent: tint))
         .help(OfficeLocalization.string("사용 현황 상세"))
         .accessibilityLabel(
             OfficeLocalization.format("%@ 사용 현황 상세 열기", name)
@@ -917,7 +907,7 @@ private struct UsageProviderCard: View {
                             .padding(.vertical, 3)
                             .background(tint.opacity(0.10), in: Capsule())
                     }
-                    .buttonStyle(.plain)
+                    .officeGameTool()
                     .disabled(isUpdating)
                     .help(
                         OfficeLocalization.format(
@@ -998,14 +988,6 @@ private struct UsageProviderCard: View {
             }
         }
         .padding(13)
-        .background(
-            tint.opacity(0.065),
-            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(tint.opacity(0.13))
-        }
     }
 
     private var availabilityText: String {
@@ -4483,14 +4465,7 @@ struct LiveTurnPromptBlock: View {
         // 채워 짧은 질문에도 말풍선이 최대 폭까지 벌어진다.
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .background(
-            DashboardPalette.accent.opacity(0.12),
-            in: RoundedRectangle(cornerRadius: 13, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .stroke(DashboardPalette.accent.opacity(0.28), lineWidth: 1)
-        }
+        .officeGameSurface(emphasis: .control, cornerRadius: 13)
     }
 
     private var footer: some View {
@@ -4513,7 +4488,7 @@ struct LiveTurnPromptBlock: View {
                     didCopy ? DashboardPalette.accent : Color.secondary
                 )
             }
-            .buttonStyle(.plain)
+            .officeGameTool()
             .accessibilityLabel(OfficeLocalization.string("질문 복사"))
             .help(OfficeLocalization.string("질문 복사"))
         }
@@ -4546,12 +4521,6 @@ private struct LiveTurnCard: View {
     let finishResponseAnimation: () -> Void
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            CharacterBadge(
-                name: turn.characterName,
-                characterID: turn.characterId,
-                size: 38
-            )
-
             VStack(alignment: .leading, spacing: 11) {
                 metadata
 
@@ -4647,14 +4616,7 @@ private struct LiveTurnCard: View {
                 value: turn.response.isEmpty
             )
             .padding(14)
-            .background(
-                Color(nsColor: .controlBackgroundColor).opacity(0.72),
-                in: RoundedRectangle(cornerRadius: 17, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 17, style: .continuous)
-                    .stroke(Color.primary.opacity(0.07))
-            }
+            .officeGameSurface(accent: DashboardPalette.providerAccent(for: effectiveBackend), cornerRadius: 17)
         }
         .conversationTextSelectionRegion("live-turn-\(turn.id)")
     }
@@ -4875,7 +4837,7 @@ private struct AgentPromptSuggestionList: View {
                     } label: {
                         suggestionRow(text)
                     }
-                    .buttonStyle(.plain)
+                    .officeGameTool()
                     .disabled(isSending)
                     .opacity(isSending ? 0.45 : 1)
                     .help(OfficeLocalization.string("눌러서 이 질문 보내기"))
@@ -5847,24 +5809,7 @@ private struct OfficePanelStyle: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .background(
-                Color(nsColor: .windowBackgroundColor).opacity(0.94),
-                in: RoundedRectangle(
-                    cornerRadius: 20,
-                    style: .continuous
-                )
-            )
-            .overlay {
-                RoundedRectangle(
-                    cornerRadius: 20,
-                    style: .continuous
-                )
-                .stroke(
-                    colorScheme == .dark
-                        ? Color.white.opacity(0.12)
-                        : Color.white.opacity(0.74)
-                )
-            }
+            .officeGameSurface(cornerRadius: 20)
             .shadow(
                 color: .black.opacity(
                     colorScheme == .dark ? 0.28 : 0.075

@@ -487,41 +487,12 @@ private struct WorkBoardSurface: ViewModifier {
         content
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
-            .background(
-                Color(nsColor: .textBackgroundColor).opacity(0.7),
-                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Color.primary.opacity(0.07))
-            }
+            .officeGameSurface(cornerRadius: 10)
     }
 }
 
 private extension View {
     func workBoardSurface() -> some View { modifier(WorkBoardSurface()) }
-}
-
-private struct WorkBoardActionStyle: ButtonStyle {
-    var prominent = false
-    @Environment(\.isEnabled) private var isEnabled
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(prominent ? Color.white : DashboardPalette.accent)
-            .padding(.horizontal, 12)
-            .background(
-                prominent
-                    ? DashboardPalette.accent.opacity(configuration.isPressed ? 0.82 : 1)
-                    : Color(nsColor: .controlBackgroundColor).opacity(configuration.isPressed ? 0.65 : 0.9),
-                in: RoundedRectangle(cornerRadius: 11, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .strokeBorder(prominent ? Color.clear : DashboardPalette.accent.opacity(0.16))
-            }
-            .opacity(isEnabled ? 1 : 0.45)
-    }
 }
 
 // 좁은 정보 패널에는 프로젝트 요약만 놓고, 상세는 별도 큰 창에서 연다.
@@ -630,7 +601,7 @@ struct WorkBoardProjectLauncher: View {
                                     .stroke(DashboardPalette.accent.opacity(0.13))
                             }
                             }
-                            .buttonStyle(.plain)
+                            .officeGameTool()
                             .accessibilityIdentifier("workBoardProject-\(project.projectKey)")
                         }
                     }
@@ -841,14 +812,14 @@ struct WorkBoardView: View {
             } label: {
                 boardActionLabel("프로젝트 추가", systemImage: "folder.badge.plus")
             }
-            .buttonStyle(WorkBoardActionStyle())
+            .buttonStyle(OfficeGameButtonStyle(cornerRadius: 11, horizontalPadding: 12))
             .accessibilityIdentifier("workBoardAddProject")
             Button {
                 Task { await reload() }
             } label: {
                 boardActionLabel("새로고침", systemImage: "arrow.clockwise")
             }
-            .buttonStyle(WorkBoardActionStyle())
+            .buttonStyle(OfficeGameButtonStyle(cornerRadius: 11, horizontalPadding: 12))
             .disabled(isLoading)
             .accessibilityIdentifier("workBoardRefresh")
             Button {
@@ -858,7 +829,7 @@ struct WorkBoardView: View {
             } label: {
                 boardActionLabel("프로젝트 수정", systemImage: "square.and.pencil")
             }
-            .buttonStyle(WorkBoardActionStyle())
+            .buttonStyle(OfficeGameButtonStyle(cornerRadius: 11, horizontalPadding: 12))
             .disabled(selectedProject == nil)
             .accessibilityIdentifier("workBoardEditProject")
             Button {
@@ -868,7 +839,7 @@ struct WorkBoardView: View {
             } label: {
                 boardActionLabel("티켓 추가", systemImage: "plus.circle.fill")
             }
-            .buttonStyle(WorkBoardActionStyle(prominent: true))
+            .buttonStyle(OfficeGameButtonStyle(emphasis: .hero, isSelected: true, cornerRadius: 11, horizontalPadding: 12))
             .disabled(selectedProjectId == nil)
             .accessibilityIdentifier("workBoardAddTicket")
             Spacer()
@@ -1071,7 +1042,7 @@ struct WorkBoardView: View {
                     .stroke(selected ? DashboardPalette.accent.opacity(0.35) : Color.primary.opacity(0.07))
             }
         }
-        .buttonStyle(.plain)
+        .officeGameTool()
         .accessibilityIdentifier("workBoardProject-\(project.projectKey)")
     }
 
@@ -1137,7 +1108,7 @@ struct WorkBoardView: View {
             .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 7))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .officeGameTool()
         .accessibilityIdentifier("workBoardTicket-\(ticket.id)")
     }
 
@@ -1224,7 +1195,7 @@ struct WorkBoardView: View {
             }
             .padding(.leading, CGFloat(min(depth, 8)) * 12)
         }
-        .buttonStyle(.plain)
+        .officeGameTool()
         .accessibilityIdentifier("workBoardTicket-\(ticket.id)")
     }
 
@@ -1247,7 +1218,7 @@ struct WorkBoardView: View {
             .padding(7)
             .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 7))
         }
-        .buttonStyle(.plain)
+        .officeGameTool()
         .accessibilityIdentifier("workBoardGoal-\(goal.id)")
     }
 

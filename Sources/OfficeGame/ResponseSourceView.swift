@@ -86,7 +86,7 @@ struct ResponseSourceList: View {
                     )
                     .font(.system(size: 9.5, weight: .semibold))
                 }
-                .buttonStyle(.plain)
+                .officeGameTool()
                 .foregroundStyle(.secondary)
             }
         }

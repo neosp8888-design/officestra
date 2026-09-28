@@ -38,11 +38,9 @@ struct VoiceFollowToggle: View {
                 }
             }
             .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(isOn ? Color.white : Color.primary)
             .padding(.horizontal, 9).frame(height: 30)
-            .background(isOn ? DashboardPalette.accent : DashboardPalette.accent.opacity(0.05), in: Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(OfficeGameButtonStyle(isSelected: isOn, cornerRadius: 10))
         .disabled(isSending)
         .help(helpText)
         .accessibilityLabel(OfficeLocalization.string("음성 지원"))

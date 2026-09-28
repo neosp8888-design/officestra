@@ -1,4 +1,4 @@
-// 터미널 모드에서 방금 끝난 턴을 직원 버튼 위에서 좋아요·싫어요로 평가하는 토스트다.
+// 터미널 모드에서 방금 끝난 턴을 입력창 위에서 좋아요·싫어요로 평가하는 토스트다.
 import OfficeCore
 import SwiftUI
 
@@ -35,8 +35,7 @@ enum TerminalFeedbackToastPresentation {
     }
 }
 
-/// 직원 선택 줄과 같은 칸 나눔으로 각 직원 버튼 바로 위에 토스트를 띄운다.
-/// 선택 줄의 overlay라 자리를 차지하지 않고 터미널 위에 겹쳐 떠 있다.
+/// 직원 선택 줄 없이도 대상을 알 수 있도록 이름을 붙여 입력창 위에 띄운다.
 struct TerminalFeedbackToastRow: View {
     @ObservedObject private var director: AgentDirector
     @ObservedObject private var feedStore: LiveFeedStore
@@ -52,8 +51,8 @@ struct TerminalFeedbackToastRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 3) {
-            ForEach(director.characters) { character in
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(director.characters.filter { activeTurnIDs[$0.id] != nil }) { character in
                 ZStack {
                     if
                         let turnID = activeTurnIDs[character.id],
@@ -81,7 +80,6 @@ struct TerminalFeedbackToastRow: View {
                         )
                     }
                 }
-                .frame(maxWidth: .infinity)
             }
         }
         .animation(.easeOut(duration: 0.22), value: activeTurnIDs)
@@ -152,8 +150,10 @@ struct TerminalFeedbackToast: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        // 완료 표시는 아래 직원 버튼의 배지가 이미 하므로 평가 버튼만 둔다.
         HStack(spacing: 8) {
+            Text(turn.characterName)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
             feedbackButton(
                 .disliked,
                 filled: "hand.thumbsdown.fill",

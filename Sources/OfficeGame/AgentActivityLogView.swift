@@ -1142,7 +1142,7 @@ struct CodexTranscriptView: View {
                     .font(.system(size: 10.5, weight: .semibold))
                     .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
+                .officeGameTool()
             }
 
             ForEach(visibleEntries) { entry in
@@ -1345,7 +1345,7 @@ private struct CodexCollaborationGroupView: View {
             } label: {
                 header
             }
-            .buttonStyle(.plain)
+            .officeGameTool()
             .accessibilityLabel(
                 isExpanded
                     ? OfficeLocalization.string("협업 검토 접기")
@@ -1381,21 +1381,7 @@ private struct CodexCollaborationGroupView: View {
             }
         }
         .padding(11)
-        .background(
-            LinearGradient(
-                colors: [
-                    Color.purple.opacity(0.075),
-                    Color.primary.opacity(0.025),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            ),
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.purple.opacity(0.15), lineWidth: 1)
-        }
+        .officeGameSurface(accent: .purple, cornerRadius: 12)
         .onChange(of: summary.isRunning) { _, running in
             guard !running else {
                 return
@@ -1755,7 +1741,7 @@ private struct CodexActivityGroupView: View, Equatable {
                                     )
                                     .foregroundStyle(.secondary)
                                 }
-                                .buttonStyle(.plain)
+                                .officeGameTool()
                                 .padding(.vertical, 5)
                             }
 
@@ -1786,14 +1772,7 @@ private struct CodexActivityGroupView: View, Equatable {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
-        .background(
-            Color.primary.opacity(0.035),
-            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color.primary.opacity(0.06))
-        }
+        .officeGameSurface(cornerRadius: 10)
     }
 
     private var groupHeader: some View {
@@ -2137,7 +2116,7 @@ private struct CodexFileChangeSummaryView: View {
                             copied ? DashboardPalette.accent : Color.secondary
                         )
                 }
-                .buttonStyle(.plain)
+                .officeGameTool()
                 .help(
                     copied
                         ? OfficeLocalization.string("변경 결과 복사됨")
@@ -2453,7 +2432,7 @@ struct WorkspaceFileRevealButton: View {
                 .contentShape(Rectangle())
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .buttonStyle(.plain)
+            .officeGameTool()
             .help(OfficeLocalization.string("Finder에서 보기"))
             .accessibilityLabel(OfficeLocalization.format("%@, Finder에서 보기", title))
             .accessibilityIdentifier(accessibilityIdentifier)

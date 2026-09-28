@@ -122,7 +122,7 @@ struct WikiKnowledgeView: View {
                                 in: Capsule()
                             )
                     }
-                    .buttonStyle(.plain)
+                    .officeGameTool()
                     .foregroundStyle(
                         section == item
                             ? DashboardPalette.accent
@@ -144,7 +144,7 @@ struct WikiKnowledgeView: View {
                         .font(.system(size: 11, weight: .semibold))
                         .frame(width: 26, height: 26)
                 }
-                .buttonStyle(.plain)
+                .officeGameTool()
                 .disabled(isLoading)
                 .accessibilityLabel(OfficeLocalization.string("위키 새로고침"))
                 .accessibilityIdentifier("wikiRefreshButton")
@@ -179,7 +179,7 @@ struct WikiKnowledgeView: View {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.tertiary)
                 }
-                .buttonStyle(.plain)
+                .officeGameTool()
                 .accessibilityLabel(OfficeLocalization.string("위키 검색어 지우기"))
             }
         }
@@ -401,7 +401,7 @@ struct WikiKnowledgeView: View {
                                 .stroke(Color.primary.opacity(0.06))
                         }
                     }
-                    .buttonStyle(.plain)
+                    .officeGameTool()
                     .accessibilityLabel(page.title)
                     .accessibilityHint(OfficeLocalization.string("문서를 넓은 창으로 펼치기"))
                     .accessibilityIdentifier("wikiPage-\(page.id)")
@@ -417,7 +417,7 @@ struct WikiKnowledgeView: View {
                                 .frame(width: 20, height: 20)
                                 .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .officeGameTool()
                         .disabled(deletingPageIDs.contains(page.id))
                         .padding(6)
                         .accessibilityLabel(OfficeLocalization.string("문서 삭제"))
@@ -759,7 +759,7 @@ struct WikiOpenBook: View {
                         in: Capsule()
                     )
             }
-            .buttonStyle(.plain)
+            .officeGameTool()
             .disabled(isDeleting)
             .opacity(isDeleting ? 0.5 : 1)
             .accessibilityLabel(OfficeLocalization.string("문서 삭제"))
@@ -787,7 +787,7 @@ struct WikiOpenBook: View {
                         in: Capsule()
                     )
             }
-            .buttonStyle(.plain)
+            .officeGameTool()
             .keyboardShortcut(.cancelAction)
             .accessibilityLabel(OfficeLocalization.string("닫기"))
             .accessibilityIdentifier("wikiOpenBookClose")
@@ -809,7 +809,7 @@ struct WikiOpenBook: View {
                 .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .officeGameTool()
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.35)
         .keyboardShortcut(shortcut, modifiers: [])

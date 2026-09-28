@@ -229,6 +229,7 @@ struct CommandEntryRow: View {
     var body: some View {
         let canSubmit = submissionPrompt != nil
         let inputCharacter = director.selectedCharacterID ?? .boss
+        let modelAccent = DashboardPalette.providerAccent(for: director.characters.first { $0.id == inputCharacter }?.backend ?? .codex)
 
         VStack(alignment: .leading, spacing: 7) {
         HStack(spacing: 9) {
@@ -246,7 +247,7 @@ struct CommandEntryRow: View {
                     }
                     .frame(width: 32, height: 32)
                 }
-                .buttonStyle(.plain)
+                .officeGameTool(accent: modelAccent)
                 .accessibilityLabel(
                     isPreparingAttachments
                         ? OfficeLocalization.string("첨부 준비 중")
@@ -287,17 +288,9 @@ struct CommandEntryRow: View {
                 Button(action: director.cancelSelectedJob) {
                     Image(systemName: "stop.fill")
                         .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(.white)
                         .frame(width: 36, height: 36)
-                        .background(
-                            Color.red.opacity(0.88),
-                            in: RoundedRectangle(
-                                cornerRadius: 11,
-                                style: .continuous
-                            )
-                        )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(OfficeGameButtonStyle(accent: .red, emphasis: .hero, isSelected: true, cornerRadius: 11))
                 .accessibilityLabel(OfficeLocalization.string("대화 중단"))
                 .help(OfficeLocalization.string("현재 직원의 업무 중단"))
                 .disabled(director.isCancellingSelectedCharacter)
@@ -308,17 +301,9 @@ struct CommandEntryRow: View {
                 Button(action: { _ = submitDraft() }) {
                     Image(systemName: "clock.badge.checkmark.fill")
                         .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(.white)
                         .frame(width: 36, height: 36)
-                        .background(
-                            DashboardPalette.accent.opacity(0.82),
-                            in: RoundedRectangle(
-                                cornerRadius: 11,
-                                style: .continuous
-                            )
-                        )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(OfficeGameButtonStyle(accent: modelAccent, emphasis: .hero, cornerRadius: 11))
                 .accessibilityLabel(OfficeLocalization.string("다음 턴에 예약"))
                 .help(queueHelp)
                 .disabled(!canSubmit)
@@ -327,17 +312,9 @@ struct CommandEntryRow: View {
                 Button(action: { _ = submitDraft() }) {
                     Image(systemName: "paperplane.fill")
                         .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(.white)
                         .frame(width: 36, height: 36)
-                        .background(
-                            DashboardPalette.accent,
-                            in: RoundedRectangle(
-                                cornerRadius: 11,
-                                style: .continuous
-                            )
-                        )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(OfficeGameButtonStyle(accent: modelAccent, emphasis: .hero, cornerRadius: 11))
                 .accessibilityLabel(OfficeLocalization.string("보내기"))
                 .disabled(!canSubmit)
                 .opacity(canSubmit ? 1 : 0.42)
@@ -347,14 +324,7 @@ struct CommandEntryRow: View {
         .padding(.leading, 7)
         .padding(.trailing, 7)
         .padding(.vertical, 6)
-        .background(
-            Color.primary.opacity(0.045),
-            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.primary.opacity(0.07))
-        }
+        .officeGameSurface(accent: modelAccent, cornerRadius: 14)
         }
     }
 
@@ -500,7 +470,7 @@ struct QueuedCommandStrip: View {
                     .font(.system(size: 10.5, weight: .bold))
                     .foregroundStyle(DashboardPalette.accent)
             }
-            .buttonStyle(.plain)
+            .officeGameTool()
             .accessibilityLabel(
                 OfficeLocalization.format(
                     "%@ 바로 적용",
@@ -519,7 +489,7 @@ struct QueuedCommandStrip: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
+            .officeGameTool()
             .accessibilityLabel(
                 OfficeLocalization.format(
                     "%@ 예약 취소",

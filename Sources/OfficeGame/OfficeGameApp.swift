@@ -6,10 +6,12 @@ import SwiftUI
 
 struct OfficeGameApp: App {
     @StateObject private var launchCoordinator = OfficeLaunchCoordinator()
+    @AppStorage("officeTheme") private var selectedThemeRawValue = OfficeTheme.modernDay.rawValue
 
     var body: some Scene {
         WindowGroup("OFFICESTRA", id: "officestra-main") {
             OfficeLaunchRootView(coordinator: launchCoordinator)
+                .buttonStyle(OfficeGameButtonStyle(cornerRadius: 8, horizontalPadding: 6, compact: true))
                 .environment(\.locale, OfficeLocalization.locale)
                 .background(OfficeWindowFramePersistence())
         }
@@ -24,6 +26,10 @@ struct OfficeGameApp: App {
                     initialProjectId: route.projectId
                 )
                 .environment(\.locale, OfficeLocalization.locale)
+                .preferredColorScheme(
+                    OfficeTheme(rawValue: selectedThemeRawValue)?.isNight == true ? .dark : .light
+                )
+                .buttonStyle(OfficeGameButtonStyle(cornerRadius: 8, horizontalPadding: 6, compact: true))
             }
         }
         .defaultSize(width: 1220, height: 820)
@@ -768,28 +774,10 @@ private struct OfficeGameView: View {
                     : "sun.max.fill"
             )
             .font(.system(size: 15, weight: .semibold))
-            .frame(width: 20, height: 20)
+            .frame(width: 36, height: 32)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(OfficeGameButtonStyle(cornerRadius: 11))
         .environment(\.colorScheme, theme.isNight ? .dark : .light)
-        .foregroundStyle(theme.isNight ? Color.white : Color.black.opacity(0.72))
-        .padding(.horizontal, 8)
-        .frame(height: 32)
-        .background(
-            theme.isNight
-                ? Color.black.opacity(0.72)
-                : Color.white.opacity(0.92),
-            in: Capsule()
-        )
-        .overlay {
-            Capsule()
-                .stroke(
-                    theme.isNight
-                        ? Color.white.opacity(0.25)
-                        : Color.black.opacity(0.08)
-                )
-        }
-        .shadow(color: .black.opacity(0.14), radius: 7, y: 3)
         .fixedSize()
         .accessibilityLabel(OfficeLocalization.string("오피스 테마"))
         .accessibilityValue(OfficeLocalization.string(theme.title))
@@ -809,28 +797,10 @@ private struct OfficeGameView: View {
                     : "terminal"
             )
             .font(.system(size: 15, weight: .semibold))
-            .frame(width: 20, height: 20)
+            .frame(width: 36, height: 32)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(OfficeGameButtonStyle(isSelected: conversationMode == .terminal, cornerRadius: 11))
         .environment(\.colorScheme, theme.isNight ? .dark : .light)
-        .foregroundStyle(theme.isNight ? Color.white : Color.black.opacity(0.72))
-        .padding(.horizontal, 8)
-        .frame(height: 32)
-        .background(
-            theme.isNight
-                ? Color.white.opacity(0.14)
-                : Color.white.opacity(0.92),
-            in: RoundedRectangle(cornerRadius: 11, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .stroke(
-                    theme.isNight
-                        ? Color.white.opacity(0.25)
-                        : Color.black.opacity(0.08)
-                )
-        }
-        .shadow(color: .black.opacity(0.14), radius: 7, y: 3)
         .opacity(
             ConversationModeSwitchPolicy.toggleOpacity(
                 mode: conversationMode,
@@ -899,25 +869,9 @@ private struct OfficeGameView: View {
                     height: OfficePanelControlLayout.artStyleControlDiameter
                 )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(OfficeGameButtonStyle(cornerRadius: 12))
         .disabled(outgoingArtStyle != nil)
         .environment(\.colorScheme, theme.isNight ? .dark : .light)
-        .foregroundStyle(theme.isNight ? Color.white : Color.black.opacity(0.72))
-        .background(
-            theme.isNight
-                ? Color.black.opacity(0.72)
-                : Color.white.opacity(0.92),
-            in: Circle()
-        )
-        .overlay {
-            Circle()
-                .stroke(
-                    theme.isNight
-                        ? Color.white.opacity(0.25)
-                        : Color.black.opacity(0.08)
-                )
-        }
-        .shadow(color: .black.opacity(0.14), radius: 7, y: 3)
         .accessibilityLabel(OfficeLocalization.string("오피스 표현 방식"))
         .accessibilityValue(artStyle.title)
         .accessibilityIdentifier("officeArtStyleToggle")
@@ -938,20 +892,11 @@ private struct OfficeGameView: View {
                     width: OfficePanelControlLayout.artStyleControlDiameter,
                     height: OfficePanelControlLayout.artStyleControlDiameter
                 )
+                .foregroundStyle(backendController.status.showsStoppedWarning ? Color.red : Color.primary)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(OfficeGameButtonStyle(accent: backendController.status.showsStoppedWarning ? .red : DashboardPalette.accent, cornerRadius: 12))
         .disabled(backendController.status == .changing)
         .environment(\.colorScheme, theme.isNight ? .dark : .light)
-        .foregroundStyle(backendForegroundStyle)
-        .background(
-            backendBackgroundStyle,
-            in: Circle()
-        )
-        .overlay {
-            Circle()
-                .stroke(backendStrokeStyle)
-        }
-        .shadow(color: .black.opacity(0.16), radius: 7, y: 3)
         .accessibilityLabel(OfficeLocalization.string("백엔드 서버"))
         .accessibilityValue(backendAccessibilityValue)
         .accessibilityIdentifier("officeBackendToggle")
@@ -1130,6 +1075,7 @@ private struct LocalModelIconButtonStyle: ButtonStyle {
 
     var kind: Kind
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var fill: Color {
         if !isEnabled {
@@ -1149,7 +1095,7 @@ private struct LocalModelIconButtonStyle: ButtonStyle {
         }
         switch kind {
         case .start:
-            return .white
+            return .primary
         case .stop:
             return LocalModelStateTint.error
         }
@@ -1166,14 +1112,11 @@ private struct LocalModelIconButtonStyle: ButtonStyle {
             .font(.system(size: 10, weight: .bold, design: .rounded))
             .foregroundStyle(foreground)
             .frame(width: 22, height: 22)
-            .background(fill, in: Circle())
-            .overlay(
-                Circle()
-                    .strokeBorder(stroke, lineWidth: 1)
-            )
-            .scaleEffect(configuration.isPressed ? 0.92 : 1)
+            .officeGameSurface(accent: kind == .stop ? .red : DashboardPalette.accent,
+                emphasis: .control, cornerRadius: 7)
+            .scaleEffect(!reduceMotion && configuration.isPressed ? 0.92 : 1)
             .animation(
-                .spring(response: 0.22, dampingFraction: 0.72),
+                reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.72),
                 value: configuration.isPressed
             )
     }
@@ -1224,6 +1167,14 @@ private struct LiveWorkspaceHeader: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
+
+                CharacterBadge(
+                    name: selectedName,
+                    characterID: (characterSelectionStore.selectedCharacterID ?? .boss).rawValue,
+                    size: 38
+                )
+                .fixedSize()
+                .accessibilityIdentifier("liveWorkspaceCharacterAvatar")
 
                 Spacer()
 
@@ -1284,7 +1235,7 @@ private struct LiveWorkspaceHeader: View {
                         .font(.system(size: 15, weight: .medium))
                         .frame(width: 30, height: 30)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(OfficeGameButtonStyle(isSelected: conversationLayout.state.isSplit, cornerRadius: 10))
                 .help(OfficeLocalization.string(conversationLayout.state.isSplit ? "대화 분할 해제" : "대화 좌우 분할"))
                 .accessibilityLabel(OfficeLocalization.string(conversationLayout.state.isSplit ? "대화 분할 해제" : "대화 좌우 분할"))
                 .accessibilityIdentifier("conversationSplitToggle")
@@ -1395,8 +1346,6 @@ private struct LiveWorkspaceCommandBar: View {
     @State private var contextCompactionAlert: ContextCompactionAlert?
     @State private var terminalRestartRequiredCharacters:
         Set<OfficeCharacter> = []
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.colorScheme) private var colorScheme
 
     let onShowProfile: (OfficeCharacter) -> Void
     let conversationMode: OfficeConversationMode
@@ -1508,21 +1457,6 @@ private struct LiveWorkspaceCommandBar: View {
 
     private var commandBar: some View {
         VStack(alignment: .leading, spacing: 9) {
-            characterSelector
-                .disabled(!isEnabled(.characterSelector))
-                .opacity(controlOpacity(.characterSelector))
-                // 터미널은 응답 바닥글이 없으므로 방금 끝난 턴을 각 직원 버튼
-                // 바로 위에 떠 있는 토스트로 평가한다. 자리를 차지하지 않아
-                // 화면이 밀리지 않는다.
-                .overlay(alignment: .top) {
-                    if conversationMode == .terminal {
-                        // 높이 0 프레임의 아래쪽에 붙여 토스트 전체가
-                        // 직원 선택 줄 위쪽 바깥으로 올라가게 한다.
-                        TerminalFeedbackToastRow(director: director)
-                            .frame(height: 0, alignment: .bottom)
-                    }
-                }
-
             if conversationMode == .chat, !attachments.isEmpty {
                 attachmentStrip
             }
@@ -1551,15 +1485,29 @@ private struct LiveWorkspaceCommandBar: View {
 
             // 터미널 모드에서도 같은 입력창을 쓴다. 터미널의 한글 입력이
             // 불편해서, 여기서 쓴 글을 CLI에 타이핑한 것처럼 넘긴다.
-            CommandEntryRow(
-                director: director,
-                placeholder: commandPlaceholder,
-                attachmentCount: attachments.count,
-                isPreparingAttachments: isPreparingAttachments,
-                supportsAttachments: isEnabled(.attachments),
-                onChooseAttachments: chooseAttachments,
-                onSubmit: submitCommand
-            )
+            HStack(alignment: .top, spacing: 8) {
+                ComposerCharacterPicker(director: director)
+                    .disabled(!isEnabled(.characterSelector))
+                    .opacity(controlOpacity(.characterSelector))
+
+                CommandEntryRow(
+                    director: director,
+                    placeholder: commandPlaceholder,
+                    attachmentCount: attachments.count,
+                    isPreparingAttachments: isPreparingAttachments,
+                    supportsAttachments: isEnabled(.attachments),
+                    onChooseAttachments: chooseAttachments,
+                    onSubmit: submitCommand
+                )
+                .frame(maxWidth: .infinity)
+            }
+            .overlay(alignment: .topLeading) {
+                if conversationMode == .terminal {
+                    TerminalFeedbackToastRow(director: director)
+                        .frame(height: 0, alignment: .bottom)
+                        .offset(y: -8)
+                }
+            }
 
             if let character = selectedCharacter {
                 HStack {
@@ -1609,7 +1557,7 @@ private struct LiveWorkspaceCommandBar: View {
                             )
                             .font(.system(size: 11, weight: .semibold))
                         }
-                        .buttonStyle(.plain)
+                        .officeGameTool(accent: DashboardPalette.providerAccent(for: character.backend))
                         .foregroundStyle(
                             DashboardPalette.providerAccent(
                                 for: character.backend
@@ -1628,7 +1576,7 @@ private struct LiveWorkspaceCommandBar: View {
                         )
                             .font(.system(size: 11, weight: .semibold))
                     }
-                    .buttonStyle(.plain)
+                    .officeGameTool(accent: DashboardPalette.providerAccent(for: character.backend))
                     .foregroundStyle(
                         DashboardPalette.providerAccent(
                             for: character.backend
@@ -1698,7 +1646,7 @@ private struct LiveWorkspaceCommandBar: View {
                                 .font(.system(size: 11))
                                 .foregroundStyle(.secondary)
                         }
-                        .buttonStyle(.plain)
+                        .officeGameTool()
                         .accessibilityLabel(
                             OfficeLocalization.format(
                                 "%@ 첨부 제거",
@@ -1715,142 +1663,6 @@ private struct LiveWorkspaceCommandBar: View {
                 }
             }
         }
-    }
-
-    private var characterSelector: some View {
-        ZStack {
-            CoreAnimationSelectionHighlight(
-                selectedIndex: director.characters.firstIndex {
-                    $0.id == selectedCharacterID
-                },
-                itemCount: director.characters.count,
-                spacing: 3,
-                reduceMotion: reduceMotion
-            )
-            .frame(maxWidth: .infinity)
-            .frame(height: 38)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-
-            HStack(spacing: 3) {
-                ForEach(director.characters) { character in
-                let isSelected =
-                    selectedCharacterID == character.id
-                let isRunning =
-                    director.runningCharacters.contains(character.id)
-                let isCompacting =
-                    director.compactingCharacters.contains(character.id)
-                let compactionNotice =
-                    director.contextCompactionNotice(for: character.id)
-                let name = director.displayName(for: character.id)
-                let badgeColor = DashboardPalette.characterAccent(
-                    for: character.id.rawValue
-                )
-                let isCompleted =
-                    director.unreviewedCompletedCharacters.contains(
-                        character.id
-                    )
-
-                Button {
-                    director.select(character)
-                } label: {
-                    HStack(spacing: 7) {
-                        CharacterAvatar(
-                            name: name,
-                            characterID: character.id.rawValue,
-                            size: 24
-                        )
-                        .overlay {
-                            Circle()
-                                .stroke(
-                                    isSelected
-                                        ? badgeColor
-                                        : .clear,
-                                    lineWidth: 2
-                                )
-                        }
-
-                        Text(name)
-                            .font(
-                                .system(
-                                    size: 13,
-                                    weight: isSelected
-                                        ? .bold
-                                        : .semibold
-                                )
-                            )
-                            .foregroundStyle(
-                                CharacterSelectorLabelStyle.color(
-                                    isSelected: isSelected,
-                                    colorScheme: colorScheme
-                                )
-                            )
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-
-                        if
-                            isRunning || isCompacting || isCompleted
-                                || compactionNotice != nil
-                        {
-                            CharacterTaskStatusIndicator(
-                                isRunning: isRunning,
-                                isCompacting: isCompacting,
-                                isCompleted: isCompleted,
-                                compactionNotice: compactionNotice,
-                                reduceMotion: reduceMotion
-                            )
-                        }
-                    }
-                    .padding(.horizontal, 7)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 38)
-                    .contentShape(
-                        RoundedRectangle(
-                            cornerRadius: 10,
-                            style: .continuous
-                        )
-                    )
-                    }
-                    .buttonStyle(.plain)
-                    .onDrag { EmployeeMention.dragProvider(for: character.id) }
-                    .help(OfficeLocalization.format("%@ 선택", name))
-                    .accessibilityLabel(
-                        OfficeLocalization.format("%@ 선택", name)
-                    )
-                    .accessibilityValue(
-                        isSelected
-                            ? OfficeLocalization.string("선택됨")
-                            : OfficeLocalization.string("선택되지 않음")
-                    )
-                    .accessibilityIdentifier(
-                        "commandCharacter-\(character.id.rawValue)"
-                    )
-                }
-            }
-        }
-        .padding(4)
-        .background {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.primary.opacity(0.055),
-                            Color.primary.opacity(0.025),
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .overlay {
-                    RoundedRectangle(
-                        cornerRadius: 14,
-                        style: .continuous
-                    )
-                    .stroke(Color.primary.opacity(0.055))
-                }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(OfficeLocalization.string("직원 선택"))
     }
 
     private var commandPlaceholder: String {
@@ -2065,7 +1877,7 @@ private extension LiveWorkspaceCommandBar {
     }
     }
 
-private struct CharacterTaskStatusIndicator: View {
+struct CharacterTaskStatusIndicator: View {
     let isRunning: Bool
     let isCompacting: Bool
     let isCompleted: Bool
@@ -2409,7 +2221,7 @@ private struct BubbleDetailView: View {
                                     )
                                     .contentShape(Rectangle())
                                 }
-                                .buttonStyle(.plain)
+                                .officeGameTool()
                                 .background(
                                     RoundedRectangle(
                                         cornerRadius: 9,
@@ -2700,7 +2512,7 @@ private struct ContextCompactionControls: View {
                     .font(.system(size: 11, weight: .semibold))
                 }
             }
-            .buttonStyle(.plain)
+            .officeGameTool()
             .foregroundStyle(accent)
             .disabled(!availability.canRequestCompaction)
             .accessibilityLabel(OfficeLocalization.string("컨텍스트 지금 압축"))
@@ -3027,7 +2839,7 @@ private struct AgentQuickSettingsView: View {
                         systemImage: settings.fastMode ? "bolt.fill" : "bolt"
                     )
                 }
-                .buttonStyle(.plain)
+                .officeGameTool()
                 .help(
                     settings.fastMode
                         ? OfficeLocalization.string("Fast 모드 끄기")
@@ -3426,7 +3238,7 @@ private struct QuickSettingLabel: View {
             .foregroundStyle(Color.primary.opacity(0.68))
             .padding(.horizontal, 7)
             .padding(.vertical, 5)
-            .background(Color.primary.opacity(0.055), in: Capsule())
+            .officeGameSurface(emphasis: .control, cornerRadius: 8)
             .fixedSize()
     }
 }

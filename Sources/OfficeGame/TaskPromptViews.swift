@@ -19,7 +19,7 @@ struct TaskPromptAttachmentList: View {
                             size: 36
                         )
                     }
-                    .buttonStyle(.plain)
+                    .officeGameTool()
                     .help(taskAttachmentOpenActionTitle(
                         for: attachment.path,
                         isThumbnail: true
@@ -53,7 +53,7 @@ struct TaskPromptAttachmentList: View {
                     }
                     .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .officeGameTool()
                     .help(
                         OfficeLocalization.format(
                             "%@\nFinder에서 보기",
@@ -96,7 +96,7 @@ struct TaskPromptAttachmentSummary: View {
                         size: 20
                     )
                 }
-                .buttonStyle(.plain)
+                .officeGameTool()
                 .help(taskAttachmentOpenActionTitle(
                     for: attachment.path,
                     isThumbnail: true
@@ -125,7 +125,7 @@ struct TaskPromptAttachmentSummary: View {
                         }
                     }
                 }
-                .buttonStyle(.plain)
+                .officeGameTool()
                 .help(
                     OfficeLocalization.format(
                         "%@\nFinder에서 보기",
