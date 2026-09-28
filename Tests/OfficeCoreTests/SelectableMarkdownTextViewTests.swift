@@ -530,7 +530,7 @@ final class SelectableMarkdownTextViewTests: XCTestCase {
         XCTAssertNotNil(linkAttributes[.link])
         XCTAssertEqual(
             linkAttributes[.underlineStyle] as? Int,
-            NSUnderlineStyle.single.rawValue
+            0
         )
     }
 
@@ -806,11 +806,22 @@ final class SelectableMarkdownTextViewTests: XCTestCase {
     }
 
     func testWebMarkdownLinkUsesExternalOpener() throws {
+        for isDark in [false, true] {
+            try verifyWebMarkdownLinkUsesExternalOpener(isDark: isDark)
+        }
+    }
+
+    private func verifyWebMarkdownLinkUsesExternalOpener(isDark: Bool) throws {
         let documentView = SelectableMarkdownDocumentView(fontSize: 12)
         documentView.apply(
             source: "[웹](https://example.com/result)",
             fallbackDirectory: nil,
-            isDark: false
+            isDark: isDark
+        )
+        XCTAssertEqual(documentView.textView.linkTextAttributes?[.underlineStyle] as? Int, 0)
+        XCTAssertEqual(
+            documentView.textView.textStorage?.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int,
+            0
         )
 
         var openedURL: URL?

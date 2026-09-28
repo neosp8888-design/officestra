@@ -10,6 +10,10 @@ struct VoiceFollowToggle: View {
 
     private var status: VoiceFollowStatus? { director.voiceFollowStatus }
 
+    private var modelAccent: Color {
+        DashboardPalette.providerAccent(for: director.characters.first { $0.id == character }?.backend ?? .codex)
+    }
+
     private var isOn: Bool { status?.isActive(for: character.rawValue) == true }
 
     private var isStarting: Bool { isOn && status?.state == "starting" }
@@ -40,7 +44,7 @@ struct VoiceFollowToggle: View {
             .font(.system(size: 11, weight: .semibold))
             .padding(.horizontal, 9).frame(height: 30)
         }
-        .buttonStyle(OfficeGameButtonStyle(isSelected: isOn, cornerRadius: 10))
+        .buttonStyle(OfficeGameButtonStyle(accent: modelAccent, isSelected: isOn, cornerRadius: 10, foregroundColor: modelAccent))
         .disabled(isSending)
         .help(helpText)
         .accessibilityLabel(OfficeLocalization.string("음성 지원"))

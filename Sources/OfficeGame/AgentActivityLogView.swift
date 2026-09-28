@@ -1772,7 +1772,19 @@ private struct CodexActivityGroupView: View, Equatable {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
-        .officeGameSurface(emphasis: .transcript, cornerRadius: 10)
+        .background {
+            if group.kind == .reasoning {
+                // Match Claude/Antigravity thought cards; only the provider hue differs.
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(DashboardPalette.providerAccent(for: .codex).opacity(0.05))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(DashboardPalette.providerAccent(for: .codex).opacity(0.14))
+                    }
+            } else {
+                OfficeGameSurface(emphasis: .conversation, cornerRadius: 10)
+            }
+        }
     }
 
     private var groupHeader: some View {
@@ -2111,12 +2123,12 @@ private struct CodexFileChangeSummaryView: View {
                     copySummary()
                 } label: {
                     Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 11, weight: .semibold))
+                        .officeToolFont(size: 11)
                         .foregroundStyle(
                             copied ? DashboardPalette.accent : Color.secondary
                         )
                 }
-                .officeGameTool()
+                .officeTextTool()
                 .help(
                     copied
                         ? OfficeLocalization.string("변경 결과 복사됨")
@@ -2432,7 +2444,7 @@ struct WorkspaceFileRevealButton: View {
                 .contentShape(Rectangle())
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .officeGameTool()
+            .buttonStyle(.plain)
             .help(OfficeLocalization.string("Finder에서 보기"))
             .accessibilityLabel(OfficeLocalization.format("%@, Finder에서 보기", title))
             .accessibilityIdentifier(accessibilityIdentifier)

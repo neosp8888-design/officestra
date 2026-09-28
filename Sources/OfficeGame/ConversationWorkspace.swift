@@ -179,7 +179,7 @@ struct ConversationWorkspaceView: View {
             }
         }
         .background { ConversationPaneFocusObserver(director: director) }
-        .officeGameSurface(cornerRadius: 0)
+        .officeGameSurface(emphasis: .conversation, cornerRadius: 0)
     }
 
 }

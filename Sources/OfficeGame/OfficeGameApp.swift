@@ -659,7 +659,8 @@ private struct OfficeGameView: View {
                 onShowProfile: { profileCharacter = $0 }
             )
         }
-        .officePanelStyle()
+        .environment(\.officeHoverEffectsEnabled, false)
+        .officePanelStyle(emphasis: .conversation)
     }
 
     private var theme: OfficeTheme {
@@ -1074,6 +1075,7 @@ private struct LocalModelIconButtonStyle: ButtonStyle {
     }
 
     var kind: Kind
+    var accent: Color = DashboardPalette.accent
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -1095,7 +1097,7 @@ private struct LocalModelIconButtonStyle: ButtonStyle {
         }
         switch kind {
         case .start:
-            return .primary
+            return accent
         case .stop:
             return LocalModelStateTint.error
         }
@@ -1112,7 +1114,7 @@ private struct LocalModelIconButtonStyle: ButtonStyle {
             .font(.system(size: 10, weight: .bold, design: .rounded))
             .foregroundStyle(foreground)
             .frame(width: 22, height: 22)
-            .officeGameSurface(accent: kind == .stop ? .red : DashboardPalette.accent,
+            .officeGameSurface(accent: kind == .stop ? .red : accent,
                 emphasis: .control, cornerRadius: 7)
             .scaleEffect(!reduceMotion && configuration.isPressed ? 0.92 : 1)
             .animation(
@@ -1129,6 +1131,13 @@ private struct LiveWorkspaceHeader: View {
         CharacterSelectionStore
     let conversationMode: OfficeConversationMode
     @State private var localModelFailure: String?
+
+    private var modelAccent: Color {
+        let backend = director.characters.first {
+            $0.id == characterSelectionStore.selectedCharacterID
+        }?.backend ?? .codex
+        return DashboardPalette.providerAccent(for: backend)
+    }
 
     init(
         director: AgentDirector,
@@ -1150,10 +1159,10 @@ private struct LiveWorkspaceHeader: View {
                     : "bubble.left.and.text.bubble.right.fill"
             )
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(DashboardPalette.accent)
+                .foregroundStyle(modelAccent)
                 .frame(width: 36, height: 36)
                 .background(
-                    DashboardPalette.accent.opacity(0.10),
+                    modelAccent.opacity(0.10),
                     in: RoundedRectangle(
                         cornerRadius: 11,
                         style: .continuous
@@ -1192,7 +1201,7 @@ private struct LiveWorkspaceHeader: View {
                         } label: {
                             Image(systemName: "play.fill")
                         }
-                        .buttonStyle(LocalModelIconButtonStyle(kind: .start))
+                        .buttonStyle(LocalModelIconButtonStyle(kind: .start, accent: modelAccent))
                         .disabled(localModelStartDisabled)
                         .help(OfficeLocalization.string("모델 실행"))
                         .accessibilityIdentifier("localModelStart")
@@ -1235,7 +1244,7 @@ private struct LiveWorkspaceHeader: View {
                         .font(.system(size: 15, weight: .medium))
                         .frame(width: 30, height: 30)
                 }
-                .buttonStyle(OfficeGameButtonStyle(isSelected: conversationLayout.state.isSplit, cornerRadius: 10))
+                .buttonStyle(OfficeGameButtonStyle(accent: modelAccent, isSelected: conversationLayout.state.isSplit, cornerRadius: 10, foregroundColor: modelAccent))
                 .help(OfficeLocalization.string(conversationLayout.state.isSplit ? "대화 분할 해제" : "대화 좌우 분할"))
                 .accessibilityLabel(OfficeLocalization.string(conversationLayout.state.isSplit ? "대화 분할 해제" : "대화 좌우 분할"))
                 .accessibilityIdentifier("conversationSplitToggle")
@@ -1262,7 +1271,7 @@ private struct LiveWorkspaceHeader: View {
 
     private var liveBadgeColor: Color {
         director.isRealtimeConnected
-            ? LocalModelStateTint.ready
+            ? modelAccent
             : LocalModelStateTint.busy
     }
 
@@ -1557,7 +1566,7 @@ private struct LiveWorkspaceCommandBar: View {
                             )
                             .font(.system(size: 11, weight: .semibold))
                         }
-                        .officeGameTool(accent: DashboardPalette.providerAccent(for: character.backend))
+                        .buttonStyle(.plain)
                         .foregroundStyle(
                             DashboardPalette.providerAccent(
                                 for: character.backend
@@ -1574,9 +1583,9 @@ private struct LiveWorkspaceCommandBar: View {
                             OfficeLocalization.string("설정"),
                             systemImage: "gearshape"
                         )
-                            .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold))
                     }
-                    .officeGameTool(accent: DashboardPalette.providerAccent(for: character.backend))
+                    .buttonStyle(.plain)
                     .foregroundStyle(
                         DashboardPalette.providerAccent(
                             for: character.backend
@@ -2512,7 +2521,7 @@ private struct ContextCompactionControls: View {
                     .font(.system(size: 11, weight: .semibold))
                 }
             }
-            .officeGameTool()
+            .buttonStyle(.plain)
             .foregroundStyle(accent)
             .disabled(!availability.canRequestCompaction)
             .accessibilityLabel(OfficeLocalization.string("컨텍스트 지금 압축"))

@@ -3,7 +3,7 @@ import SwiftUI
 /// Shared game-card vocabulary. Large reading surfaces stay quiet; interactive
 /// controls and character cards use progressively stronger model-colored light.
 enum OfficeGameEmphasis: CaseIterable {
-    case panel, control, hero, transcript
+    case panel, control, hero, transcript, conversation
 }
 
 struct OfficeGamePalette {
@@ -32,6 +32,7 @@ struct OfficeGamePalette {
         case .control: isDark ? (highlighted ? 0.34 : 0.14) : (highlighted ? 0.17 : 0.06)
         case .panel: isDark ? 0.065 : 0.025
         case .transcript: isDark ? 0.18 : 0.10
+        case .conversation: 0
         }
     }
 }
@@ -43,9 +44,25 @@ struct OfficeGameSurface: View {
     var cornerRadius: CGFloat = 14
     @Environment(\.colorScheme) private var colorScheme
 
+    @ViewBuilder
     var body: some View {
+        if emphasis == .conversation {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(colorScheme == .dark ? OfficeGamePalette(isDark: true).base : .white)
+                .overlay {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(colorScheme == .dark ? 0.10 : 0.06), lineWidth: 1)
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        } else {
+            decoratedSurface
+        }
+    }
+
+    private var decoratedSurface: some View {
         let palette = OfficeGamePalette(isDark: colorScheme == .dark)
-        ZStack {
+        return ZStack {
             palette.base
             LinearGradient(
                 colors: [accent.opacity(palette.tintOpacity(for: emphasis, highlighted: highlighted)),
@@ -94,6 +111,7 @@ struct OfficeGameButtonStyle: ButtonStyle {
     var horizontalPadding: CGFloat = 0
     /// Dense transcript tools must not multiply glow/shadow layers while scrolling.
     var compact = false
+    var foregroundColor: Color? = nil
     @State private var isHovered = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isEnabled) private var isEnabled
@@ -114,7 +132,7 @@ struct OfficeGameButtonStyle: ButtonStyle {
             .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: highlighted)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.10), value: configuration.isPressed)
             .opacity(isEnabled ? 1 : 0.5)
-            .onHover { isHovered = $0 }
+            .officeHover { isHovered = $0 }
     }
 
     @ViewBuilder
@@ -124,12 +142,83 @@ struct OfficeGameButtonStyle: ButtonStyle {
             configuration.label
         } else {
             configuration.label
-                .foregroundStyle(OfficeGamePalette(isDark: colorScheme == .dark).foreground)
+                .foregroundStyle(foregroundColor ?? OfficeGamePalette(isDark: colorScheme == .dark).foreground)
+        }
+    }
+}
+
+private struct OfficeToolEmphasisKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+private struct OfficeHoverEffectsEnabledKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    var officeHoverEffectsEnabled: Bool {
+        get { self[OfficeHoverEffectsEnabledKey.self] }
+        set { self[OfficeHoverEffectsEnabledKey.self] = newValue }
+    }
+
+    var officeToolEmphasized: Bool {
+        get { self[OfficeToolEmphasisKey.self] }
+        set { self[OfficeToolEmphasisKey.self] = newValue }
+    }
+}
+
+/// Text and icon actions stay unboxed. Hover changes their stroke weight only.
+struct OfficeTextToolStyle: ButtonStyle {
+    @State private var isHovered = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .environment(\.officeToolEmphasized, isEnabled && (isHovered || configuration.isPressed))
+            .contentShape(Rectangle())
+            .opacity(isEnabled ? 1 : 0.5)
+            .officeHover { isHovered = $0 }
+    }
+}
+
+private struct OfficeToolFont: ViewModifier {
+    let size: CGFloat
+    let weight: Font.Weight
+    @Environment(\.officeToolEmphasized) private var isEmphasized
+
+    func body(content: Content) -> some View {
+        content.font(.system(size: size, weight: isEmphasized ? .heavy : weight))
+    }
+}
+
+private struct OfficeHoverEffect: ViewModifier {
+    let action: (Bool) -> Void
+    @Environment(\.officeHoverEffectsEnabled) private var isEnabled
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.onHover(perform: action)
+        } else {
+            content
         }
     }
 }
 
 extension View {
+    /// Conversation surfaces do not install decorative hover tracking.
+    func officeHover(perform action: @escaping (Bool) -> Void) -> some View {
+        modifier(OfficeHoverEffect(action: action))
+    }
+
+    func officeTextTool() -> some View {
+        buttonStyle(OfficeTextToolStyle())
+    }
+
+    func officeToolFont(size: CGFloat, weight: Font.Weight = .semibold) -> some View {
+        modifier(OfficeToolFont(size: size, weight: weight))
+    }
+
     /// Small actions use the same material without a halo or added layout padding.
     func officeGameTool(accent: Color = DashboardPalette.accent, selected: Bool = false) -> some View {
         buttonStyle(OfficeGameButtonStyle(accent: accent, isSelected: selected,

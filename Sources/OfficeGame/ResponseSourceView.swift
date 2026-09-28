@@ -86,7 +86,7 @@ struct ResponseSourceList: View {
                     )
                     .font(.system(size: 9.5, weight: .semibold))
                 }
-                .officeGameTool()
+                .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
             }
         }
@@ -134,6 +134,7 @@ private struct ResponseSourceRow: View {
                     Link(destination: webURL) {
                         sourceLocatorText
                     }
+                    .buttonStyle(.plain)
                     .accessibilityIdentifier("responseSource-\(source.id)")
                 } else {
                     sourceLocatorText

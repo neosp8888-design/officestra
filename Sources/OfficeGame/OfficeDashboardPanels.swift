@@ -1696,6 +1696,8 @@ private struct HostedLiveWorkspaceFeed: View {
             presentationStore
         )
         .environment(\.locale, OfficeLocalization.locale)
+        // NSHostingView roots do not inherit the workspace's SwiftUI environment.
+        .environment(\.officeHoverEffectsEnabled, false)
         // 긴 대화 전체의 Text에 SelectionOverlay가 붙으면 스크롤 중
         // AttributeGraph 레이아웃이 끝나지 않을 수 있다. 피드 경계에서는
         // 선택을 끄고, 질문·응답 카드별로 고정된 선택 영역을 제공한다.
@@ -4465,7 +4467,7 @@ struct LiveTurnPromptBlock: View {
         // 채워 짧은 질문에도 말풍선이 최대 폭까지 벌어진다.
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .officeGameSurface(emphasis: .control, cornerRadius: 13)
+        .officeGameSurface(emphasis: .conversation, cornerRadius: 13)
     }
 
     private var footer: some View {
@@ -4483,12 +4485,12 @@ struct LiveTurnPromptBlock: View {
                     didCopy ? OfficeLocalization.string("복사함") : OfficeLocalization.string("복사"),
                     systemImage: didCopy ? "checkmark" : "doc.on.doc"
                 )
-                .font(.system(size: 10, weight: .semibold))
+                .officeToolFont(size: 10)
                 .foregroundStyle(
                     didCopy ? DashboardPalette.accent : Color.secondary
                 )
             }
-            .officeGameTool()
+            .officeTextTool()
             .accessibilityLabel(OfficeLocalization.string("질문 복사"))
             .help(OfficeLocalization.string("질문 복사"))
         }
@@ -4540,6 +4542,7 @@ private struct LiveTurnCard: View {
                 if !promptSuggestions.isEmpty {
                     AgentPromptSuggestionList(
                         director: director,
+                        backend: effectiveBackend,
                         character: OfficeCharacter(
                             rawValue: turn.characterId
                         ),
@@ -4616,8 +4619,7 @@ private struct LiveTurnCard: View {
                 value: turn.response.isEmpty
             )
             .padding(14)
-            .officeGameSurface(accent: DashboardPalette.providerAccent(for: effectiveBackend),
-                emphasis: effectiveBackend == .codex ? .transcript : .panel, cornerRadius: 17)
+            .officeGameSurface(emphasis: .conversation, cornerRadius: 17)
         }
         .conversationTextSelectionRegion("live-turn-\(turn.id)")
     }
@@ -4815,8 +4817,13 @@ private struct LiveTurnCard: View {
 
 private struct AgentPromptSuggestionList: View {
     @ObservedObject var director: AgentDirector
+    let backend: AgentBackend
     let character: OfficeCharacter?
     let suggestions: [String]
+
+    private var modelAccent: Color {
+        DashboardPalette.providerAccent(for: backend)
+    }
 
     private var isSending: Bool {
         guard let character else {
@@ -4829,7 +4836,7 @@ private struct AgentPromptSuggestionList: View {
         VStack(alignment: .leading, spacing: 8) {
             Label(OfficeLocalization.string("다음 질문 추천"), systemImage: "sparkles")
                 .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(DashboardPalette.accent)
+                .foregroundStyle(modelAccent)
 
             ForEach(Array(suggestions.enumerated()), id: \.offset) { index, text in
                 if let character {
@@ -4838,7 +4845,7 @@ private struct AgentPromptSuggestionList: View {
                     } label: {
                         suggestionRow(text)
                     }
-                    .officeGameTool()
+                    .buttonStyle(.plain)
                     .disabled(isSending)
                     .opacity(isSending ? 0.45 : 1)
                     .help(OfficeLocalization.string("눌러서 이 질문 보내기"))
@@ -4856,12 +4863,12 @@ private struct AgentPromptSuggestionList: View {
         .padding(.horizontal, 11)
         .padding(.vertical, 10)
         .background(
-            DashboardPalette.accent.opacity(0.055),
+            modelAccent.opacity(0.055),
             in: RoundedRectangle(cornerRadius: 11, style: .continuous)
         )
         .overlay {
             RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .stroke(DashboardPalette.accent.opacity(0.16))
+                .stroke(modelAccent.opacity(0.16))
         }
     }
 
@@ -4869,7 +4876,7 @@ private struct AgentPromptSuggestionList: View {
         HStack(alignment: .top, spacing: 7) {
             Image(systemName: "arrow.turn.down.right")
                 .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(modelAccent)
                 .padding(.top, 3)
 
             Text(text)
@@ -5606,7 +5613,7 @@ struct CharacterBadge: View {
                     )
             }
             .buttonStyle(CharacterProfileBadgeButtonStyle())
-            .onHover { hovered in
+            .officeHover { hovered in
                 if reduceMotion {
                     isHovered = hovered
                 } else {
@@ -5806,11 +5813,12 @@ enum DashboardPalette {
 }
 
 private struct OfficePanelStyle: ViewModifier {
+    var emphasis: OfficeGameEmphasis = .panel
     @Environment(\.colorScheme) private var colorScheme
 
     func body(content: Content) -> some View {
         content
-            .officeGameSurface(cornerRadius: 20)
+            .officeGameSurface(emphasis: emphasis, cornerRadius: 20)
             .shadow(
                 color: .black.opacity(
                     colorScheme == .dark ? 0.28 : 0.075
@@ -5822,7 +5830,7 @@ private struct OfficePanelStyle: ViewModifier {
 }
 
 extension View {
-    func officePanelStyle() -> some View {
-        modifier(OfficePanelStyle())
+    func officePanelStyle(emphasis: OfficeGameEmphasis = .panel) -> some View {
+        modifier(OfficePanelStyle(emphasis: emphasis))
     }
 }

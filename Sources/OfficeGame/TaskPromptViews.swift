@@ -42,7 +42,6 @@ struct TaskPromptAttachmentList: View {
                         Text(attachment.name)
                             .font(.system(size: 10.5, weight: .semibold))
                             .foregroundStyle(DashboardPalette.accent)
-                            .underline()
                             .lineLimit(1)
 
                         Image(systemName: "arrow.up.right.square")
@@ -53,7 +52,7 @@ struct TaskPromptAttachmentList: View {
                     }
                     .contentShape(Rectangle())
                     }
-                    .officeGameTool()
+                    .buttonStyle(.plain)
                     .help(
                         OfficeLocalization.format(
                             "%@\nFinder에서 보기",
@@ -125,7 +124,7 @@ struct TaskPromptAttachmentSummary: View {
                         }
                     }
                 }
-                .officeGameTool()
+                .buttonStyle(.plain)
                 .help(
                     OfficeLocalization.format(
                         "%@\nFinder에서 보기",

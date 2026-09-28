@@ -113,6 +113,7 @@ private struct ConversationMarkdownContent: View, Equatable {
 
         content
             .frame(maxWidth: .infinity, alignment: .leading)
+            .buttonStyle(.plain)
     }
 }
 
@@ -568,13 +569,13 @@ private struct ConversationChangedFilesView: View {
 
                 Button(action: copyFiles) {
                     Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 10.5, weight: .semibold))
+                        .officeToolFont(size: 10.5)
                         .foregroundStyle(
                             copied ? Color.accentColor : Color.secondary
                         )
                         .frame(width: 24, height: 24)
                 }
-                .buttonStyle(.plain)
+                .officeTextTool()
                 .help(
                     copied
                         ? OfficeLocalization.string("파일 목록 복사됨")
@@ -609,10 +610,6 @@ private struct ConversationChangedFilesView: View {
             Color.primary.opacity(0.035),
             in: RoundedRectangle(cornerRadius: 10, style: .continuous)
         )
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color.primary.opacity(0.07), lineWidth: 1)
-        }
         .onDisappear {
             copyResetTask?.cancel()
         }

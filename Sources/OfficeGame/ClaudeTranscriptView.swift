@@ -737,14 +737,14 @@ private struct ClaudeEditRunView: View {
                     copySummary()
                 } label: {
                     Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 11, weight: .semibold))
+                        .officeToolFont(size: 11)
                         .foregroundStyle(
                             copied
                                 ? ClaudePalette.accent(for: backend)
                                 : Color.secondary
                         )
                 }
-                .buttonStyle(.plain)
+                .officeTextTool()
                 .help(
                     copied
                         ? OfficeLocalization.string("편집 목록 복사됨")

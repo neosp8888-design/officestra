@@ -224,7 +224,7 @@ struct TerminalFeedbackToast: View {
             toggleFeedback(selection)
         } label: {
             Image(systemName: turn.feedback == selection ? filled : outline)
-                .font(.system(size: 11.5, weight: .semibold))
+                .officeToolFont(size: 11.5)
                 .foregroundStyle(
                     turn.feedback == selection ? color : Color.secondary
                 )
@@ -232,7 +232,7 @@ struct TerminalFeedbackToast: View {
                 .frame(width: 18, height: 18)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .officeTextTool()
         .disabled(isUpdatingFeedback)
         .accessibilityLabel(OfficeLocalization.string(label))
         .accessibilityIdentifier(identifier)

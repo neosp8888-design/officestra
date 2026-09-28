@@ -94,7 +94,7 @@ struct ConversationCodeBlockView: View {
                         ? "checkmark"
                         : "doc.on.doc"
                 )
-                .font(.system(size: 11, weight: .medium))
+                .officeToolFont(size: 11, weight: .medium)
                 .foregroundStyle(
                     didCopy
                         ? ConversationCodePalette.success
@@ -102,7 +102,7 @@ struct ConversationCodeBlockView: View {
                 )
                 .contentTransition(.symbolEffect(.replace))
             }
-            .officeGameTool()
+            .officeTextTool()
             .help(OfficeLocalization.string("코드 복사"))
             .accessibilityLabel(OfficeLocalization.string("코드 복사"))
             .accessibilityIdentifier("conversationCodeBlockCopyButton")

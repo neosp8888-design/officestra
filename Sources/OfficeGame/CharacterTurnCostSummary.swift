@@ -164,7 +164,7 @@ struct CharacterTurnCostFooter: View {
         .padding(.vertical, 6)
         .contentShape(Rectangle())
         }
-        .officeGameTool()
+        .buttonStyle(.plain)
         .disabled(selection.selectedCharacterID == nil)
         .accessibilityLabel(OfficeLocalization.string("직원 평가 상세 열기"))
         .accessibilityIdentifier("characterAverageTurnCost")

@@ -63,6 +63,7 @@ struct ReplyRoutingControl: View {
 
     var body: some View {
         if let source = selection.selectedCharacterID {
+            let modelAccent = DashboardPalette.providerAccent(for: director.characters.first { $0.id == source }?.backend ?? .codex)
             let recipients = director.replyRecipients[source] ?? []
             let paused = director.pausedReplyRoutes.contains(source)
             HStack(spacing: 4) {
@@ -84,7 +85,7 @@ struct ReplyRoutingControl: View {
                     .font(.system(size: 11, weight: .semibold))
                     .padding(.horizontal, 9).frame(height: 30)
                 }
-                .buttonStyle(OfficeGameButtonStyle(isSelected: isPresented || !recipients.isEmpty, cornerRadius: 10))
+                .buttonStyle(OfficeGameButtonStyle(accent: modelAccent, isSelected: isPresented || !recipients.isEmpty, cornerRadius: 10, foregroundColor: paused ? .secondary : modelAccent))
                 .accessibilityLabel(OfficeLocalization.string("자동 전달 대상 설정"))
                 .help(OfficeLocalization.string("입력창에서 @로 선택하거나 직원을 끌어 넣으세요. 선택은 계속 유지됩니다."))
                 .popover(isPresented: $isPresented, arrowEdge: .bottom) {
@@ -128,12 +129,12 @@ struct ReplyRoutingControl: View {
                         Image(systemName: paused ? "play.fill" : "pause.fill")
                             .font(.system(size: 11)).frame(width: 28, height: 30)
                     }
-                    .buttonStyle(OfficeGameButtonStyle(isSelected: paused, cornerRadius: 10))
+                    .buttonStyle(OfficeGameButtonStyle(accent: modelAccent, isSelected: paused, cornerRadius: 10, foregroundColor: paused ? .secondary : modelAccent))
                     .help(paused ? OfficeLocalization.string("자동 전달 재개") : OfficeLocalization.string("자동 전달 일시정지"))
                     .accessibilityLabel(paused ? OfficeLocalization.string("자동 전달 재개") : OfficeLocalization.string("자동 전달 일시정지"))
                 }
             }
-            .foregroundStyle(paused ? Color.secondary : DashboardPalette.accent)
+            .foregroundStyle(paused ? Color.secondary : modelAccent)
         }
     }
 

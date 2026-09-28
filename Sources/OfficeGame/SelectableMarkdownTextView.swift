@@ -372,7 +372,7 @@ final class SelectableMarkdownDocumentView: NSView, NSTextViewDelegate {
         )
         textView.linkTextAttributes = [
             .foregroundColor: NSColor.systemBlue,
-            .underlineStyle: NSUnderlineStyle.single.rawValue,
+            .underlineStyle: 0,
         ]
         textView.delegate = self
         textView.setAccessibilityIdentifier(
@@ -1528,7 +1528,7 @@ enum SelectableMarkdownAttributedRenderer {
         if let link {
             attributes[.link] = link
             attributes[.foregroundColor] = NSColor.systemBlue
-            attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+            attributes[.underlineStyle] = 0
         }
         if imageURL != nil {
             attributes[.foregroundColor] = NSColor.secondaryLabelColor

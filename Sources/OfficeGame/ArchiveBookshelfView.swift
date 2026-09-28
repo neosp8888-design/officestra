@@ -278,6 +278,7 @@ struct ArchiveOpenBook: View {
         // 공용 region의 조건 분기를 쓰면 커서 출입마다 두 ScrollView와
         // 본문·표·코드 뷰가 재생성된다. 선택을 유지해 본문과 스크롤 위치를 보존한다.
         .textSelection(.enabled)
+        .environment(\.officeHoverEffectsEnabled, false)
         .confirmationDialog(
             OfficeLocalization.string("대화 삭제"),
             isPresented: $showsDeleteConfirmation,
@@ -687,15 +688,11 @@ struct ArchiveOpenBook: View {
                     )
                 }
             }
-            .font(.system(size: 8.5, weight: .bold))
+            .officeToolFont(size: 8.5, weight: .bold)
             .padding(.horizontal, compact ? 4 : 7)
             .frame(height: 22)
-            .background(
-                Color.primary.opacity(0.05),
-                in: Capsule()
-            )
         }
-        .buttonStyle(.plain)
+        .officeTextTool()
         .accessibilityLabel(OfficeLocalization.string(label))
         .help(OfficeLocalization.string(label))
     }

@@ -36,7 +36,7 @@ struct ResponseMessageFooter: View {
                                 ? "hand.thumbsdown.fill"
                                 : "hand.thumbsdown"
                         )
-                        .font(.system(size: 11.5, weight: .semibold))
+                        .officeToolFont(size: 11.5)
                         .foregroundStyle(
                             feedback == .disliked
                                 ? Color.gray
@@ -46,7 +46,7 @@ struct ResponseMessageFooter: View {
                         .frame(width: 18, height: 18)
                         .contentShape(Rectangle())
                     }
-                    .officeGameTool()
+                    .officeTextTool()
                     .disabled(isUpdatingFeedback)
                     .accessibilityLabel(
                         feedback == .disliked
@@ -65,7 +65,7 @@ struct ResponseMessageFooter: View {
                                 ? "heart.fill"
                                 : "heart"
                         )
-                        .font(.system(size: 11.5, weight: .semibold))
+                        .officeToolFont(size: 11.5)
                         .foregroundStyle(
                             feedback == .liked ? Color.red : Color.secondary
                         )
@@ -73,7 +73,7 @@ struct ResponseMessageFooter: View {
                         .frame(width: 18, height: 18)
                         .contentShape(Rectangle())
                     }
-                    .officeGameTool()
+                    .officeTextTool()
                     .disabled(isUpdatingFeedback)
                     .accessibilityLabel(
                         feedback == .liked
@@ -87,7 +87,7 @@ struct ResponseMessageFooter: View {
 
                 Button(action: copy) {
                     Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 11, weight: .semibold))
+                        .officeToolFont(size: 11)
                         .foregroundStyle(
                             copied ? accentColor : Color.secondary
                         )
@@ -95,7 +95,7 @@ struct ResponseMessageFooter: View {
                         .frame(width: 18, height: 18)
                         .contentShape(Rectangle())
                 }
-                .officeGameTool()
+                .officeTextTool()
                 .accessibilityLabel(
                     copied
                         ? OfficeLocalization.string("복사됨")
