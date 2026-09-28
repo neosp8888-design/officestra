@@ -21,11 +21,11 @@ test('Claude flush retry reads delayed thinking/text and latest usage once per r
 test('Claude missing/rotated offset recovery filters time, session and sidechains',async t=>{
   const root=await mkdtemp(join(tmpdir(),'claude-scope-'));t.after(()=>rm(root,{recursive:true,force:true}));
   const path=join(root,'session.jsonl');
-  const row=(text,changes={})=>JSON.stringify({type:'assistant',sessionId:'session',timestamp:'2026-09-14T00:00:01Z',message:{id:text,content:[{type:'text',text}],usage:{input_tokens:10,output_tokens:2}},...changes})+'\n';
-  await writeFile(path,row('old',{timestamp:'2026-09-13T00:00:00Z'})+row('other',{sessionId:'other'})+row('side',{isSidechain:true})+row('no-time',{timestamp:null})+row('final'));
+  const row=(text,changes={})=>JSON.stringify({type:'assistant',sessionId:'session',timestamp:'2026-09-14T00:00:01Z',message:{id:text,model:'claude-opus-5-5',content:[{type:'text',text}],usage:{input_tokens:10,output_tokens:2}},...changes})+'\n';
+  await writeFile(path,row('old',{timestamp:'2026-09-13T00:00:00Z'})+row('other',{sessionId:'other'})+row('side',{isSidechain:true,message:{id:'side',model:'claude-haiku-4-5',content:[{type:'text',text:'side'}]}})+row('no-time',{timestamp:null})+row('final'));
   for(const offset of [null,999999]) {
     const result=await readClaudeTerminalTurn(path,{offset,sessionID:'session',startedAt:'2026-09-14T00:00:00Z',endedAt:'2026-09-14T00:00:02Z',finalResponse:'final'});
-    assert.equal(result.finalFound,true);assert.equal(result.usage.inputTokens,10);assert.deepEqual(result.activities,[]);
+    assert.equal(result.finalFound,true);assert.equal(result.usage.inputTokens,10);assert.equal(result.model,'claude-opus-5-5');assert.deepEqual(result.activities,[]);
   }
   assert.equal((await readClaudeTerminalTurn(path,{offset:null,sessionID:'session'})).usage,null);
 });

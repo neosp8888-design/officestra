@@ -1046,6 +1046,7 @@ export class TerminalSessionManager {
         response,
         endedAt,
         usage:transcript.usage,
+        resolvedModel:transcript.model,
         structured,
         initialGeneratedImages: state.initialGeneratedImages,
         reportedCostUsd: this.settleClaudeTurnCost(state),

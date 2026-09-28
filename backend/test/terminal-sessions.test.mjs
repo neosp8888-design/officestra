@@ -159,7 +159,7 @@ test("Claude 시작 이후 활동과 명시적으로 제출한 근거가 같은 
     const spec = await manager.open("boss");
     assert.equal(spec.env.OFFICESTRA_RESULT_PATH, manager.sessions.get("boss").structuredResultPath);
     await manager.handleEvent("boss", { source: "claude", payload: { hook_event_name: "UserPromptSubmit", session_id: "claude-session", prompt: "질문", transcript_path: path } });
-    await appendFile(path, JSON.stringify({ type: "assistant", sessionId: "claude-session", message: { id: "one", usage:{input_tokens:30,output_tokens:4}, content: [{ type: "text", text: "확인 중" }, { type: "thinking", thinking: "공개 요약" }] } }) + "\n");
+    await appendFile(path, JSON.stringify({ type: "assistant", sessionId: "claude-session", message: { id: "one", model: "claude-opus-5-5", usage:{input_tokens:30,output_tokens:4}, content: [{ type: "text", text: "확인 중" }, { type: "thinking", thinking: "공개 요약" }] } }) + "\n");
     submitStructuredResponseSource(spec.env.OFFICESTRA_RESULT_PATH, { kind: "file", title: "근거", locator: "source.mjs" });
     await manager.handleEvent("boss", { source: "claude", payload: { hook_event_name: "Stop", session_id: "claude-session", last_assistant_message: "완료", transcript_path: path } });
     assert.deepEqual(runtime.completed[0].activities.map((a) => a.kind).sort(), ["message", "thinking"]);
@@ -167,6 +167,7 @@ test("Claude 시작 이후 활동과 명시적으로 제출한 근거가 같은 
     assert.equal(runtime.completed[0].response, "완료");
     assert.equal(runtime.completed[0].usage.inputTokens,30);
     assert.equal(runtime.completed[0].usage.outputTokens,4);
+    assert.equal(runtime.completed[0].resolvedModel,"claude-opus-5-5");
     await manager.handleEvent("boss", { source: "claude", payload: { hook_event_name: "UserPromptSubmit", session_id: "claude-session", prompt: "다음 질문", transcript_path: path } });
     await manager.handleEvent("boss", { source: "claude", payload: { hook_event_name: "Stop", session_id: "claude-session", last_assistant_message: "다음 답변", transcript_path: path } });
     assert.deepEqual(runtime.completed[1].activities, []);

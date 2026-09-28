@@ -1835,6 +1835,7 @@ export class AgentRuntime {
     response,
     endedAt = new Date(),
     usage = null,
+    resolvedModel = null,
     initialGeneratedImages = new Set(),
     structured = null,
     reportedCostUsd = null,
@@ -1953,6 +1954,7 @@ export class AgentRuntime {
         });
       }
     }
+    if (resolvedModel) await this.recordResolvedModel(state, resolvedModel);
     state.usage ??= await this.terminalTurnUsage(state, row.startedAt);
     if (reportedCostUsd !== null) {
       state.usage = {

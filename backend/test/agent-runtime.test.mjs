@@ -5828,6 +5828,32 @@ test("터미널 턴이 사용량을 이미 받았으면 기록에서 다시 읽�
   assert.deepEqual(captured.usage, { inputTokens: 10, outputTokens: 2 });
 });
 
+test("Claude 터미널 턴은 사용량이 이미 있어도 실제 모델 ID를 저장한다", async () => {
+  const runtime = terminalTurnRuntime();
+  const writes = [];
+  const originalQuery = runtime.pool.query;
+  runtime.pool.query = async (sql, values) => {
+    if (sql.includes("UPDATE turns SET resolved_model")) {
+      writes.push(values);
+      return { rowCount: 1 };
+    }
+    return originalQuery(sql, values);
+  };
+  let captured = null;
+  runtime.complete = async (state) => { captured = state; };
+
+  await runtime.completeTerminalTurn({
+    characterID: "left-man",
+    turnID: "turn-1",
+    response: "완료했습니다.",
+    usage: { inputTokens: 10, outputTokens: 2 },
+    resolvedModel: "claude-opus-5-5",
+  });
+
+  assert.deepEqual(writes, [["turn-1", "claude-opus-5-5"]]);
+  assert.equal(captured.resolvedModel, "claude-opus-5-5");
+});
+
 test("사용량 없이 끝난 터미널 턴은 CLI 기록에서 사용량을 채운다", async () => {
   const runtime = terminalTurnRuntime();
   const windows = [];

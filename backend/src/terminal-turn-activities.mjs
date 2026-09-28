@@ -2,7 +2,7 @@
 // 원시 추론/암호화 내용, 도구 응답 전문, 시스템 지침은 저장하지 않는다.
 import { createReadStream, statSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { decodeAgentResponse, parseAgentEvent, claudeMessageUsage, claudeSessionUsageKey } from "./agent-event-parser.mjs";
+import { decodeAgentResponse, parseAgentEvent, claudeMessageModel, claudeMessageUsage, claudeSessionUsageKey } from "./agent-event-parser.mjs";
 import { addUsage } from "./terminal-usage.mjs";
 
 const MAX_ACTIVITIES = 500;
@@ -129,15 +129,15 @@ export async function readClaudeTerminalActivities(path, { offset = 0, sessionID
 
 export async function readClaudeTerminalTurn(path, {offset=0,sessionID,workdir,finalResponse,startedAt,endedAt,requireTimestamps=false,inode}={}) {
   const collector = new TerminalActivityCollector(workdir);
-  const requests=new Map();let finalFound=false, needsEarlierBoundary=false, earlierBoundary=false;
-  if (!path) return {activities:[],usage:null,finalFound:false};
+  const requests=new Map();let finalFound=false, needsEarlierBoundary=false, earlierBoundary=false, model=null;
+  if (!path) return {activities:[],usage:null,model:null,finalFound:false};
   let stream;
   try {
     const stat=statSync(path);
     if(offset===null||offset>stat.size||(inode!==undefined&&inode!==stat.ino)) {
       // Missing start path or compaction replaced the file. Bound the recovery
       // scan and require matching session plus timestamps; never import history.
-      if(!startedAt||!endedAt||!sessionID)return {activities:[],usage:null,finalFound:false};
+      if(!startedAt||!endedAt||!sessionID)return {activities:[],usage:null,model:null,finalFound:false};
       offset=Math.max(0,stat.size-4*1024*1024);requireTimestamps=true;
       needsEarlierBoundary=offset>0;
     }
@@ -153,6 +153,7 @@ export async function readClaudeTerminalTurn(path, {offset=0,sessionID,workdir,f
       if (!["assistant", "user"].includes(record.type)) continue;
       collector.parsed(parseAgentEvent(line, "claude", workdir));
       if(record.type==='assistant') {
+        model=claudeMessageModel(record)??model;
         if(contentText(record.message?.content)===String(finalResponse??'').trim()&&String(finalResponse??'').trim())finalFound=true;
         const usage=claudeMessageUsage(record),key=claudeSessionUsageKey(record);
         // Streaming snapshots for one response share message.id. Keep the latest,
@@ -167,8 +168,8 @@ export async function readClaudeTerminalTurn(path, {offset=0,sessionID,workdir,f
     stream?.destroy();
   }
   let usage=null;for(const value of requests.values())usage=addUsage(usage,value);
-  if(needsEarlierBoundary&&!earlierBoundary)return {activities:[],usage:null,finalFound:false};
-  return {activities:collector.finish(finalResponse),usage,finalFound};
+  if(needsEarlierBoundary&&!earlierBoundary)return {activities:[],usage:null,model:null,finalFound:false};
+  return {activities:collector.finish(finalResponse),usage,model,finalFound};
 }
 
 export async function waitForClaudeTerminalTurn(path,options,{timeoutMs=1200,pollMs=100}={}) {
