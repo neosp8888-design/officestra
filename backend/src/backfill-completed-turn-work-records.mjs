@@ -160,7 +160,7 @@ export async function listMissingCompletedTurnWorkRecords(client, {
         turn.prompt,
         turn.ended_at::text AS "recordedAt",
         turn.backend,
-        turn.model,
+        COALESCE(turn.resolved_model, turn.model) AS model,
         turn.needs_input AS "needsInput",
         turn.response_source_warning AS "responseSourceWarning",
         session.character_id AS "characterID",

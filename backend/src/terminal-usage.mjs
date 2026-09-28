@@ -4,6 +4,7 @@ import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 
 import {
+  claudeMessageModel,
   claudeMessageUsage,
   claudeSessionUsageKey,
   codexRequestUsage,
@@ -95,13 +96,21 @@ async function sumTurnUsage(path, { startedAt, endedAt }, extract) {
 }
 
 export async function claudeTranscriptTurnUsage(path, window) {
-  return await sumTurnUsage(path, window, (object) => {
+  return (await claudeTranscriptTurn(path, window)).usage;
+}
+
+// 사용량을 더하는 같은 순회에서 턴 구간에 마지막으로 응답한 실제 모델 ID도 읽는다.
+export async function claudeTranscriptTurn(path, window) {
+  let model = null;
+  const usage = await sumTurnUsage(path, window, (object) => {
     if (object?.type !== "assistant") return null;
+    model = claudeMessageModel(object) ?? model;
     return {
       usage: claudeMessageUsage(object),
       key: claudeSessionUsageKey(object),
     };
   });
+  return { usage, model };
 }
 
 // Codex 턴의 종료 시각은 초 단위로 잘려 저장되므로, 마지막 token_count가

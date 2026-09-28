@@ -800,6 +800,7 @@ async function characterHistory(response, characterID) {
         t.cli_session_id AS "sessionId",
         t.backend AS "executionBackend",
         t.model AS "executionModel",
+        t.resolved_model AS "resolvedModel",
         ${LOCAL_TURN_EFFORT_SQL} AS "executionEffort",
         t.fast_mode AS "executionFastMode",
         t.origin,
@@ -887,6 +888,7 @@ async function globalHistory(response, url) {
         c.backend,
         t.backend AS "executionBackend",
         t.model AS "executionModel",
+        t.resolved_model AS "resolvedModel",
         ${LOCAL_TURN_EFFORT_SQL} AS "executionEffort",
         t.fast_mode AS "executionFastMode",
         t.origin,
@@ -1220,6 +1222,7 @@ async function queryTurnFeed({
               t.prompt,
               t.backend,
               t.model,
+              t.resolved_model,
               ${LOCAL_TURN_EFFORT_SQL},
               session.external_id,
               (
@@ -1268,6 +1271,7 @@ async function queryTurnFeed({
         c.backend AS "characterBackend",
         t.backend,
         t.model,
+        t.resolved_model AS "resolvedModel",
         ${LOCAL_TURN_EFFORT_SQL} AS effort,
         t.fast_mode AS "fastMode",
         t.origin,
@@ -1437,6 +1441,7 @@ async function queryArchiveFeed({ query, limit, offset }) {
             t.prompt,
             t.backend,
             t.model,
+            t.resolved_model,
             ${LOCAL_TURN_EFFORT_SQL},
             session.external_id,
             (
@@ -1465,7 +1470,7 @@ function withSessionContext(turn) {
     sessionContext: sessionContextUsage({
       backend: turn.backend ?? turn.characterBackend,
       sessionID: turn.externalSessionId,
-      model: turn.model,
+      model: turn.resolvedModel ?? turn.model,
       at: turn.endedAt ?? Date.now(),
       contextWindowOverride: turn.providerKind === 'local' ? turn.providerContextWindow : null,
     }),

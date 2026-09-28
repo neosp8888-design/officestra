@@ -468,6 +468,7 @@ function parseClaudeEvent(object, workdir) {
   if (object.type === "system" && object.subtype === "init") {
     return {
       sessionID: cleanText(object.session_id),
+      resolvedModel: cleanText(object.model),
     };
   }
 
@@ -549,6 +550,10 @@ function parseClaudeEvent(object, workdir) {
       .map((item) => String(item.text ?? ""))
       .join("");
     const result = {};
+    const resolvedModel = claudeMessageModel(object);
+    if (resolvedModel) {
+      result.resolvedModel = resolvedModel;
+    }
     if (activities.length > 0) {
       result.activities = activities;
     }
@@ -983,6 +988,19 @@ export function claudeMessageUsage(object) {
     return null;
   }
   return normalizedUsage(object.message?.usage, "claude");
+}
+
+// 응답 메시지에 기록된 실제 모델 ID를 읽는다. 하위 에이전트 응답과 CLI가
+// 스스로 만든 `<synthetic>` 메시지는 이 턴의 모델이 아니므로 건너뛴다.
+export function claudeMessageModel(object) {
+  if (
+    !object || typeof object !== "object" || Array.isArray(object) ||
+    object.isSidechain === true || cleanText(object.parent_tool_use_id)
+  ) {
+    return null;
+  }
+  const model = cleanText(object.message?.model);
+  return model && model !== "<synthetic>" ? model : null;
 }
 
 // Claude 세션 기록은 같은 응답을 여러 줄로 남기므로, 합산할 때 중복을 걸러낼

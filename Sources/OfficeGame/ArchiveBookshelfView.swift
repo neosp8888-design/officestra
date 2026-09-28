@@ -164,7 +164,7 @@ private struct ArchiveRecordTile: View {
         }
 
         var parts = [backend.title]
-        if let model = turn.model {
+        if let model = turn.displayModel {
             parts.append(backend.modelTitle(model))
         }
         if let effort = turn.effort {
@@ -617,7 +617,7 @@ struct ArchiveOpenBook: View {
     }
 
     private var modelTitle: String {
-        guard let backend = turn.backend, let model = turn.model else {
+        guard let backend = turn.backend, let model = turn.displayModel else {
             return OfficeLocalization.string("기록 없음")
         }
         return "\(backend.title) · \(backend.modelTitle(model))"

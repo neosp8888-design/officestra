@@ -1419,6 +1419,7 @@ struct HistoryTurn: Decodable, Identifiable, Sendable {
     let sources: [LiveFeedSource]?
     let executionBackend: AgentBackend?
     let executionModel: String?
+    var resolvedModel: String? = nil
     let executionEffort: String?
     let executionFastMode: Bool?
     let origin: String?
@@ -1431,6 +1432,10 @@ struct HistoryTurn: Decodable, Identifiable, Sendable {
     var responseSources: [LiveFeedSource] {
         sources ?? []
     }
+
+    var displayModel: String? {
+        resolvedModel ?? executionModel
+    }
 }
 
 struct GlobalHistoryTurn: Decodable, Identifiable, Sendable {
@@ -1441,6 +1446,7 @@ struct GlobalHistoryTurn: Decodable, Identifiable, Sendable {
     let backend: AgentBackend
     let executionBackend: AgentBackend?
     let executionModel: String?
+    var resolvedModel: String? = nil
     let executionEffort: String?
     let executionFastMode: Bool?
     let origin: String?
@@ -1456,6 +1462,10 @@ struct GlobalHistoryTurn: Decodable, Identifiable, Sendable {
 
     var responseSources: [LiveFeedSource] {
         sources ?? []
+    }
+
+    var displayModel: String? {
+        resolvedModel ?? executionModel
     }
 }
 
@@ -1779,6 +1789,8 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
     let characterBackend: AgentBackend
     let backend: AgentBackend?
     let model: String?
+    // CLI가 실제로 응답한 모델 ID다. 없으면 설정값(model)을 대신 보여 준다.
+    var resolvedModel: String? = nil
     let effort: String?
     let fastMode: Bool?
     let origin: String?
@@ -1808,6 +1820,7 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
         characterBackend: AgentBackend,
         backend: AgentBackend?,
         model: String?,
+        resolvedModel: String? = nil,
         effort: String?,
         fastMode: Bool?,
         origin: String? = nil,
@@ -1840,6 +1853,7 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
         self.characterBackend = characterBackend
         self.backend = backend
         self.model = model
+        self.resolvedModel = resolvedModel
         self.effort = effort
         self.fastMode = fastMode
         self.origin = origin
@@ -1871,6 +1885,10 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
         sources ?? []
     }
 
+    var displayModel: String? {
+        resolvedModel ?? model
+    }
+
     func replacingID(with id: String) -> LiveFeedTurn {
         LiveFeedTurn(
             id: id,
@@ -1879,6 +1897,7 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
             characterBackend: characterBackend,
             backend: backend,
             model: model,
+            resolvedModel: resolvedModel,
             effort: effort,
             fastMode: fastMode,
             origin: origin,
@@ -1917,6 +1936,7 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
             characterBackend: characterBackend,
             backend: backend,
             model: model,
+            resolvedModel: resolvedModel,
             effort: effort,
             fastMode: fastMode,
             origin: origin,

@@ -233,7 +233,7 @@ private struct TurnDisclosure: View {
                     Text(
                         agentExecutionSummary(
                             backend: turn.executionBackend,
-                            model: turn.executionModel,
+                            model: turn.displayModel,
                             effort: turn.executionEffort,
                             fastMode: turn.executionFastMode
                         )
@@ -609,7 +609,7 @@ private struct ArchiveTurnCard: View {
                         Text(
                             agentExecutionSummary(
                                 backend: turn.executionBackend,
-                                model: turn.executionModel,
+                                model: turn.displayModel,
                                 effort: turn.executionEffort,
                                 fastMode: turn.executionFastMode
                             )

@@ -58,7 +58,7 @@ import {
   antigravityStepReasonings,
 } from "./antigravity-reasoning.mjs";
 import {
-  claudeTranscriptTurnUsage,
+  claudeTranscriptTurn,
   codexRolloutTurnUsage,
 } from "./terminal-usage.mjs";
 import {
@@ -2020,12 +2020,14 @@ export class AgentRuntime {
           state.workdir,
           state.externalSessionID,
         );
-        return await claudeTranscriptTurnUsage(
+        const { usage, model } = await claudeTranscriptTurn(
           claudeSessionFileMatches(current, state.externalSessionID)
             ? current
             : findClaudeSessionPath(state.externalSessionID),
           window,
         );
+        await this.recordResolvedModel(state, model);
+        return usage;
       }
     } catch (error) {
       console.warn(
@@ -2534,6 +2536,9 @@ export class AgentRuntime {
     ) {
       await this.activateSession(state, event.sessionID);
     }
+    if (event.resolvedModel) {
+      await this.recordResolvedModel(state, event.resolvedModel);
+    }
     if (event.streamMessageID) {
       state.streamMessageID = event.streamMessageID;
       state.partialText = "";
@@ -2867,6 +2872,18 @@ export class AgentRuntime {
     }
   }
 
+  // CLI가 실제로 응답한 모델 ID를 턴에 남긴다. 요청값(model)은 재실행용으로 그대로 둔다.
+  async recordResolvedModel(state, resolvedModel) {
+    if (!resolvedModel || resolvedModel === state.resolvedModel) {
+      return;
+    }
+    state.resolvedModel = resolvedModel;
+    await this.pool.query(
+      "UPDATE turns SET resolved_model = $2 WHERE id = $1 AND resolved_model IS DISTINCT FROM $2",
+      [state.turnID, resolvedModel],
+    );
+  }
+
   async activateSession(state, externalSessionID) {
     const isNewSession = !state.externalSessionID;
     await this.withTransaction(async (client) => {
@@ -3183,7 +3200,7 @@ export class AgentRuntime {
     }
     const costUsd = state.character.localProfile ? null : estimateTurnTokenCost({
       backend: state.character.backend,
-      model: state.character.model,
+      model: state.resolvedModel ?? state.character.model,
       fastMode: state.character.fastMode,
       usage,
       pricedAt: state.usageStartedAt ?? new Date(),
@@ -3384,7 +3401,7 @@ export class AgentRuntime {
         prompt: state.recordPrompt ?? state.prompt,
         response: decoded.text,
         backend: state.character.backend,
-        model: state.character.model,
+        model: state.resolvedModel ?? state.character.model,
         needsInput: decoded.needsInput,
         responseSourceCount: storedResponseSourceCount,
         responseSourceWarning: sourceWarning,

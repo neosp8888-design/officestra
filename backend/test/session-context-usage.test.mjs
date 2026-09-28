@@ -69,7 +69,7 @@ test("Claude 기록은 입력과 캐시를 합쳐 컨텍스트 점유로 계산�
   );
 
   assert.equal(entry.usedTokens, 268_544);
-  assert.equal(entry.limitTokens, null);
+  assert.equal(entry.limitTokens, 1_000_000);
 });
 
 test("Claude 압축 경계는 압축 뒤 컨텍스트 점유를 반영한다", () => {
@@ -205,6 +205,50 @@ test("Claude 세션은 모델 기본 컨텍스트 한도를 사용한다", () =>
         claudeRoot: root,
       }),
       { usedTokens: 268_544, limitTokens: 1_000_000 },
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Claude 세션은 설정이 별칭이어도 기록된 모델 ID로 한도를 찾는다", () => {
+  const root = mkdtempSync(join(tmpdir(), "officellm-claude-alias-"));
+  try {
+    const project = join(root, "-Users-neo-office");
+    mkdirSync(project);
+    const sessionID = "dcff4a46-7a34-459a-baa8-8ee75956377f";
+    writeFileSync(
+      join(project, `${sessionID}.jsonl`),
+      [
+        claudeAssistantLine({
+          timestamp: "2026-09-27T10:00:00.000Z",
+          input: 3,
+          cacheRead: 120_000,
+          cacheWrite: 500,
+        }),
+        JSON.stringify({
+          type: "system",
+          subtype: "compact_boundary",
+          timestamp: "2026-09-27T11:00:00.000Z",
+          compact_metadata: { pre_tokens: 800_000, post_tokens: 40_000 },
+        }),
+      ].join("\n") + "\n",
+    );
+    const usage = (at) => sessionContextUsage({
+      backend: "claude",
+      sessionID,
+      model: "opus",
+      at,
+      claudeRoot: root,
+    });
+
+    assert.deepEqual(
+      usage("2026-09-27T10:30:00.000Z"),
+      { usedTokens: 120_503, limitTokens: 1_000_000 },
+    );
+    assert.deepEqual(
+      usage("2026-09-27T11:30:00.000Z"),
+      { usedTokens: 40_000, limitTokens: 1_000_000 },
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

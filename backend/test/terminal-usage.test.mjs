@@ -7,6 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  claudeTranscriptTurn,
   claudeTranscriptTurnUsage,
   codexRolloutTurnUsage,
 } from "../src/terminal-usage.mjs";
@@ -190,12 +191,45 @@ test("기록이 없거나 구간을 알 수 없으면 사용량 없이 넘어간
   }
 });
 
-function claudeLine(timestamp, id, usage) {
+test("Claude 기록에서 턴 구간에 본 대화가 마지막으로 응답한 모델 ID를 읽는다", async () => {
+  const root = mkdtempSync(join(tmpdir(), "officestra-terminal-model-"));
+  const path = join(root, "session.jsonl");
+  const usage = { input_tokens: 1, output_tokens: 1 };
+  try {
+    writeFileSync(path, [
+      claudeLine("2026-09-02T13:59:59.000Z", "msg_before", usage, {
+        model: "claude-sonnet-5",
+      }),
+      claudeLine("2026-09-02T14:00:10.000Z", "msg_1", usage, {
+        model: "claude-opus-5-5",
+      }),
+      // 하위 에이전트와 CLI가 만든 응답은 본 대화 모델이 아니다.
+      claudeLine("2026-09-02T14:00:20.000Z", "msg_2", usage, {
+        model: "claude-haiku-4-5-20251001", isSidechain: true,
+      }),
+      claudeLine("2026-09-02T14:00:30.000Z", "msg_3", usage, {
+        model: "<synthetic>",
+      }),
+    ].join("\n"), "utf8");
+
+    const turn = await claudeTranscriptTurn(path, { startedAt, endedAt });
+
+    assert.equal(turn.model, "claude-opus-5-5");
+    assert.deepEqual(await claudeTranscriptTurn(null, { startedAt }), {
+      usage: null, model: null,
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function claudeLine(timestamp, id, usage, { model, isSidechain } = {}) {
   return JSON.stringify({
     type: "assistant",
     timestamp,
     uuid: `${id}-${timestamp}`,
-    message: { id, usage },
+    ...(isSidechain ? { isSidechain } : {}),
+    message: { id, usage, ...(model ? { model } : {}) },
   });
 }
 

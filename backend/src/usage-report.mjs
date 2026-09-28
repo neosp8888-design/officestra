@@ -118,7 +118,7 @@ export function usageReportQuery(granularity) {
       SELECT
         turn.id,
         session.character_id,
-        turn.model,
+        COALESCE(turn.resolved_model, turn.model) AS model,
         turn.effort,
         date_trunc('${granularity}', turn.started_at AT TIME ZONE $2) AS bucket
       FROM turns AS turn

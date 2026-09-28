@@ -1563,3 +1563,27 @@ ${proposal}`);
     "위키 수정안 블록은 하나만 사용할 수 있습니다.",
   );
 });
+
+test("Claude 시작 이벤트와 본 대화 응답에서 실제 모델 ID를 읽는다", () => {
+  const init = parseAgentEvent(JSON.stringify({
+    type: "system",
+    subtype: "init",
+    session_id: "session-1",
+    model: "claude-opus-5-5",
+  }), "claude");
+  assert.equal(init.sessionID, "session-1");
+  assert.equal(init.resolvedModel, "claude-opus-5-5");
+
+  const assistant = (extra) => parseAgentEvent(JSON.stringify({
+    type: "assistant",
+    message: { model: "claude-sonnet-5", content: [{ type: "text", text: "확인" }] },
+    ...extra,
+  }), "claude");
+  assert.equal(assistant({}).resolvedModel, "claude-sonnet-5");
+  // 하위 에이전트 응답과 CLI가 만든 응답은 턴 모델로 쓰지 않는다.
+  assert.equal(assistant({ parent_tool_use_id: "tool-1" })?.resolvedModel, undefined);
+  assert.equal(parseAgentEvent(JSON.stringify({
+    type: "assistant",
+    message: { model: "<synthetic>", content: [{ type: "text", text: "중단" }] },
+  }), "claude")?.resolvedModel, undefined);
+});

@@ -115,13 +115,16 @@ export function sessionContextUsage({
 
 function latestEntry(entries, boundary) {
   let match = null;
+  let limitTokens = null;
   for (const entry of entries) {
     if (entry.at > boundary) {
       break;
     }
     match = entry;
+    // 압축 경계 줄에는 모델이 없으므로 직전에 기록된 한도를 이어 쓴다.
+    limitTokens = entry.limitTokens ?? limitTokens;
   }
-  return match;
+  return match && { ...match, limitTokens };
 }
 
 function transcriptEntries(kind, path, maxReadBytes) {
@@ -222,7 +225,12 @@ export function claudeContextEntry(line) {
   if (usedTokens <= 0 || !Number.isFinite(at)) {
     return null;
   }
-  return { at, usedTokens, limitTokens: null };
+  // 설정값은 `opus` 같은 별칭일 수 있어 실제 응답에 기록된 모델 ID로 한도를 찾는다.
+  return {
+    at,
+    usedTokens,
+    limitTokens: claudeContextWindow(record.message.model),
+  };
 }
 
 export function codexContextEntry(line) {

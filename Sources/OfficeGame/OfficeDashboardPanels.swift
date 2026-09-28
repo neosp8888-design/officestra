@@ -4669,7 +4669,7 @@ private struct LiveTurnCard: View {
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.secondary)
 
-                if let model = turn.model {
+                if let model = turn.displayModel {
                     Text(backend.modelTitle(model))
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.secondary)
