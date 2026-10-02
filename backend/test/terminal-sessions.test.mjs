@@ -87,9 +87,22 @@ test("터미널은 동적으로 발견된 모델 이름과 추론 레벨을 그�
   });
   assert.equal(
     antigravity[antigravity.indexOf("--model") + 1],
-    "gemini-future-pro",
+    "gemini-future-pro-low",
   );
-  assert.equal(antigravity[antigravity.indexOf("--effort") + 1], "low");
+  assert.equal(antigravity.includes("--effort"), false);
+});
+
+test("Antigravity Thinking 터미널은 고정 모델에 effort를 보내지 않는다", () => {
+  for (const effort of ["high", "default"]) {
+    const args = terminalArguments({
+      character: { ...baseCharacter, backend: "antigravity",
+        model: "claude-opus-4-6-thinking", effort, permission: "plan" },
+      previousSessionID: "opus-session", workdir: "/tmp/office",
+    });
+    assert.equal(args[args.indexOf("--model") + 1], "claude-opus-4-6-thinking");
+    assert.equal(args.includes("--effort"), false);
+    assert.equal(args[args.indexOf("--conversation") + 1], "opus-session");
+  }
 });
 
 test("열린 터미널은 두 번째 프로세스를 막고 진행 중 API 업무는 409다", async () => {
@@ -147,6 +160,47 @@ test("Claude UserPromptSubmit과 Stop 훅이 같은 터미널 턴을 생성·완
   assert.deepEqual(runtime.completed.map((turn) => turn.response), ["터미널 답변"]);
   assert.deepEqual(runtime.bound.map((entry) => entry.externalSessionID), ["claude-session"]);
   await manager.close("boss");
+});
+
+test("Claude terminal streams a newly created transcript and stops at the turn boundary", async t => {
+  const root = await mkdtemp(join(tmpdir(), "claude-terminal-live-"));
+  const path = join(root, "new-session.jsonl");
+  const runtime = fakeRuntime({ workdir: root });
+  const manager = new TerminalSessionManager({ runtime, broadcast() {} });
+  t.after(() => manager.close("boss"));
+  await manager.open("boss");
+  const payload = { session_id: "claude-session", transcript_path: path };
+  await manager.handleEvent("boss", { source: "claude", payload: {
+    ...payload, hook_event_name: "UserPromptSubmit", prompt: "질문",
+  } });
+  const state = manager.sessions.get("boss");
+  const watcher = state.progressWatcher;
+  await writeFile(path, JSON.stringify({ type: "assistant", sessionId: "claude-session", message: {
+    id: "progress", content: [{ type: "text", text: "파일 확인 중" },
+      { type: "tool_use", id: "read-1", name: "Read", input: { file_path: "/repo/file.txt" } }],
+  } }) + "\n");
+  await watcher.schedule();
+  assert.equal(runtime.completed.length, 0);
+  assert.ok(runtime.progress.some(a => a.text === "파일 확인 중"));
+  assert.ok(runtime.progress.some(a => a.eventKey === "terminal:read-1" && a.status === "running"));
+  await appendFile(path, [
+    { type: "user", sessionId: "claude-session", message: { content: [{ type: "tool_result", tool_use_id: "read-1", content: "private output" }] } },
+    { type: "assistant", sessionId: "claude-session", message: { id: "final", usage: { input_tokens: 3, output_tokens: 2 }, content: [{ type: "text", text: "완료" }] } },
+  ].map(record => JSON.stringify(record) + "\n").join(""));
+  await watcher.schedule();
+  assert.ok(runtime.progress.some(a => a.eventKey === "terminal:read-1" && a.status === "completed"));
+  assert.equal(runtime.progress.some(a => a.text.includes("private output")), false);
+  await manager.handleEvent("boss", { source: "claude", payload: {
+    ...payload, hook_event_name: "Stop", last_assistant_message: "완료",
+  } });
+  assert.equal(state.progressWatcher, null);
+  assert.equal(watcher.watcher, null);
+  assert.equal(runtime.completed[0].response, "완료");
+  assert.equal(runtime.completed[0].activities.some(a => a.text === "완료"), false);
+  const count = runtime.progress.length;
+  await appendFile(path, JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "종료 이후" }] } }) + "\n");
+  await watcher.schedule();
+  assert.equal(runtime.progress.length, count);
 });
 
 test("Claude 시작 이후 활동과 명시적으로 제출한 근거가 같은 완료 턴으로 전달된다", async () => {
@@ -754,6 +808,38 @@ test("Codex 터미널은 rollout의 시작과 질문을 보면 running 턴을 �
   await manager.close("boss");
 });
 
+test("Codex terminal publishes commentary and command state before notify, excluding foreign turns", async t => {
+  const {sessionsRoot,workdir,rollout}=await codexFixture();
+  const runtime=fakeRuntime({backend:"codex",externalSessionID:codexThreadID,workdir,executablePath:"/usr/bin/true"});
+  const manager=new TerminalSessionManager({runtime,broadcast(){},codexSessionsRoot:sessionsRoot});
+  t.after(()=>manager.close("boss"));
+  await manager.open("boss");
+  const state=manager.sessions.get("boss");
+  await state.watcher.sweep();
+  await appendFile(rollout,[
+    {type:"event_msg",payload:{type:"task_started",turn_id:codexTurnID,started_at:1_788_347_510}},
+    {type:"event_msg",payload:{type:"item_completed",turn_id:codexTurnID,item:{type:"UserMessage",content:[{type:"text",text:"질문"}]}}},
+    {type:"response_item",payload:{type:"message",role:"assistant",phase:"commentary",content:[{type:"output_text",text:"원인을 확인 중입니다"}]}},
+    {type:"response_item",payload:{type:"function_call",name:"exec_command",call_id:"live",arguments:JSON.stringify({cmd:"swift test"})}},
+  ].map(rolloutLine).join(""));
+  await state.watcher.sweep();
+  assert.equal(runtime.completed.length,0);
+  assert.deepEqual(runtime.progress.map(a=>[a.kind,a.status]),[["message","completed"],["command","running"]]);
+  const count=runtime.progress.length;
+  await state.watcher.sweep();
+  assert.equal(runtime.progress.length,count);
+  await appendFile(rollout,rolloutLine({type:"response_item",payload:{type:"function_call_output",call_id:"live",output:JSON.stringify({exit_code:0})}}));
+  await state.watcher.sweep();
+  assert.equal(runtime.progress.at(-1).status,"completed");
+  assert.equal(runtime.progress.at(-1).eventKey,"terminal:call:live");
+  await appendFile(rollout,[
+    {type:"turn_context",payload:{turn_id:"another-turn"}},
+    {type:"response_item",payload:{type:"message",role:"assistant",phase:"commentary",content:[{type:"output_text",text:"다른 턴"}]}},
+  ].map(rolloutLine).join(""));
+  await state.watcher.sweep();
+  assert.equal(runtime.progress.some(a=>a.text==="다른 턴"),false);
+});
+
 test("Codex notify가 워처보다 먼저 오면 기존 경로로 기록하고 늦은 sweep이 같은 턴을 다시 만들지 않는다", async () => {
   const { sessionsRoot, workdir, rollout } = await codexFixture();
   const runtime = fakeRuntime({
@@ -849,6 +935,7 @@ function fakeRuntime({
     pool: { query: async () => ({ rows: [] }) },
     begun: [],
     completed: [],
+    progress: [],
     interrupted: [],
     bound: [],
     registry: null,
@@ -874,6 +961,7 @@ function fakeRuntime({
       return turn;
     },
     async completeTerminalTurn(entry) { this.completed.push(entry); },
+    async addActivity(state, activity) { this.progress.push({ turnID: state.turnID, ...activity }); },
     async interruptTerminalTurn(characterID, turnID) {
       this.interrupted.push({ characterID, turnID });
       return true;
@@ -909,7 +997,7 @@ test('유휴 터미널 API는 같은 CLI 훅 접수 후에만 202 turnId를 반�
   const f = await dispatchFixture(t);
   const runtime = new AgentRuntime({ pool: {}, withTransaction: async () => {}, workdir: '/tmp/office', broadcast() {} });
   runtime.setTerminalSessionRegistry(f.manager);
-  const result = runtime.start({ characterID: 'boss', prompt: '답변해줘', senderCharacterID: 'right-man' });
+  const result = runtime.start({ characterID: 'boss', prompt: '답변해줘', senderCharacterID: 'right-man', requestSource: 'remote' });
   let settled = false; result.then(() => { settled = true; });
   await waitUntil(() => f.events.some(e => e.type === 'terminal.dispatch'));
   assert.equal(f.runtime.begun.length, 0);
@@ -919,6 +1007,7 @@ test('유휴 터미널 API는 같은 CLI 훅 접수 후에만 202 turnId를 반�
   assert.deepEqual(await result, { turnId: started.turnId, conversationId: 'conversation', status: 'running' });
   assert.equal(f.runtime.begun[0].prompt, '답변해줘');
   assert.equal(f.runtime.begun[0].senderCharacterID, 'right-man');
+  assert.equal(f.runtime.begun[0].requestSource, 'remote');
   assert.equal(f.manager.sessions.size, 1);
   await f.manager.handleEvent('boss', { source: 'claude', payload: { hook_event_name: 'Stop', last_assistant_message: '회신' } });
   assert.equal(f.runtime.completed[0].turnID, started.turnId);
@@ -979,7 +1068,7 @@ test('paste acknowledgement rejects changed bodies, extra text, mismatched IDs a
   for (const variant of ['changed', 'extra', 'id', 'unclaimed', 'codex', 'antigravity']) {
     await t.test(variant, async t => {
       const f = await dispatchFixture(t);
-      const result = f.manager.dispatch({ characterID: 'boss', prompt: '원문', senderCharacterID: 'left-woman' });
+      const result = f.manager.dispatch({ characterID: 'boss', prompt: '원문', senderCharacterID: 'left-woman', requestSource: 'remote' });
       const failure = assert.rejects(result, AgentBusyError);
       await waitUntil(()=>f.state.dispatch?.wire);
       const prompt = variant === 'unclaimed' ? f.state.dispatch.wire : f.control('claim').prompt;
@@ -989,6 +1078,7 @@ test('paste acknowledgement rejects changed bodies, extra text, mismatched IDs a
       assert.ok(f.state.dispatch);
       assert.equal(f.runtime.begun[0].prompt, wrapped);
       assert.equal(f.runtime.begun[0].senderCharacterID, null);
+      assert.equal(f.runtime.begun[0].requestSource, null);
       await f.manager.close('boss');
       await failure;
     });

@@ -16,11 +16,19 @@ const contentText = (content) => (Array.isArray(content) ? content : [])
   .filter((part) => ["text", "Text", "output_text", "summary_text"].includes(part?.type))
   .map((part) => part.text ?? "").join("\n").trim();
 
+export function isTerminalFinalMessage(activity, finalResponse) {
+  if (activity.kind !== "message" || !finalResponse) return false;
+  const finalText = decodeAgentResponse(finalResponse).text;
+  const text = decodeAgentResponse(activity.text).text;
+  return Boolean(finalText) && (text === finalText || text === clipped(finalText));
+}
+
 export class TerminalActivityCollector {
   constructor(workdir = null) {
     this.workdir = workdir;
     this.entries = new Map();
     this.omitted = 0;
+    this.revision = 0;
   }
 
   add(activity) {
@@ -31,13 +39,17 @@ export class TerminalActivityCollector {
     if (!text) return;
     if (!old && this.entries.size >= MAX_ACTIVITIES) {
       this.omitted += 1;
+      this.revision += 1;
       return;
     }
+    const status = ["running", "failed"].includes(activity.status) ? activity.status : "completed";
+    if (old?.kind === activity.kind && old.text === text && old.status === status) return;
+    this.revision += 1;
     this.entries.set(key, {
       kind: activity.kind,
       text,
       eventKey: key,
-      status: activity.status === "failed" ? "failed" : "completed",
+      status,
     });
   }
 
@@ -64,10 +76,14 @@ export class TerminalActivityCollector {
         const name = [item.namespace, item.name].filter(Boolean).join(".");
         const command = /(?:exec_command|shell_command|shell)$/.test(name)
           ? args?.cmd ?? args?.command : null;
+        const parsedCommand = command ? parseAgentEvent(JSON.stringify({
+          type: "item.started", item: { type: "command_execution", id: item.call_id, command: String(command) },
+        }), "codex", this.workdir)?.activity : null;
         this.add({
           kind: command ? "command" : "tool",
-          text: command ? String(command) : `도구 · ${name || "실행"}`,
+          text: command ? parsedCommand?.text ?? "명령 실행" : `도구 · ${name || "실행"}`,
           eventKey: `call:${item.call_id ?? item.id}`,
+          status: "running",
         });
       } else if (["function_call_output", "custom_tool_call_output"].includes(item.type)) {
         let output;
@@ -104,22 +120,24 @@ export class TerminalActivityCollector {
     }
   }
 
-  finish(finalResponse = "") {
-    const finalText = decodeAgentResponse(finalResponse).text;
+  snapshot(finalResponse = "", { final = false } = {}) {
     const signatures = new Set();
     const result = [];
     for (const entry of this.entries.values()) {
       const text = entry.kind === "message" ? decodeAgentResponse(entry.text).text : entry.text;
-      if (!text || (entry.kind === "message" && text === finalText)) continue;
+      if (!text || isTerminalFinalMessage(entry, finalResponse)) continue;
       // 같은 공개 메시지가 여러 CLI 기록 형식에 나타나도 한 번만 표시한다.
       const signature = [entry.kind, text, entry.status].join("\n");
       if (["message", "thinking"].includes(entry.kind) && signatures.has(signature)) continue;
       signatures.add(signature);
-      result.push({ ...entry, text, eventKey: `terminal:${entry.eventKey}` });
+      result.push({ ...entry, text, status: final && entry.status === "running" ? "completed" : entry.status,
+        eventKey: `terminal:${entry.eventKey}` });
     }
     if (this.omitted) result.push({ kind: "tool", text: `추가 활동 ${this.omitted}개 표시 생략`, status: "completed", eventKey: "terminal:omitted" });
     return result;
   }
+
+  finish(finalResponse = "") { return this.snapshot(finalResponse, { final: true }); }
 }
 
 // UserPromptSubmit 시점의 바이트 위치부터 읽어 같은 세션의 과거 턴을 섞지 않는다.

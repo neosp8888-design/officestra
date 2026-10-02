@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { promisify } from "node:util";
+import { isAntigravityFixedThinkingModel } from "./antigravity-model-selection.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -222,7 +223,7 @@ export function parseAntigravityModelCatalog(source) {
       (variantCounts.get(row.variant.baseID) ?? 0) > 1
     );
     const id = shouldGroup ? row.variant.baseID : row.id;
-    const effort = row.variant?.effort ?? "high";
+    const effort = row.variant?.effort ?? "default";
     const current = collected.get(id);
     if (current) {
       current.efforts = uniqueEfforts([...current.efforts, effort]);
@@ -505,6 +506,15 @@ export class ModelCatalogService {
 
   catalogFor(provider) {
     const stored = normalizeCatalog(this.rows.get(provider)?.catalog);
+    if (provider === "antigravity") {
+      // 12시간짜리 기존 캐시에 잘못된 high가 남아 있어도 시작 즉시 바로잡는다.
+      for (const entry of stored.models) {
+        if (isAntigravityFixedThinkingModel(entry.id)) {
+          entry.efforts = ["default"];
+          entry.defaultEffort = "default";
+        }
+      }
+    }
     return stored.models.length > 0
       ? stored
       : builtinModelCatalog(provider);

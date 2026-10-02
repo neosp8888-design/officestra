@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/migueldeicaza/SwiftTerm",
+  "version": "1.20.0",
+  "revision": "5d14406844143538cd8f8851d2d8a67c1fe443e5",
+  "license": "MIT",
+  "imported": ["Sources/SwiftTerm", "Tests", "LICENSE"],
+  "changes": {
+    "Package.swift": "Build the macOS library and upstream tests without CLI/doc dependencies or a Git build-info plugin.",
+    "Sources/SwiftTerm/SwiftTermBuildInfo.swift": "Report this pinned upstream revision and the local patch, independently of the enclosing app repository.",
+    "Sources/SwiftTerm/Buffer.swift": "Inherit wide continuation attributes from the glyph; clear wide glyph fragments at overwrite boundaries and insert-mode boundaries."
+  },
+  "regressionTests": "../../Tests/OfficeCoreTests/TerminalWideCharacterTests.swift",
+  "updatePolicy": "Compare the upstream fix before replacing these sources. Run the app regression tests and upstream buffer, Unicode, reflow and screen tests before removing this patch."
+}

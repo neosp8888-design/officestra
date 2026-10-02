@@ -17,10 +17,8 @@ let package = Package(
             url: "https://github.com/gonzalezreal/swift-markdown-ui",
             exact: "2.4.1"
         ),
-        .package(
-            url: "https://github.com/migueldeicaza/SwiftTerm",
-            exact: "1.20.0"
-        )
+        // Pinned upstream sources with the wide-character overwrite fix.
+        .package(path: "Vendor/SwiftTerm")
     ],
     targets: [
         .target(
@@ -67,7 +65,10 @@ let package = Package(
         ),
         .testTarget(
             name: "OfficeCoreTests",
-            dependencies: ["OfficeCore", "OfficeGame"]
+            dependencies: [
+                "OfficeCore", "OfficeGame",
+                .product(name: "SwiftTerm", package: "SwiftTerm")
+            ]
         )
     ]
 )

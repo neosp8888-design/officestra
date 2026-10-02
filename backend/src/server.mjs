@@ -806,6 +806,7 @@ async function characterHistory(response, characterID) {
         t.origin,
         (SELECT jsonb_build_object('characterId', sender.id, 'name', sender.name)
          FROM characters sender WHERE sender.id = t.sender_character_id) AS "promptSender",
+        t.request_source AS "requestSource",
         t.provider_kind AS "providerKind",
         (t.provider_snapshot->'profile'->>'contextWindow')::integer AS "providerContextWindow",
         COALESCE(
@@ -894,6 +895,7 @@ async function globalHistory(response, url) {
         t.origin,
         (SELECT jsonb_build_object('characterId', sender.id, 'name', sender.name)
          FROM characters sender WHERE sender.id = t.sender_character_id) AS "promptSender",
+        t.request_source AS "requestSource",
         t.provider_kind AS "providerKind",
         (t.provider_snapshot->'profile'->>'contextWindow')::integer AS "providerContextWindow",
         s.external_id AS "externalSessionId",
@@ -1277,6 +1279,7 @@ async function queryTurnFeed({
         t.origin,
         (SELECT jsonb_build_object('characterId', sender.id, 'name', sender.name)
          FROM characters sender WHERE sender.id = t.sender_character_id) AS "promptSender",
+        t.request_source AS "requestSource",
         t.provider_kind AS "providerKind",
         (t.provider_snapshot->'profile'->>'contextWindow')::integer AS "providerContextWindow",
         s.external_id AS "externalSessionId",
@@ -1632,6 +1635,11 @@ async function startAgentJob(response, body) {
       return;
     }
   }
+  // 표시용 출처 표시일 뿐 권한 증명이 아니다.
+  if (body.requestSource != null && body.requestSource !== "remote") {
+    send(response, 400, { error: "requestSource는 remote만 허용합니다." });
+    return;
+  }
   try {
     const job = await runtime.start({
       characterID: String(body.characterId ?? ""),
@@ -1639,6 +1647,7 @@ async function startAgentJob(response, body) {
       conversationID: body.conversationId,
       attachmentPaths: body.attachmentPaths,
       senderCharacterID: body.senderCharacterId ?? null,
+      requestSource: body.requestSource ?? null,
       replyRecipientID: body.replyRecipientId ?? null,
     });
     send(response, 202, job);

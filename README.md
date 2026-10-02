@@ -258,6 +258,14 @@ curl -fsSL https://antigravity.google/cli/install.sh | bash
 agy
 ```
 
+Antigravity의 `Claude Opus 4.6 (Thinking)`·`Claude Sonnet 4.6 (Thinking)`은
+고정 Thinking 모델입니다. 오피스에서는 추론 설정을 `default`로 표시하고
+`--effort`를 보내지 않습니다. 이전 `high` 설정도 실행 시 해당 옵션을 생략하며,
+설정을 다시 저장하면 `default`가 됩니다. Gemini의 low/medium/high는
+`gemini-3.8-flash-high`처럼 CLI가 나열한 모델 ID로 전달합니다.
+([모델 목록](https://antigravity.google/docs/models),
+[Headless 모델 선택](https://antigravity.google/docs/cli/headless/))
+
 Docker 설치에 문제가 있으면 [Docker Desktop 공식 안내](https://docs.docker.com/desktop/setup/install/mac-install/)를
 확인하세요.
 

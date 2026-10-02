@@ -14,6 +14,21 @@ import {
   withCharacterSessionLocks,
 } from "../src/character-settings.mjs";
 
+test("Antigravity 고정 Thinking 설정은 새 default와 이전 high를 기본값으로 저장한다", () => {
+  const modelCatalog = { modelCapabilities: () => ({ efforts: ["default"], supportsFastMode: false }) };
+  for (const effort of ["default", "high"]) {
+    const [normalized] = normalizeBulkCharacterSettings({ updates: [settings("right-man", {
+      backend: "antigravity", model: "claude-opus-4-6-thinking", effort,
+      permission: "plan", fastMode: false,
+    })] }, { modelCatalog });
+    assert.equal(normalized.effort, "default");
+  }
+  assert.throws(() => normalizeBulkCharacterSettings({ updates: [settings("right-man", {
+    backend: "antigravity", model: "claude-opus-4-6-thinking", effort: "low",
+    permission: "plan", fastMode: false,
+  })] }, { modelCatalog }), /지원하지 않는 추론 레벨/);
+});
+
 function profile(id, overrides = {}) {
   return {
     id,

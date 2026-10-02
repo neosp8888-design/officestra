@@ -203,6 +203,7 @@ cp "$NODE_EXECUTABLE" "$NODE_RUNTIME_DIR/bin/node"
 cp "$NODE_ENTITLEMENTS" "$NODE_RUNTIME_DIR/ENTITLEMENTS.plist"
 cp "$NODE_PREFIX/LICENSE" "$RUNTIME_DIR/licenses/Node-LICENSE"
 cp "$PROJECT_DIR/LICENSE" "$RUNTIME_DIR/licenses/OFFICESTRA-LICENSE"
+cp "$PROJECT_DIR/Vendor/SwiftTerm/LICENSE" "$RUNTIME_DIR/licenses/SwiftTerm-LICENSE"
 
 canonical_architectures() {
     /usr/bin/lipo -archs "$1" \

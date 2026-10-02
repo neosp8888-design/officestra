@@ -17,7 +17,7 @@ final class SpeechBubbleBehaviorTests: XCTestCase {
         XCTAssertNil(director.bubbles[.rightWoman])
     }
 
-    func testMountedEquatableLayerRemovesBubbleWithoutResize() throws {
+    func testMountedEquatableLayerKeepsIdleChatterHidden() throws {
         let director = AgentDirector(startBackgroundTasks: false)
         director.speechBubbleStore.set("완료했습니다.", for: .rightWoman)
         let size = NSSize(width: 384, height: 256)
@@ -40,7 +40,8 @@ final class SpeechBubbleBehaviorTests: XCTestCase {
         let originalFrame = hostingView.frame
         let before = try renderedBitmap(of: hostingView)
         let beforeBrightPixels = sampledBrightPixelCount(in: before)
-        XCTAssertGreaterThan(beforeBrightPixels, 25)
+        // The status-only design intentionally hides ordinary idle chatter.
+        XCTAssertEqual(beforeBrightPixels, 0)
 
         director.dismissViewedBubble(for: .rightWoman)
         settle(hostingView, for: 0.6)
@@ -48,6 +49,45 @@ final class SpeechBubbleBehaviorTests: XCTestCase {
         let after = try renderedBitmap(of: hostingView)
         let afterBrightPixels = sampledBrightPixelCount(in: after)
         XCTAssertEqual(hostingView.frame, originalFrame)
+        XCTAssertEqual(afterBrightPixels, 0)
+    }
+
+    func testMountedWarningBubbleDisappearsWithoutResize() throws {
+        let director = AgentDirector(startBackgroundTasks: false)
+        director.speechBubbleStore.set("작업을 확인해 주세요.", for: .rightWoman)
+        let size = NSSize(width: 384, height: 256)
+        let frame = NSRect(origin: .zero, size: size)
+        let presentation = CharacterInteractionPresentationState(
+            characters: director.characters,
+            displayNames: [:],
+            archiveCabinetHitbox: director.archiveCabinetHitbox,
+            runningCharacters: [], questionCharacters: [],
+            failedCharacters: [.rightWoman], offDutyCharacters: []
+        )
+        let hostingView = NSHostingView(
+            rootView: CharacterSpeechBubbleLayer(
+                speechBubbleStore: director.speechBubbleStore,
+                presentation: presentation,
+                artStyle: .twoD,
+                fittedFrame: frame,
+                scale: size.width / OfficeCanvasGeometry.designSize.width,
+                selectCharacter: { _ in },
+                onBubbleTapped: { _, _ in }
+            )
+            .frame(width: size.width, height: size.height)
+            .background(Color.black)
+        )
+        hostingView.frame = frame
+        settle(hostingView, for: 0.1)
+        let beforeBrightPixels = sampledBrightPixelCount(in: try renderedBitmap(of: hostingView))
+        XCTAssertGreaterThan(beforeBrightPixels, 25)
+
+        // Keep the same view and presentation: only the observed message store
+        // changes, as it does when a warning is acknowledged in the app.
+        director.dismissViewedBubble(for: .rightWoman)
+        settle(hostingView, for: 0.6)
+        let afterBrightPixels = sampledBrightPixelCount(in: try renderedBitmap(of: hostingView))
+        XCTAssertEqual(hostingView.frame, frame)
         XCTAssertLessThan(afterBrightPixels, beforeBrightPixels / 4)
     }
 

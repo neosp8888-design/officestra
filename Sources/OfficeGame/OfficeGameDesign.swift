@@ -3,7 +3,8 @@ import SwiftUI
 /// Shared game-card vocabulary. Large reading surfaces stay quiet; interactive
 /// controls and character cards use progressively stronger model-colored light.
 enum OfficeGameEmphasis: CaseIterable {
-    case panel, control, hero, transcript, conversation
+    /// `prompt` is a flat conversation bubble tinted by who sent it, never by model.
+    case panel, control, hero, transcript, conversation, prompt
 }
 
 struct OfficeGamePalette {
@@ -33,6 +34,7 @@ struct OfficeGamePalette {
         case .panel: isDark ? 0.065 : 0.025
         case .transcript: isDark ? 0.18 : 0.10
         case .conversation: 0
+        case .prompt: isDark ? 0.24 : 0.12
         }
     }
 }
@@ -52,6 +54,20 @@ struct OfficeGameSurface: View {
                 .overlay {
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                         .strokeBorder(Color.primary.opacity(colorScheme == .dark ? 0.10 : 0.06), lineWidth: 1)
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        } else if emphasis == .prompt {
+            let palette = OfficeGamePalette(isDark: colorScheme == .dark)
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(palette.base)
+                .overlay {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(accent.opacity(palette.tintOpacity(for: .prompt, highlighted: false)))
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .strokeBorder(accent.opacity(palette.isDark ? 0.55 : 0.40), lineWidth: 1)
                 }
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)

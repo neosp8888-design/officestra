@@ -3499,6 +3499,7 @@ struct LiveWorkspaceFeed: View, Equatable {
                                         ),
                                         sentAt: turn.startedAt,
                                         sender: EmployeeMessageSender.resolve(turn.promptSender, prompt: turn.prompt),
+                                        requestSource: turn.requestSource,
                                         selectionID: turn.id
                                     )
 
@@ -4416,10 +4417,34 @@ private struct EquatableLiveTurnCard: View, Equatable {
 
 /// 사용자 질문은 오른쪽 말풍선으로 따로 세운다. 직원 답변과 시선이
 /// 갈려야 누가 한 말인지 한눈에 들어온다.
+/// 질문을 보낸 쪽. 모델 구분색(주황·청록·파랑)과 겹치지 않는 색만 쓴다.
+enum LiveTurnPromptOrigin: CaseIterable {
+    case user, remote, employee
+
+    init(sender: EmployeeMessageSender?, requestSource: String?) {
+        if sender != nil {
+            self = .employee
+        } else if requestSource == "remote" {
+            self = .remote
+        } else {
+            self = .user
+        }
+    }
+
+    var accent: Color {
+        switch self {
+        case .user: Color(red: 0.49, green: 0.36, blue: 0.86)
+        case .remote: Color(red: 0.86, green: 0.27, blue: 0.55)
+        case .employee: Color(red: 0.40, green: 0.62, blue: 0.18)
+        }
+    }
+}
+
 struct LiveTurnPromptBlock: View {
     let presentation: TaskPromptPresentation
     var sentAt: Date?
     var sender: EmployeeMessageSender? = nil
+    var requestSource: String? = nil
     var selectionID: String? = nil
 
     @State private var didCopy = false
@@ -4447,8 +4472,15 @@ struct LiveTurnPromptBlock: View {
     }
 
     private var bubble: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        let origin = LiveTurnPromptOrigin(sender: sender, requestSource: requestSource)
+        return VStack(alignment: .leading, spacing: 7) {
             EmployeeMessageSenderLabel(sender: sender)
+            if origin == .remote {
+                Label(OfficeLocalization.string("원격 지시"), systemImage: "antenna.radiowaves.left.and.right")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(origin.accent)
+                    .accessibilityIdentifier("livePromptRemoteRequest")
+            }
             if !presentation.text.isEmpty {
                 // maxWidth를 주면 짧은 질문에도 말풍선이 최대 폭까지
                 // 벌어져 오른쪽이 허전해 보인다. 내용 크기로 둔다.
@@ -4467,7 +4499,7 @@ struct LiveTurnPromptBlock: View {
         // 채워 짧은 질문에도 말풍선이 최대 폭까지 벌어진다.
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .officeGameSurface(emphasis: .conversation, cornerRadius: 13)
+        .officeGameSurface(accent: origin.accent, emphasis: .prompt, cornerRadius: 13)
     }
 
     private var footer: some View {

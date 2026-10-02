@@ -10,6 +10,7 @@ import {
   normalizedBackendPermission,
 } from "./agent-provider.mjs";
 import { characterSettingsRequireNewSession } from "./configuration.mjs";
+import { isAntigravityFixedThinkingModel } from "./antigravity-model-selection.mjs";
 
 const MAX_BULK_CHARACTER_SETTINGS = 100;
 
@@ -56,7 +57,11 @@ export function normalizeCharacterSettingsUpdate(body, {
       "지원하지 않는 모델입니다.",
     );
   }
-  const effort = String(body.effort ?? "");
+  const requestedEffort = String(body.effort ?? "");
+  const effort = backend === "antigravity" &&
+      isAntigravityFixedThinkingModel(model) && requestedEffort === "high"
+    ? "default"
+    : requestedEffort;
   const supportedEfforts = dynamicCapabilities?.efforts?.length > 0
     ? dynamicCapabilities.efforts
     : backendEfforts(backend, model);

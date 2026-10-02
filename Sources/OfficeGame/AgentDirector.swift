@@ -70,6 +70,7 @@ final class CharacterSelectionStore: ObservableObject {
 
 @MainActor
 final class CharacterLiveFeedStore: ObservableObject {
+    let workProgressStore = ConversationWorkProgressStore()
     @Published private(set) var turns: [LiveFeedTurn]
     @Published private(set) var isLoadingInitialFeed: Bool
     @Published private(set) var presentationRevision = 0
@@ -87,12 +88,14 @@ final class CharacterLiveFeedStore: ObservableObject {
         self.isLoadingInitialFeed = isLoadingInitialFeed
         latestTurns = turns
         latestIsLoadingInitialFeed = isLoadingInitialFeed
+        workProgressStore.update(turns: turns)
     }
 
     func stage(
         turns: [LiveFeedTurn],
         isLoadingInitialFeed: Bool
     ) {
+        workProgressStore.update(turns: turns)
         latestTurns = turns
         latestIsLoadingInitialFeed = isLoadingInitialFeed
         guard isPresented else {

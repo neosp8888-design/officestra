@@ -1782,6 +1782,8 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
     let replyDeliveries: [ReplyDelivery]?
     let replyDelivery: ReplyDelivery?
     let promptSender: EmployeeMessageSender?
+    // "remote"면 모바일 원격 세션이 보낸 질문이다. 표시용일 뿐 권한 증명이 아니다.
+    let requestSource: String?
     let providerKind: String?
     let id: String
     let characterId: String
@@ -1826,6 +1828,7 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
         origin: String? = nil,
         providerKind: String? = nil,
         promptSender: EmployeeMessageSender? = nil,
+        requestSource: String? = nil,
         replyDelivery: ReplyDelivery? = nil,
         replyDeliveries: [ReplyDelivery]? = nil,
         externalSessionId: String?,
@@ -1859,6 +1862,7 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
         self.origin = origin
         self.providerKind = providerKind
         self.promptSender = promptSender
+        self.requestSource = requestSource
         self.replyDelivery = replyDelivery
         self.replyDeliveries = replyDeliveries
         self.externalSessionId = externalSessionId
@@ -1903,6 +1907,7 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
             origin: origin,
             providerKind: providerKind,
             promptSender: promptSender,
+            requestSource: requestSource,
             replyDelivery: replyDelivery,
             replyDeliveries: replyDeliveries,
             externalSessionId: externalSessionId,
@@ -1942,6 +1947,7 @@ struct LiveFeedTurn: Decodable, Identifiable, Equatable, Sendable {
             origin: origin,
             providerKind: providerKind,
             promptSender: promptSender,
+            requestSource: requestSource,
             replyDelivery: replyDelivery,
             replyDeliveries: replyDeliveries,
             externalSessionId: externalSessionId,

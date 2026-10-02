@@ -1,0 +1,2 @@
+# Keep the pinned upstream source formatting and identify it as third-party code.
+Vendor/SwiftTerm/** linguist-vendored -whitespace

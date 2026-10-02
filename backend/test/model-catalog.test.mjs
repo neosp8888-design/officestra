@@ -45,6 +45,7 @@ const antigravityPayload = [
   "gemini-next-medium\tGemini Next (Medium)",
   "gemini-next-low\tGemini Next (Low)",
   "claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)",
+  "claude-opus-4-6-thinking\tClaude Opus 4.6 (Thinking)",
   "gpt-oss-120b-medium\tGPT-OSS 120B (Medium)",
 ].join("\n");
 
@@ -191,11 +192,27 @@ test("Antigravity 목록은 Gemini 노력 변형을 한 모델로 합친다", ()
   assert.deepEqual(parsed.models.map((entry) => entry.id), [
     "gemini-next",
     "claude-sonnet-4-6",
+    "claude-opus-4-6-thinking",
     "gpt-oss-120b-medium",
   ]);
   assert.deepEqual(parsed.models[0].efforts, ["low", "medium", "high"]);
-  assert.equal(parsed.models[1].defaultEffort, "high");
-  assert.deepEqual(parsed.models[2].efforts, ["medium"]);
+  assert.equal(parsed.models[1].defaultEffort, "default");
+  assert.deepEqual(parsed.models[2].efforts, ["default"]);
+  assert.deepEqual(parsed.models[3].efforts, ["medium"]);
+});
+
+test("기존 Antigravity high 캐시는 갱신 없이 고정 Thinking의 default로 바로잡는다", async () => {
+  const cached = parseAntigravityModelCatalog(antigravityPayload);
+  const opus = cached.models.find((entry) => entry.id === "claude-opus-4-6-thinking");
+  opus.efforts = ["high"];
+  opus.defaultEffort = "high";
+  const service = new ModelCatalogService({
+    store: { load: async () => [{ provider: "antigravity", catalog: cached }] },
+    runCommand: async () => { throw new Error("must not fetch"); },
+  });
+  await service.loadCached();
+  assert.deepEqual(service.modelCapabilities("antigravity", opus.id).efforts, ["default"]);
+  assert.equal(opus.defaultEffort, "high"); // 입력 캐시 자체는 변경하지 않는다.
 });
 
 test("사라진 모델은 선택 목록에서 내리되 기존 설정 검증용으로 보존한다", () => {

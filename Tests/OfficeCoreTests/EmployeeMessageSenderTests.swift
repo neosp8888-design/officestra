@@ -27,4 +27,25 @@ final class EmployeeMessageSenderTests: XCTestCase {
         let new = old.dropLast() + #", "promptSender":{"characterId":"boss","name":"백부장"}}"#
         XCTAssertEqual(try decoder.decode(HistoryTurn.self, from: Data(new.utf8)).promptSender?.characterId, "boss")
     }
+
+    func testRemoteRequestSourceDecodesAndSurvivesCopies() throws {
+        let old = #"{"id":"turn","characterId":"boss","characterName":"Test","characterBackend":"claude","prompt":"hi","response":"","status":"running","needsInput":false,"startedAt":"2026-10-02T00:00:00Z","updatedAt":"2026-10-02T00:00:01Z","activities":[]}"#
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        XCTAssertNil(try decoder.decode(LiveFeedTurn.self, from: Data(old.utf8)).requestSource)
+        let remote = try decoder.decode(LiveFeedTurn.self,
+            from: Data((old.dropLast() + #","requestSource":"remote"}"#).utf8))
+        XCTAssertEqual(remote.requestSource, "remote")
+        XCTAssertEqual(remote.replacingID(with: "copy").requestSource, "remote")
+        XCTAssertEqual(remote.replacingFeedback(with: nil).requestSource, "remote")
+    }
+
+    func testPromptOriginSeparatesUserRemoteAndEmployee() {
+        let employee = EmployeeMessageSender(characterId: "left-man", name: "클대리")
+        XCTAssertEqual(LiveTurnPromptOrigin(sender: nil, requestSource: nil), .user)
+        XCTAssertEqual(LiveTurnPromptOrigin(sender: nil, requestSource: "remote"), .remote)
+        XCTAssertEqual(LiveTurnPromptOrigin(sender: nil, requestSource: "other"), .user)
+        XCTAssertEqual(LiveTurnPromptOrigin(sender: employee, requestSource: nil), .employee)
+        XCTAssertEqual(LiveTurnPromptOrigin(sender: employee, requestSource: "remote"), .employee)
+    }
 }

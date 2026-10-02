@@ -47,7 +47,9 @@ import {
   identityPromptWithStructuredResult,
 } from "./structured-turn-result.mjs";
 import { antigravityStepPayloadReasoning } from "./antigravity-reasoning.mjs";
+import { antigravityModelArguments } from "./antigravity-model-selection.mjs";
 import { TerminalActivityCollector, waitForClaudeTerminalTurn } from "./terminal-turn-activities.mjs";
+import { ClaudeTerminalProgressWatcher, publishTerminalProgress } from "./terminal-live-progress.mjs";
 
 const require = createRequire(import.meta.url);
 const SESSION_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -130,10 +132,7 @@ export function terminalArguments({
       return args;
     }
     case "antigravity": {
-      const args = [
-        "--model", character.model,
-        "--effort", character.effort,
-      ];
+      const args = antigravityModelArguments(character.model, character.effort);
       if (previousSessionID) args.push("--conversation", previousSessionID);
       if (workdir) args.push("--add-dir", workdir);
       args.push(...antigravityPermissionArguments(character.permission));
@@ -477,6 +476,7 @@ class AntigravityTerminalWatcher {
       }
       this.pendingIndexes.delete(index);
     }
+    await publishTerminalProgress(this.state, this.runtime);
     await this.publishCurrentTurn();
   }
 
@@ -547,6 +547,7 @@ class CodexTerminalWatcher {
     this.seen = new Set();
     this.timer = null;
     this.sweepPromise = Promise.resolve();
+    this.observedTurnID = null;
   }
 
   start() {
@@ -621,6 +622,7 @@ class CodexTerminalWatcher {
       const payload = record?.payload ?? {};
       if (record?.type === "event_msg" && payload.type === "task_started") {
         const turnID = String(payload.turn_id ?? "").trim();
+        this.observedTurnID = turnID;
         if (turnID && !this.seen.has(turnID)) {
           this.pendingStarts.set(turnID, payload.started_at);
         }
@@ -629,12 +631,14 @@ class CodexTerminalWatcher {
       if (record?.type === "event_msg" && payload.type === "task_complete") {
         // 질문을 보기 전에 끝난 턴은 notify 경로가 처음부터 기록한다.
         this.pendingStarts.delete(String(payload.turn_id ?? "").trim());
+        this.observedTurnID = null;
         continue;
       }
       if (record?.type === "event_msg" && payload.type === "turn_aborted") {
         const abortedTurnID = String(payload.turn_id ?? "").trim();
         this.pendingStarts.delete(abortedTurnID);
         this.seen.add(abortedTurnID);
+        this.observedTurnID = null;
         if (
           abortedTurnID &&
           this.state.codexTurnID === abortedTurnID &&
@@ -654,6 +658,11 @@ class CodexTerminalWatcher {
           });
         }
         continue;
+      }
+      if (record?.type === "turn_context" && payload.turn_id) this.observedTurnID = payload.turn_id;
+      if (this.state.runningTurnID && this.observedTurnID === this.state.codexTurnID
+          && (!payload.turn_id || payload.turn_id === this.state.codexTurnID)) {
+        this.state.activities.codex(record);
       }
       const prompt = codexRolloutUserPrompt(record);
       if (!prompt || !this.pendingStarts.has(prompt.turnID)) continue;
@@ -684,6 +693,7 @@ class CodexTerminalWatcher {
         );
       }
     }
+    await publishTerminalProgress(this.state, this.runtime);
   }
 
   // 완료는 notify가 맡으므로 마지막 sweep은 하지 않는다. 닫히는 중에 턴을
@@ -722,7 +732,7 @@ export class TerminalSessionManager {
 
   // Not a queue: a busy session rejects immediately. A successful PTY write
   // is not acceptance; only the existing CLI hook/watcher can confirm a turn.
-  async dispatch({ characterID, prompt, conversationID, attachmentPaths = [], senderCharacterID = null, replyRecipientID = null, deliveryID = null }) {
+  async dispatch({ characterID, prompt, conversationID, attachmentPaths = [], senderCharacterID = null, requestSource = null, replyRecipientID = null, deliveryID = null }) {
     const state = this.sessions.get(String(characterID));
     if (this.runtime.draining) throw new AgentDrainingError('백엔드가 재시작 준비 중입니다.');
     if (!state || state.closed || state.closing || this.opening.has(String(characterID))) throw new AgentBusyError('터미널이 아직 준비되지 않았습니다.');
@@ -739,7 +749,7 @@ export class TerminalSessionManager {
     const result = new Promise((yes, no) => { resolve = yes; reject = no; });
     result.catch(() => {}); // The timeout may fire while the DB preflight awaits.
     // Install the lock before the first await, including the DB busy check.
-    const pending = { id, text, senderCharacterID, replyRecipientID, deliveryID, wire: null, claimed: false, resolve, reject, expiresAt: Date.now() + this.dispatchTimeoutMs };
+    const pending = { id, text, senderCharacterID, requestSource, replyRecipientID, deliveryID, wire: null, claimed: false, resolve, reject, expiresAt: Date.now() + this.dispatchTimeoutMs };
     state.dispatch = pending;
     pending.timer = setTimeout(() => {
       if (state.dispatch !== pending) return;
@@ -800,7 +810,7 @@ export class TerminalSessionManager {
       if (pasted) dispatchedPrompt = pasted[2];
     }
     const matches = pending?.claimed && dispatchedPrompt === pending.wire;
-    const turn = await this.runtime.beginTerminalTurn({ ...options, prompt: matches ? pending.text : options.prompt, senderCharacterID: matches ? pending.senderCharacterID : null, replyRecipientID:matches?pending.replyRecipientID:null, deliveryID:matches?pending.deliveryID:null });
+    const turn = await this.runtime.beginTerminalTurn({ ...options, prompt: matches ? pending.text : options.prompt, senderCharacterID: matches ? pending.senderCharacterID : null, requestSource: matches ? pending.requestSource : null, replyRecipientID:matches?pending.replyRecipientID:null, deliveryID:matches?pending.deliveryID:null });
     state.runningTurnID = turn.turnID;
     if (matches) {
       clearTimeout(pending.timer);
@@ -987,6 +997,8 @@ export class TerminalSessionManager {
       return await this.recordClaudeSessionCost(state, payload.cost);
     }
     if (event === "UserPromptSubmit") {
+      await state.progressWatcher?.stop();
+      state.progressWatcher = null;
       // Esc로 중단된 턴은 Stop 훅이 오지 않아 running으로 남는다. 새 질문이
       // 제출됐다는 것은 이전 턴이 끝났다는 뜻이므로, 남은 턴을 중단 처리하고
       // 세션을 풀어 이 질문부터 다시 기록한다.
@@ -1000,7 +1012,8 @@ export class TerminalSessionManager {
       }
       const path = payload.transcript_path || (state.externalSessionID ? findClaudeSessionPath(state.externalSessionID) : null);
       let offset = null, inode;
-      try { if (path) {const stat=statSync(path);offset=stat.size;inode=stat.ino;} } catch {}
+      try { if (path) {const stat=statSync(path);offset=stat.size;inode=stat.ino;} }
+      catch (error) { if (path && error.code === "ENOENT") offset = 0; }
       state.claudeTranscript = { path, offset, inode, startedAt:new Date().toISOString() };
       const turn = await this.beginDispatchedTurn(state, {
         characterID: state.characterID,
@@ -1009,6 +1022,8 @@ export class TerminalSessionManager {
         execution: state.character,
       });
       state.runningTurnID = turn.turnID;
+      state.progressWatcher = new ClaudeTerminalProgressWatcher({ state, runtime: this.runtime });
+      state.progressWatcher.start();
       this.broadcast({ type: "terminal.changed", characterId: state.characterID });
       return { accepted: true, turnId: turn.turnID };
     }
@@ -1016,6 +1031,8 @@ export class TerminalSessionManager {
       return { accepted: false, reason: "ignored-hook" };
     }
     const turnID = state.runningTurnID;
+    await state.progressWatcher?.stop();
+    state.progressWatcher = null;
     const response = String(payload.last_assistant_message ?? "").trim() ||
       lastClaudeAssistantMessage(payload.transcript_path);
     // 시작 훅이 지목한 같은 원본만 읽는다. 경로가 다르면 과거 세션을 섞지 않는다.
@@ -1180,6 +1197,8 @@ export class TerminalSessionManager {
     this.cancelDispatch(state);
     const turnID = state.runningTurnID;
     if (!turnID) return { interrupted: false, turnId: null };
+    await state.progressWatcher?.stop();
+    state.progressWatcher = null;
     await this.runtime.interruptTerminalTurn(id, turnID);
     state.runningTurnID = null;
     state.codexTurnID = null;
@@ -1194,6 +1213,8 @@ export class TerminalSessionManager {
     const state = this.sessions.get(id);
     if (!state) return false;
     state.closing = true;
+    await state.progressWatcher?.stop();
+    state.progressWatcher = null;
     this.cancelDispatch(state);
     if (state.watcher) await state.watcher.stop({ finalSweep: true });
     state.closed = true;

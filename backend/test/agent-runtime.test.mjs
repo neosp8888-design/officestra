@@ -1002,12 +1002,9 @@ test("Antigravity 신규와 재개는 모델·추론·대화 ID와 업무 폴더
     );
     assert.equal(
       argumentsList[argumentsList.indexOf("--model") + 1],
-      "gemini-3.7-flash",
+      "gemini-3.7-flash-high",
     );
-    assert.equal(
-      argumentsList[argumentsList.indexOf("--effort") + 1],
-      "high",
-    );
+    assert.equal(argumentsList.includes("--effort"), false);
     assert.equal(
       argumentsList[argumentsList.indexOf("--print-timeout") + 1],
       "24h",
@@ -1028,6 +1025,21 @@ test("Antigravity 신규와 재개는 모델·추론·대화 ID와 업무 폴더
       ),
       false,
     );
+  }
+});
+
+test("Antigravity Opus Thinking 신규·재개는 unsupported effort를 전달하지 않는다", () => {
+  for (const effort of ["high", "default"]) {
+    for (const previousSessionID of [null, "conversation-opus"]) {
+      const args = buildArguments({
+        character: { backend: "antigravity", model: "claude-opus-4-6-thinking",
+          effort, permission: "plan", identityPrompt: "확인" },
+        prompt: "확인", previousSessionID, workdir: "/repo",
+      });
+      assert.equal(args[args.indexOf("--model") + 1], "claude-opus-4-6-thinking");
+      assert.equal(args.includes("--effort"), false);
+      assert.equal(args.includes("--conversation"), previousSessionID !== null);
+    }
   }
 });
 
@@ -5292,11 +5304,13 @@ test("worktree가 없는 활성 CLI 세션은 종료하지 않고 다음 업무�
     conversationID: "22222222-2222-2222-2222-222222222222",
     isolateGitWorkdir: true,
     senderCharacterID: "right-man",
+    requestSource: "remote",
   });
 
   const senderInsert = queries.find(({ text }) => /INSERT INTO turns/.test(text));
-  assert.match(senderInsert.text, /sender_character_id/);
+  assert.match(senderInsert.text, /sender_character_id,\s*request_source/);
   assert.equal(senderInsert.values[8], "right-man");
+  assert.equal(senderInsert.values[9], "remote");
 
   assert.equal(prepared.sessionID, "session-1");
   assert.equal(prepared.externalSessionID, "external-1");
@@ -5941,6 +5955,35 @@ test("터미널 완료는 진행 중인 개발 도구 표시 저장을 기다리
   assert.equal(captured.activityRecords.get('developer-tool:graft:1').sequence,1);
   assert.equal(captured.activityRecords.get('terminal:command:1').sequence,2);
   assert.equal(writes.find(({sql}) => sql.includes('INSERT INTO turn_activities')).values[1],2);
+});
+
+test("terminal completion removes only its streamed final message, including a clipped long answer", async () => {
+  for (const response of ["완료", "긴 답변".repeat(2000)]) {
+    const runtime = terminalTurnRuntime();
+    const originalQuery = runtime.pool.query;
+    const text = response.length > 6000 ? response.slice(0, 5999) + "…" : response;
+    const rows = [
+      { seq: 1, kind: "message", text: "진행 설명", eventKey: "terminal:message:progress", status: "completed" },
+      { seq: 2, kind: "message", text, eventKey: "terminal:message:final", status: "completed" },
+      { seq: 3, kind: "tool", text: "Graft", eventKey: "developer-tool:graft:1", status: "completed" },
+    ];
+    const deletes = [];
+    runtime.terminalSessionRegistry = { sessions: new Map([["left-man", { toolActivityState: { turnID: "turn-1" } }]]) };
+    runtime.pool.query = async (sql, values) => {
+      if (sql.includes("FROM turn_activities WHERE turn_id")) {
+        if (sql.startsWith("DELETE")) { deletes.push(values); return { rows: [], rowCount: 1 }; }
+        return { rows };
+      }
+      return originalQuery(sql, values);
+    };
+    let result;
+    runtime.complete = async (state, decoded) => { result = { state, decoded }; };
+    await runtime.completeTerminalTurn({ characterID: "left-man", turnID: "turn-1", response, usage: {} });
+    assert.deepEqual(deletes, [["turn-1", 2]]);
+    assert.equal(result.state.activityRecords.size, 2);
+    assert.equal(result.state.sequence, 3);
+    assert.equal(result.decoded.text, response);
+  }
 });
 
 test("터미널 사용량 읽기는 대화 ID나 시작 시각이 없으면 건너뛴다", async () => {

@@ -46,6 +46,7 @@ import {
   parseAgentEvent,
 } from "./agent-event-parser.mjs";
 import { backendExecutableName } from "./agent-provider.mjs";
+import { antigravityModelArguments } from "./antigravity-model-selection.mjs";
 import {
   antigravityPlaywrightEnvironment,
 } from "./antigravity-playwright.mjs";
@@ -61,6 +62,7 @@ import {
   claudeTranscriptTurn,
   codexRolloutTurnUsage,
 } from "./terminal-usage.mjs";
+import { isTerminalFinalMessage } from "./terminal-turn-activities.mjs";
 import {
   CodexRolloutCollaborationTracker,
 } from "./codex-rollout-collaboration.mjs";
@@ -508,6 +510,7 @@ export class AgentRuntime {
     conversationID,
     attachmentPaths = [],
     senderCharacterID = null,
+    requestSource = null,
     replyRecipientID = null,
     deliveryID = null,
   }) {
@@ -533,6 +536,7 @@ export class AgentRuntime {
         conversationID: conversationID || randomUUID(),
         isolateGitWorkdir: false,
         senderCharacterID,
+        requestSource,
         replyRecipientID,
         deliveryID,
       });
@@ -1068,6 +1072,7 @@ export class AgentRuntime {
     conversationID,
     isolateGitWorkdir = false,
     senderCharacterID = null,
+    requestSource = null,
     replyRecipientID = null,
     deliveryID = null,
   }) {
@@ -1274,11 +1279,12 @@ export class AgentRuntime {
             fast_mode,
             prompt,
             sender_character_id,
+            request_source,
             status,
             started_at,
             updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', now(), now())
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', now(), now())
         `,
         [
           turnID,
@@ -1290,6 +1296,7 @@ export class AgentRuntime {
           character.fastMode,
           prompt,
           senderCharacterID,
+          requestSource,
         ],
       );
       await client.query(
@@ -1754,6 +1761,7 @@ export class AgentRuntime {
     startedAt = new Date(),
     execution = null,
     senderCharacterID = null,
+    requestSource = null,
     replyRecipientID = null,
     deliveryID = null,
   }) {
@@ -1798,9 +1806,9 @@ export class AgentRuntime {
         `
           INSERT INTO turns (
             id, cli_session_id, backend, model, effort, fast_mode,
-            origin, prompt, status, started_at, updated_at, sender_character_id
+            origin, prompt, status, started_at, updated_at, sender_character_id, request_source
           )
-          VALUES ($1, $2, $3, $4, $5, $6, 'terminal', $7, 'running', $8, now(), $9)
+          VALUES ($1, $2, $3, $4, $5, $6, 'terminal', $7, 'running', $8, now(), $9, $10)
         `,
         [
           turnID,
@@ -1812,6 +1820,7 @@ export class AgentRuntime {
           cleanPrompt,
           startedAt,
           senderCharacterID,
+          requestSource,
         ],
       );
       await client.query(
@@ -1948,6 +1957,12 @@ export class AgentRuntime {
       );
       for (const entry of previous.rows) {
         state.sequence = Math.max(state.sequence, Number(entry.seq));
+        // Live transcript messages can arrive before Stop. Keep the final text
+        // in the response only, including a long message clipped for progress.
+        if (entry.eventKey?.startsWith("terminal:") && isTerminalFinalMessage(entry, decoded.text)) {
+          await this.pool.query("DELETE FROM turn_activities WHERE turn_id = $1 AND seq = $2", [turnID, entry.seq]);
+          continue;
+        }
         if (entry.eventKey) state.activityRecords.set(entry.eventKey, {
           sequence: Number(entry.seq), kind: entry.kind, text: entry.text,
           status: entry.status, collaboration: entry.collaboration ?? null,
@@ -5545,10 +5560,7 @@ function antigravityArguments(
     "stream-json",
     "--print-timeout",
     "24h",
-    "--model",
-    character.model,
-    "--effort",
-    character.effort,
+    ...antigravityModelArguments(character.model, character.effort),
   ];
   if (previousSessionID) {
     argumentsList.push("--conversation", previousSessionID);
