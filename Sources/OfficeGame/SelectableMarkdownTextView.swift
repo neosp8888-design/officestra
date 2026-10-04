@@ -1298,14 +1298,18 @@ enum SelectableMarkdownAttributedRenderer {
             previousWasTableCell = descriptor.tableCell != nil
         }
 
-        appendParagraphBoundary(
-            to: output,
-            attributes: previousAttributes ?? baseAttributes(
-                fontSize: fontSize,
-                isDark: isDark
-            ),
-            force: previousWasTableCell
-        )
+        // 표 셀은 줄바꿈으로 닫아야 하지만, 일반 문단 끝 줄바꿈은 빈 줄을
+        // 하나 더 조판해 문장 아래에만 여백이 생긴다.
+        if previousWasTableCell {
+            appendParagraphBoundary(
+                to: output,
+                attributes: previousAttributes ?? baseAttributes(
+                    fontSize: fontSize,
+                    isDark: isDark
+                ),
+                force: true
+            )
+        }
         return output
     }
 

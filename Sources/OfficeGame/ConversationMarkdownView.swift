@@ -138,21 +138,34 @@ private struct ConversationMarkdownSection: View {
             : SelectableMarkdownSegmenter.split(visibleSource)
 
         VStack(alignment: .leading, spacing: 9) {
-            ForEach(Array(markdownSegments.enumerated()), id: \.offset) {
-                _, segment in
-                switch segment.kind {
-                case .codeBlock:
-                    ConversationCodeBlockSegmentView(
-                        source: segment.source,
-                        fontSize: fontSize,
-                        fallbackDirectory: fallbackDirectory
-                    )
-                case .prose, .table:
-                    SelectableMarkdownTextView(
-                        source: segment.source,
-                        fontSize: fontSize,
-                        fileBaseDirectory: fallbackDirectory?.path,
-                        minimumLayoutWidth: segment.minimumLayoutWidth
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(markdownSegments.enumerated()), id: \.offset) {
+                    index, segment in
+                    Group {
+                        switch segment.kind {
+                        case .codeBlock:
+                            ConversationCodeBlockSegmentView(
+                                source: segment.source,
+                                fontSize: fontSize,
+                                fallbackDirectory: fallbackDirectory
+                            )
+                        case .prose, .table:
+                            SelectableMarkdownTextView(
+                                source: segment.source,
+                                fontSize: fontSize,
+                                fileBaseDirectory: fallbackDirectory?.path,
+                                minimumLayoutWidth: segment.minimumLayoutWidth
+                            )
+                        }
+                    }
+                    .padding(
+                        .top,
+                        index == 0
+                            ? 0
+                            : ConversationMarkdownSegmentSpacing.spacing(
+                                after: markdownSegments[index - 1].kind,
+                                before: segment.kind
+                            )
                     )
                 }
             }
@@ -164,6 +177,23 @@ private struct ConversationMarkdownSection: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// 코드 블록 앞 설명 문장이 위 블록이 아니라 자기 블록에 붙어 보이도록
+// 코드 블록 앞은 좁게, 뒤는 넓게 띄운다.
+enum ConversationMarkdownSegmentSpacing {
+    static func spacing(
+        after previous: SelectableMarkdownSegment.Kind,
+        before next: SelectableMarkdownSegment.Kind
+    ) -> CGFloat {
+        if next == .codeBlock {
+            return 6
+        }
+        if previous == .codeBlock {
+            return 18
+        }
+        return 9
     }
 }
 

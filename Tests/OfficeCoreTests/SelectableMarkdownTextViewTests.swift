@@ -332,6 +332,33 @@ final class SelectableMarkdownTextViewTests: XCTestCase {
         )
     }
 
+    func testParagraphEndDoesNotAddEmptyLineBelowText() {
+        // 코드 블록 앞 설명 한 줄 끝에 줄바꿈이 남으면 빈 줄이 조판돼
+        // 설명이 자기 코드 블록보다 위 블록에 붙어 보인다.
+        let source = "**맥에서** (18188 터널이 열려 있을 때)\n"
+        let rendered = SelectableMarkdownAttributedRenderer.render(
+            source: source, fontSize: 15, fallbackDirectory: nil, isDark: false
+        )
+        XCTAssertEqual(rendered.string, "맥에서 (18188 터널이 열려 있을 때)")
+
+        let view = SelectableMarkdownDocumentView(fontSize: 15)
+        view.apply(source: source, fallbackDirectory: nil, isDark: false)
+        let lineHeight = NSLayoutManager().defaultLineHeight(
+            for: NSFont.systemFont(ofSize: 15)
+        )
+        XCTAssertLessThan(view.heightThatFits(width: 700), lineHeight * 1.6)
+    }
+
+    func testCodeBlockSitsCloserToItsLeadingTextThanToFollowingText() {
+        let before = ConversationMarkdownSegmentSpacing.spacing(
+            after: .prose, before: .codeBlock
+        )
+        let after = ConversationMarkdownSegmentSpacing.spacing(
+            after: .codeBlock, before: .prose
+        )
+        XCTAssertLessThan(before, after)
+    }
+
     func testUnboundedHeightRequestsPreserveTheMeasuredViewportWidth() {
         let documentView = SelectableMarkdownDocumentView(fontSize: 14)
         documentView.apply(
@@ -546,7 +573,7 @@ final class SelectableMarkdownTextViewTests: XCTestCase {
 
         XCTAssertEqual(
             rendered.string,
-            "3.\t바깥 항목\n•\t안쪽 첫째\n•\t안쪽 둘째\n"
+            "3.\t바깥 항목\n•\t안쪽 첫째\n•\t안쪽 둘째"
         )
     }
 
@@ -577,7 +604,7 @@ final class SelectableMarkdownTextViewTests: XCTestCase {
             isDark: false
         )
 
-        XCTAssertEqual(rendered.string, "첫째 줄\n둘째 줄\n셋째 줄\n")
+        XCTAssertEqual(rendered.string, "첫째 줄\n둘째 줄\n셋째 줄")
     }
 
     func testNarrowTableKeepsReadableWidthForHorizontalScrolling() {
