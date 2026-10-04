@@ -1131,6 +1131,7 @@ private struct LiveWorkspaceHeader: View {
         CharacterSelectionStore
     let conversationMode: OfficeConversationMode
     @State private var localModelFailure: String?
+    @State private var localGPUPrompt: LocalGPUPrompt?
 
     private var modelAccent: Color {
         let backend = director.characters.first {
@@ -1267,6 +1268,35 @@ private struct LiveWorkspaceHeader: View {
                     localModelFailure = nil
                 }
             } message: { Text(localModelFailure ?? "") }
+            .alert(
+                OfficeLocalization.string("4090 그래픽 메모리 사용 중"),
+                isPresented: Binding(
+                    get: { localGPUPrompt != nil },
+                    set: { if !$0 { localGPUPrompt = nil } }
+                ),
+                presenting: localGPUPrompt
+            ) { prompt in
+                ForEach(prompt.occupancy.releaseOptions, id: \.self) { option in
+                    Button(
+                        option.title,
+                        role: option == .free ? nil : .destructive
+                    ) {
+                        runLocalModelAction(
+                            "start",
+                            for: prompt.character,
+                            comfyRelease: option
+                        )
+                    }
+                }
+                Button(
+                    OfficeLocalization.string(
+                        prompt.occupancy.releaseOptions.isEmpty ? "확인" : "취소"
+                    ),
+                    role: .cancel
+                ) {}
+            } message: { prompt in
+                Text(prompt.occupancy.message)
+            }
         }
 
     private var liveBadgeColor: Color {
@@ -1304,12 +1334,31 @@ private struct LiveWorkspaceHeader: View {
         localModelStatus?.isLoaded == true || localModelBusy
     }
 
-    private func runLocalModelAction(_ action: String) {
-        guard let target = localModelTarget else { return }
-        let character = target.character
+    private func runLocalModelAction(
+        _ action: String,
+        for selectedCharacter: OfficeCharacter? = nil,
+        comfyRelease: LocalComfyRelease? = nil
+    ) {
+        guard
+            let character = selectedCharacter ?? localModelTarget?.character
+        else { return }
         Task {
-            do { try await director.controlLocalModel(action, for: character) }
-            catch { localModelFailure = error.localizedDescription }
+            do {
+                try await director.controlLocalModel(
+                    action,
+                    for: character,
+                    comfyRelease: comfyRelease
+                )
+            } catch OfficeDatabaseError.localGPUOccupied(_, let occupancy)
+                where action == "start"
+            {
+                localGPUPrompt = LocalGPUPrompt(
+                    character: character,
+                    occupancy: occupancy
+                )
+            } catch {
+                localModelFailure = error.localizedDescription
+            }
         }
     }
 

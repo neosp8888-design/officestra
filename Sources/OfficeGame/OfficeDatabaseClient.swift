@@ -119,12 +119,18 @@ struct OfficeDatabaseClient: Sendable {
         try validate(response, data: data)
     }
 
-    func controlLocalModel(_ action: String, for character: OfficeCharacter) async throws {
+    func controlLocalModel(
+        _ action: String,
+        for character: OfficeCharacter,
+        comfyRelease: LocalComfyRelease? = nil
+    ) async throws {
         var request = URLRequest(url: baseURL.appending(path: "api/characters/\(character.rawValue)/local-model"))
         request.httpMethod = "POST"
         request.timeoutInterval = 360
         request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["action": action])
+        var body = ["action": action]
+        body["comfyRelease"] = comfyRelease?.rawValue
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await URLSession.shared.data(for: request)
         try validate(response, data: data)
     }
@@ -992,14 +998,26 @@ struct OfficeDatabaseClient: Sendable {
             let response = response as? HTTPURLResponse,
             (200..<300).contains(response.statusCode)
         else {
-            let payload = try? JSONDecoder().decode(
-                BackendErrorResponse.self,
-                from: data
-            )
-            throw OfficeDatabaseError.backend(
-                payload?.error ?? "백엔드 요청에 실패했습니다."
+            throw Self.backendError(from: data)
+        }
+    }
+
+    static func backendError(from data: Data) -> OfficeDatabaseError {
+        let payload = try? JSONDecoder().decode(
+            BackendErrorResponse.self,
+            from: data
+        )
+        if
+            let payload,
+            payload.code == "local-gpu-occupied",
+            let occupancy = payload.gpu
+        {
+            return .localGPUOccupied(
+                message: payload.error,
+                occupancy: occupancy
             )
         }
+        return .backend(payload?.error ?? "백엔드 요청에 실패했습니다.")
     }
 
     private func wikiProposalActionURL(
@@ -2079,17 +2097,98 @@ private struct CharacterContextSettingsRequest: Encodable {
 enum OfficeDatabaseError: LocalizedError {
     case requestFailed
     case backend(String)
+    case localGPUOccupied(message: String, occupancy: LocalGPUOccupancy)
 
     var errorDescription: String? {
         switch self {
         case .requestFailed:
             OfficeLocalization.string("PostgreSQL 백엔드에 연결할 수 없습니다.")
-        case .backend(let message):
+        case .backend(let message), .localGPUOccupied(let message, _):
             OfficeLocalization.systemMessage(message)
         }
     }
 }
 
+// 로컬 모델 시작 전에 사용자가 고르는 ComfyUI 정리 방식이다.
+enum LocalComfyRelease: String, Equatable {
+    case free
+    case interrupt
+    case terminate
+
+    var title: String {
+        switch self {
+        case .free:
+            OfficeLocalization.string("ComfyUI 메모리 비우고 시작")
+        case .interrupt:
+            OfficeLocalization.string("생성 중인 작업 중단하고 비우기")
+        case .terminate:
+            OfficeLocalization.string("ComfyUI 종료하고 시작")
+        }
+    }
+}
+
+// 4090 그래픽 메모리가 차서 로컬 모델을 시작하지 못했을 때의 상태다.
+struct LocalGPUOccupancy: Decodable, Equatable {
+    enum ComfyUIState: String, Decodable {
+        case offline
+        case idle
+        case running
+        case unavailable
+    }
+
+    let vramPct: Int
+    let ramPct: Int
+    let comfyUI: ComfyUIState
+
+    // 생성 중에는 비우기 요청이 작업이 끝날 때까지 미뤄지므로 중단을 먼저
+    // 제안한다. ComfyUI가 아닌 프로그램은 앱이 정리하지 않는다.
+    var releaseOptions: [LocalComfyRelease] {
+        switch comfyUI {
+        case .idle:
+            [.free, .terminate]
+        case .running:
+            [.interrupt, .terminate]
+        case .unavailable:
+            [.terminate]
+        case .offline:
+            []
+        }
+    }
+
+    var message: String {
+        switch comfyUI {
+        case .idle:
+            OfficeLocalization.format(
+                "ComfyUI가 4090 그래픽 메모리 %d%%를 쓰고 있어 로컬 모델을 시작할 수 없습니다. 메모리를 비울 방법을 고르세요.",
+                vramPct
+            )
+        case .running:
+            OfficeLocalization.format(
+                "ComfyUI가 이미지를 생성하며 4090 그래픽 메모리 %d%%를 쓰고 있습니다. 작업을 중단하거나 ComfyUI를 종료해야 로컬 모델을 시작할 수 있습니다.",
+                vramPct
+            )
+        case .unavailable:
+            OfficeLocalization.format(
+                "ComfyUI가 응답하지 않고 4090 그래픽 메모리 %d%%가 사용 중입니다. ComfyUI를 종료해야 로컬 모델을 시작할 수 있습니다.",
+                vramPct
+            )
+        case .offline:
+            OfficeLocalization.format(
+                "ComfyUI가 아닌 다른 프로그램이 4090 그래픽 메모리 %d%%를 쓰고 있습니다. 그 프로그램을 정리한 뒤 다시 시작하세요.",
+                vramPct
+            )
+        }
+    }
+}
+
+// 정리 방식을 고른 뒤 같은 직원의 로컬 모델을 다시 시작하기 위한 팝업 상태다.
+struct LocalGPUPrompt {
+    let character: OfficeCharacter
+    let occupancy: LocalGPUOccupancy
+}
+
 private struct BackendErrorResponse: Decodable {
     let error: String
+    let code: String?
+    let gpu: LocalGPUOccupancy?
 }

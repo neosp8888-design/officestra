@@ -2782,12 +2782,20 @@ final class AgentDirector: ObservableObject {
         localProfileAssignments[character.rawValue]
     }
 
-    func controlLocalModel(_ action: String, for character: OfficeCharacter) async throws {
+    func controlLocalModel(
+        _ action: String,
+        for character: OfficeCharacter,
+        comfyRelease: LocalComfyRelease? = nil
+    ) async throws {
         guard !isControllingLocalModel else { return }
         isControllingLocalModel = true
         defer { isControllingLocalModel = false }
         do {
-            try await database.controlLocalModel(action, for: character)
+            try await database.controlLocalModel(
+                action,
+                for: character,
+                comfyRelease: comfyRelease
+            )
             await refreshLocalProviderStatuses()
         } catch {
             await refreshLocalProviderStatuses()

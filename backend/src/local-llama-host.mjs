@@ -1,7 +1,7 @@
 import {spawn} from 'node:child_process';
 import {createServer} from 'node:net';
 import {mkdir,readFile,writeFile,unlink} from 'node:fs/promises';
-import {WindowsLMStudioHost,LocalHostBusyError,localHostMemoryExceeded,validateHost} from './local-provider-host.mjs';
+import {WindowsLMStudioHost,LocalHostBusyError,LocalHostGPUOccupiedError,localHostMemoryExceeded,validateHost} from './local-provider-host.mjs';
 import { isMeroMero, MEROMERO_26B_MODEL_ID, meroRuntimeArtifacts, localModelSupportsVision } from './local-model-capabilities.mjs';
 
 // Pinned, separately installed runtime. Never substitutes for LM Studio files.
@@ -103,7 +103,8 @@ export class WindowsLlamaCppHost extends WindowsLMStudioHost {
   await this.remote(llamaCleanupScript(r),{timeout:LLAMA_CLEANUP_REMOTE_TIMEOUT_MS});
   await unlink(this.statePath).catch(e=>{if(e.code!=='ENOENT')throw e;});this.owned=null;
  }
- async start({signal}={}){
+ gpuAvailable(sample){return super.gpuAvailable(sample)&&sample.vramPct<=20;}
+ async start({signal,comfyRelease}={}){
   this.client=await this.pool.connect();let guard,sampling=false;
   const controller=new AbortController();const abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
   try{
@@ -112,12 +113,13 @@ export class WindowsLlamaCppHost extends WindowsLMStudioHost {
    await mkdir(this.directory,{recursive:true,mode:0o700});
    try{this.owned=JSON.parse(await readFile(this.statePath,'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}
    if(this.owned)await this.cleanupOwned();
+   if(comfyRelease)await this.releaseComfyUI(comfyRelease,{signal:controller.signal});
    let [sample,studioPID]=await Promise.all([this.sample(),this.serverPID()]);
    if(!sample.busy&&sample.vramPct>20){
     await this.remote(llamaOrphanCleanupScript(this.profile),{timeout:LLAMA_ORPHAN_CLEANUP_REMOTE_TIMEOUT_MS});
     sample=await this.sample();
    }
-   if(sample.busy||localHostMemoryExceeded(sample)||sample.vramPct>20)throw new LocalHostBusyError('GPU already in use');
+   if(!this.gpuAvailable(sample))throw new LocalHostGPUOccupiedError(sample);
    if(studioPID){
     const d=JSON.parse(await this.remote("Invoke-RestMethod 'http://127.0.0.1:1234/api/v1/models' -TimeoutSec 3 | ConvertTo-Json -Depth 8 -Compress"));
     if(!Array.isArray(d.models)||d.models.some(m=>!Array.isArray(m.loaded_instances)||m.loaded_instances.length))throw new LocalHostBusyError('LM Studio model is in use');

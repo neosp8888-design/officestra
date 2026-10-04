@@ -5,7 +5,7 @@ import { ReplyDeliveryService, cancelPendingReplyDelivery, readReplyRoutes, save
 import { randomUUID } from "node:crypto";
 import { LocalProviderService, normalizeLocalDefinition, localProfileTitle, localProfileReasoningOptions, localProfileDefaultReasoning, LOCAL_TURN_EFFORT_SQL } from './local-provider-service.mjs';
 import { selectLocalProfile, setLocalReasoning, setLocalHostAddress, assignedLocalDefinition, controlLocalModel } from './local-profile-selection.mjs';
-import { LocalHostBusyError } from './local-provider-host.mjs';
+import { LocalHostBusyError, LocalHostGPUOccupiedError } from './local-provider-host.mjs';
 import { VoiceFollowControl } from './voice-follow-control.mjs';
 import { readVoiceTurn } from './voice-feed.mjs';
 import { WebSocket, WebSocketServer } from "ws";
@@ -2428,8 +2428,8 @@ const server = createServer(async (request, response) => {
     } else if (request.method === 'POST' && /^\/api\/characters\/[^/]+\/local-model$/.test(url.pathname)) {
       if(!trustedJSONMutation(request,response))return;
       const body=await readJSON(request);
-      try{send(response,200,await controlLocalModel({pool,runtime,localProviders,characterID:decodeURIComponent(url.pathname.split('/')[3]),action:body.action}));}
-      catch(error){send(response,error instanceof AgentBusyError||error instanceof LocalHostBusyError?409:400,{error:error.message});}
+      try{send(response,200,await controlLocalModel({pool,runtime,localProviders,characterID:decodeURIComponent(url.pathname.split('/')[3]),action:body.action,comfyRelease:body.comfyRelease}));}
+      catch(error){send(response,error instanceof AgentBusyError||error instanceof LocalHostBusyError?409:400,{error:error.message,...(error instanceof LocalHostGPUOccupiedError?{code:'local-gpu-occupied',gpu:error.gpu}:{})});}
     } else if (request.method === 'GET' && url.pathname === '/api/voice-feed') {
       const characterId = url.searchParams.get('characterId');
       const since = url.searchParams.get('since');

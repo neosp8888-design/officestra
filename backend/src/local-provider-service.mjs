@@ -10,7 +10,7 @@ import { LocalInferenceBridge } from './local-inference-bridge.mjs';
 import { INCLUSIVE_INPUT_PROFILE, LLAMA_MESSAGES_PROFILE } from './local-usage-normalizer.mjs';
 import { RESPONSES_INCLUSIVE_PROFILE, LLAMA_RESPONSES_PROFILE } from './local-responses-usage.mjs';
 import { WindowsLlamaCppHost } from './local-llama-host.mjs';
-import { WindowsLMStudioHost, LocalHostBusyError, validateHost, LOCAL_HOST_MEMORY_BUDGET, LOCAL_HOST_RESOURCE_SAMPLE_TIMEOUT_MS } from './local-provider-host.mjs';
+import { WindowsLMStudioHost, LocalHostBusyError, validateHost, LOCAL_HOST_MEMORY_BUDGET, LOCAL_HOST_RESOURCE_SAMPLE_TIMEOUT_MS, COMFY_RELEASE_MODES } from './local-provider-host.mjs';
 import { normalizeLocalAgentProfile, createLocalAgentLaunch } from './local-agent-profile.mjs';
 import { isMeroMero, MEROMERO_MODEL_ID, MEROMERO_26B_MODEL_ID, directReasoningOptions, directDefaultReasoning, directCodexReasoning, localModelSupportsVision } from './local-model-capabilities.mjs';
 import { isQwen38LMStudioModelKey } from './local-provider-host.mjs';
@@ -116,15 +116,16 @@ export class LocalProviderService {
     const state=group?.controlState??(error?'error':group?.paused?'stopped':entries.some(e=>e.state==='starting')?'starting':entries.some(e=>e.state==='waiting')?'waiting':loaded?'ready':'idle');
     return {state,error,loaded,users:entries.reduce((sum,e)=>sum+e.users,0),active:!!group?.locked,resources:entries.find(e=>e.resources)?.resources??null};
   }
-  controlModel(rawDefinition,action) {
-    const task=this.applyModelControl(rawDefinition,action);
+  controlModel(rawDefinition,action,options) {
+    const task=this.applyModelControl(rawDefinition,action,options);
     this.modelControls.add(task);
     task.then(()=>this.modelControls.delete(task),()=>this.modelControls.delete(task));
     return task;
   }
-  async applyModelControl(rawDefinition,action) {
+  async applyModelControl(rawDefinition,action,{comfyRelease}={}) {
     if(this.closed)throw new Error('Local service is shutting down');
     if(!['start','stop'].includes(action))throw new Error('Unsupported model action');
+    if(comfyRelease!==undefined&&(action!=='start'||!COMFY_RELEASE_MODES.includes(comfyRelease)))throw new Error('Unsupported ComfyUI release mode');
     const definition=normalizeLocalDefinition(rawDefinition),group=this.models.group(definition);
     if(group.controlState)throw new LocalHostBusyError('모델 실행 또는 중지 처리 중입니다.');
     group.controlState=action==='start'?'starting':'stopping';group.controlError=null;
@@ -146,7 +147,7 @@ export class LocalProviderService {
       } else {
         unlock=await this.models.acquire(group,controller.signal);
         const host=this.hostFactory({...definition,pool:this.pool,stateDirectory:this.stateDirectory});
-        const resource=await this.models.borrow(group,()=>host.start({signal:controller.signal}));
+        const resource=await this.models.borrow(group,()=>host.start({signal:controller.signal,comfyRelease}));
         await resource.release();
         if(group.record)this.models.keepWarm(group,group.record);
         group.paused=false;

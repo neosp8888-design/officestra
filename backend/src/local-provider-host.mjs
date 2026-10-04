@@ -34,6 +34,30 @@ export function localHostResourceSampleScript(comfyPort) {
   // physical-memory and listener facts without waiting on the WMI provider.
   return `$ErrorActionPreference='Stop'; $g=(& nvidia-smi --query-gpu=memory.total,memory.used --format=csv,noheader,nounits) -split ','; Add-Type -AssemblyName Microsoft.VisualBasic; $o=New-Object Microsoft.VisualBasic.Devices.ComputerInfo; $busy=$false; $queueState='offline'; $listener=[System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | Where-Object {$_.Port -eq ${comfyPort}} | Select-Object -First 1; if($listener){ try{$q=Invoke-RestMethod -Uri http://127.0.0.1:${comfyPort}/queue -TimeoutSec 2; if($null -eq $q.queue_running -or $null -eq $q.queue_pending){throw 'Invalid queue'}; $busy=($q.queue_running.Count + $q.queue_pending.Count) -gt 0; $queueState='ready'}catch{$busy=$true;$queueState='unavailable'} }; [pscustomobject]@{vramPct=100*[double]$g[1]/[double]$g[0];ramPct=100*(1-[double]$o.AvailablePhysicalMemory/[double]$o.TotalPhysicalMemory);busy=$busy;queueState=$queueState} | ConvertTo-Json -Compress`;
 }
+// 시작을 막은 그래픽 메모리 상태를 함께 넘겨, 앱이 ComfyUI 정리 방식을
+// 사용자에게 고르게 한다. ComfyUI가 아닌 프로그램은 정리 대상이 아니다.
+export class LocalHostGPUOccupiedError extends LocalHostBusyError {
+  constructor(sample) {
+    super('4090 그래픽 메모리를 다른 작업이 쓰고 있어 로컬 모델을 시작할 수 없습니다.');
+    this.gpu={vramPct:Math.round(sample.vramPct),ramPct:Math.round(sample.ramPct),comfyUI:comfyUIState(sample)};
+  }
+}
+export function comfyUIState(sample) {
+  if(sample.queueState==='ready')return sample.busy?'running':'idle';
+  return sample.queueState==='unavailable'?'unavailable':'offline';
+}
+export const COMFY_RELEASE_MODES=Object.freeze(['free','interrupt','terminate']);
+export function comfyReleaseScript(comfyPort,mode) {
+  if(!Number.isInteger(comfyPort)||comfyPort<1||comfyPort>65535)throw new TypeError('Invalid ComfyUI port');
+  if(!COMFY_RELEASE_MODES.includes(mode))throw new Error('Unsupported ComfyUI release mode');
+  const base=`http://127.0.0.1:${comfyPort}`;
+  const free=`Invoke-RestMethod -Method Post -Uri ${base}/free -ContentType 'application/json' -Body '{"unload_models":true,"free_memory":true}' -TimeoutSec 10 | Out-Null`;
+  if(mode==='free')return `$ErrorActionPreference='Stop';${free};'released'`;
+  // 대기열을 먼저 비워야 중단 직후 다음 작업이 모델을 다시 올리지 않는다.
+  if(mode==='interrupt')return `$ErrorActionPreference='Stop';Invoke-RestMethod -Method Post -Uri ${base}/queue -ContentType 'application/json' -Body '{"clear":true}' -TimeoutSec 10 | Out-Null;Invoke-RestMethod -Method Post -Uri ${base}/interrupt -TimeoutSec 10 | Out-Null;${free};'released'`;
+  // 같은 포트의 다른 프로그램은 끄지 않는다. ComfyUI main.py 프로세스만 종료한다.
+  return `$ErrorActionPreference='Stop';$line=netstat -ano -p TCP | Select-String -Pattern '^\\s*TCP\\s+\\S+:${comfyPort}\\s+\\S+\\s+LISTENING\\s+(\\d+)\\s*$' | Select-Object -First 1;if($line -and $line.Line -match '\\s+(\\d+)\\s*$'){$id=[int]$Matches[1];$p=Get-CimInstance Win32_Process -Filter "ProcessId=$id";if(-not $p -or $p.CommandLine -notmatch 'main\\.py'){throw 'ComfyUI process not recognized'};Stop-Process -Id $id -Force;$deadline=(Get-Date).AddSeconds(15);do{Start-Sleep -Milliseconds 200;$c=Get-Process -Id $id -ErrorAction SilentlyContinue}while($c -and (Get-Date) -lt $deadline);if($c){throw 'ComfyUI did not exit'}};'released'`;
+}
 export function localHostListenerPIDScript(port) {
   if(!Number.isInteger(port)||port<1||port>65535)throw new TypeError('Invalid listener port');
   // Get-NetTCPConnection can block on the Windows CIM provider. netstat is a
@@ -93,6 +117,17 @@ export class WindowsLMStudioHost {
   async serverPID() {
     return Number(await this.remote(localHostListenerPIDScript(1234)));
   }
+  gpuAvailable(sample) {
+    return !sample.busy&&!localHostMemoryExceeded(sample);
+  }
+  // ComfyUI는 해제 요청을 받은 뒤 조금 늦게 메모리를 돌려준다. 시작 판단은
+  // 호출한 쪽이 다시 하므로 여기서는 내려갈 때까지만 기다린다.
+  async releaseComfyUI(mode,{signal,timeoutMs=20000,pollMs=1000}={}) {
+    await this.remote(comfyReleaseScript(this.host.comfyPort,mode),{timeout:30000,signal});
+    const deadline=Date.now()+timeoutMs;
+    let sample=await this.sample();
+    while(!signal?.aborted&&!this.gpuAvailable(sample)&&Date.now()<deadline){await sleep(pollMs);sample=await this.sample();}
+  }
   async cleanupOwned() {
     const owned=this.owned;if(!owned)return;
     if(!Number.isSafeInteger(owned.serverPID)||owned.serverPID<=0||!/^[a-zA-Z0-9._-]+$/.test(owned.model))throw new Error('Invalid owned resource recovery record');
@@ -105,7 +140,7 @@ export class WindowsLMStudioHost {
     }
     await unlink(this.statePath).catch(e=>{if(e.code!=='ENOENT')throw e;});this.owned=null;
   }
-  async start({signal}={}) {
+  async start({signal,comfyRelease}={}) {
     this.client=await this.pool.connect();
     try {
       const lock=await this.client.query('SELECT pg_try_advisory_lock(hashtext($1)) AS locked',[`local-host:${this.key}`]);
@@ -114,7 +149,8 @@ export class WindowsLMStudioHost {
       try{this.owned=JSON.parse(await readFile(this.statePath,'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}
       // Only a recorded server PID and model may be recovered after a crash.
       if(this.owned)await this.cleanupOwned();
-      const s=await this.sample();if(s.busy||localHostMemoryExceeded(s))throw new LocalHostBusyError('ComfyUI or memory budget is busy');
+      if(comfyRelease)await this.releaseComfyUI(comfyRelease,{signal});
+      const s=await this.sample();if(!this.gpuAvailable(s))throw new LocalHostGPUOccupiedError(s);
       const models=JSON.parse(await this.remote('lms ps --json'));if(models.length||await this.serverPID())throw new LocalHostBusyError('Existing LM Studio workload is not owned by OFFICESTRA');
       if(!/^[a-zA-Z0-9._-]+$/.test(this.profile.model))throw new Error('Unsafe model identifier');
       await this.remote('lms server start --port 1234 --bind 127.0.0.1');

@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {setTimeout as delay} from 'node:timers/promises';
-import {llamaServerArguments,llamaServerCommand,llamaArtifactVerificationScript,validLlamaOwnership,llamaCleanupScript,llamaOrphanCleanupScript,llamaDirectPortGuardScript,LLAMA_CLEANUP_REMOTE_TIMEOUT_MS,LLAMA_ORPHAN_CLEANUP_REMOTE_TIMEOUT_MS,LLAMA_SERVER_PATH,LLAMA_MODEL_ID,LLAMA_MODEL_ROOT,LLAMA_MODEL_FILE,LLAMA_MODEL_SIZE,LLAMA_MODEL_SHA256,LLAMA_MMPROJ_FILE,LLAMA_MMPROJ_SIZE,LLAMA_MMPROJ_SHA256} from '../src/local-llama-host.mjs';
-import {isQwen38LMStudioModelKey,localHostRemoteCommand} from '../src/local-provider-host.mjs';
+import {WindowsLlamaCppHost,llamaServerArguments,llamaServerCommand,llamaArtifactVerificationScript,validLlamaOwnership,llamaCleanupScript,llamaOrphanCleanupScript,llamaDirectPortGuardScript,LLAMA_CLEANUP_REMOTE_TIMEOUT_MS,LLAMA_ORPHAN_CLEANUP_REMOTE_TIMEOUT_MS,LLAMA_SERVER_PATH,LLAMA_MODEL_ID,LLAMA_MODEL_ROOT,LLAMA_MODEL_FILE,LLAMA_MODEL_SIZE,LLAMA_MODEL_SHA256,LLAMA_MMPROJ_FILE,LLAMA_MMPROJ_SIZE,LLAMA_MMPROJ_SHA256} from '../src/local-llama-host.mjs';
+import {isQwen38LMStudioModelKey,localHostRemoteCommand,LocalHostBusyError,LocalHostGPUOccupiedError,comfyReleaseScript,comfyUIState} from '../src/local-provider-host.mjs';
 import {normalizeLocalAgentProfile,createLocalAgentLaunch} from '../src/local-agent-profile.mjs';
 import {normalizeLocalResponsesRequest} from '../src/local-inference-bridge.mjs';
 import {LocalProviderService,localCodexModelCatalog} from '../src/local-provider-service.mjs';
@@ -104,4 +104,64 @@ test('native-style disconnect after completed does not mark failure or reload th
   assert.equal(response.status,200);const reader=response.body.getReader();const first=await reader.read();assert.match(new TextDecoder().decode(first.value),/response.completed/);control.abort();await reader.cancel().catch(()=>{});await delay(250);
  }
  assert.equal(loads,1);assert.equal(releases,0);assert.equal(changes.includes('error'),false);assert.equal(service.status()[0].state,'ready');
+});
+// 시작 전 단계만 확인한다. 실제 SSH·DB 대신 원격 명령과 상태 측정을 기록한다.
+function occupiedHost(samples){
+ const remotes=[],queries=[];
+ const pool={connect:async()=>({query:async(sql)=>{queries.push(sql);return {rows:[{locked:true}]};},release(){}})};
+ const h=new WindowsLlamaCppHost({host,profile,pool,stateDirectory:'/tmp/officestra-comfy-release-test'});
+ h.remote=async script=>{remotes.push(script);return '{"released":0}';};
+ const queue=[...samples],taken=[];
+ h.sample=async()=>{const s=queue.length>1?queue.shift():queue[0];taken.push(s);return {...s,sampledAt:Date.now()};};
+ h.serverPID=async()=>0;
+ return {h,remotes,queries,taken};
+}
+test('GPU held by ComfyUI reports its state so the app can offer a release choice',async()=>{
+ const {h,remotes,queries}=occupiedHost([{vramPct:79.6,ramPct:40,busy:false,queueState:'ready'}]);
+ const error=await h.start().catch(e=>e);
+ assert.ok(error instanceof LocalHostGPUOccupiedError);
+ assert.ok(error instanceof LocalHostBusyError);
+ assert.deepEqual(error.gpu,{vramPct:80,ramPct:40,comfyUI:'idle'});
+ assert.equal(remotes.some(s=>s.includes('/free')),false);
+ assert.ok(queries.some(sql=>/advisory_unlock/.test(sql)));
+});
+test('chosen ComfyUI release runs inside the 4090 lease before the GPU check',async()=>{
+ const {h,remotes}=occupiedHost([{vramPct:80,ramPct:40,busy:true,queueState:'ready'},{vramPct:79,ramPct:40,busy:true,queueState:'ready'}]);
+ h.releaseComfyUI=async function(mode,options){remotes.push(`release:${mode}`);assert.ok(options.signal);};
+ const error=await h.start({comfyRelease:'interrupt'}).catch(e=>e);
+ assert.equal(remotes[0],'release:interrupt');
+ assert.equal(error.gpu.comfyUI,'running');
+});
+test('ComfyUI release waits until memory drops below the direct runtime limit',async()=>{
+ const {h,remotes,taken}=occupiedHost([{vramPct:80,ramPct:40,busy:false,queueState:'ready'},{vramPct:45,ramPct:35,busy:false,queueState:'ready'},{vramPct:9,ramPct:30,busy:false,queueState:'ready'}]);
+ await h.releaseComfyUI('free',{pollMs:1});
+ assert.match(remotes[0],/\/free/);
+ assert.deepEqual(taken.map(s=>s.vramPct),[80,45,9]);
+ assert.equal(h.gpuAvailable({vramPct:25,ramPct:30,busy:false}),false);
+});
+test('ComfyUI release scripts free, interrupt or terminate only the ComfyUI process',()=>{
+ const free=comfyReleaseScript(8188,'free');
+ assert.match(free,/http:\/\/127\.0\.0\.1:8188\/free/);assert.match(free,/"unload_models":true/);
+ const interrupt=comfyReleaseScript(8188,'interrupt');
+ assert.ok(interrupt.indexOf('/queue')<interrupt.indexOf('/interrupt'));
+ assert.ok(interrupt.indexOf('/interrupt')<interrupt.indexOf('/free'));
+ assert.match(interrupt,/"clear":true/);
+ const terminate=comfyReleaseScript(8188,'terminate');
+ assert.match(terminate,/:8188/);assert.match(terminate,/main\\\.py/);assert.match(terminate,/Stop-Process -Id \$id -Force/);
+ assert.throws(()=>comfyReleaseScript(8188,'kill-all'),/Unsupported ComfyUI release mode/);
+ assert.throws(()=>comfyReleaseScript(0,'free'),/Invalid ComfyUI port/);
+ assert.equal(comfyUIState({busy:false,queueState:'offline'}),'offline');
+ assert.equal(comfyUIState({busy:true,queueState:'unavailable'}),'unavailable');
+ assert.equal(comfyUIState({busy:false,queueState:'ready'}),'idle');
+ assert.equal(comfyUIState({busy:true,queueState:'ready'}),'running');
+});
+test('service forwards a release choice only with start',async()=>{
+ const starts=[];
+ const service=new LocalProviderService({pool:{},stateDirectory:'/tmp/unused',hostFactory:()=>({start:async options=>{starts.push(options.comfyRelease);return {upstream:'http://127.0.0.1:9',sample:async()=>({vramPct:10,ramPct:20,sampledAt:Date.now(),busy:false}),alive:()=>true,release:async()=>{}};}})});
+ const definition={profile,host};
+ await service.controlModel(definition,'start',{comfyRelease:'terminate'});
+ assert.deepEqual(starts,['terminate']);
+ await assert.rejects(service.controlModel(definition,'stop',{comfyRelease:'free'}),/Unsupported ComfyUI release mode/);
+ await assert.rejects(service.controlModel(definition,'start',{comfyRelease:'reboot'}),/Unsupported ComfyUI release mode/);
+ await service.controlModel(definition,'stop');
 });

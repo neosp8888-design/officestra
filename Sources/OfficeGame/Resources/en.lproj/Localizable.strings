@@ -820,3 +820,11 @@
 "답변 중" = "Replying";
 "명령 실행 중" = "Running";
 "도구 실행 중" = "Using tool";
+"4090 그래픽 메모리 사용 중" = "4090 GPU memory in use";
+"ComfyUI 메모리 비우고 시작" = "Free ComfyUI memory and start";
+"생성 중인 작업 중단하고 비우기" = "Stop the running generation and free memory";
+"ComfyUI 종료하고 시작" = "Quit ComfyUI and start";
+"ComfyUI가 4090 그래픽 메모리 %d%%를 쓰고 있어 로컬 모델을 시작할 수 없습니다. 메모리를 비울 방법을 고르세요." = "ComfyUI is using %d%% of the 4090 GPU memory, so the local model cannot start. Choose how to free the memory.";
+"ComfyUI가 이미지를 생성하며 4090 그래픽 메모리 %d%%를 쓰고 있습니다. 작업을 중단하거나 ComfyUI를 종료해야 로컬 모델을 시작할 수 있습니다." = "ComfyUI is generating and using %d%% of the 4090 GPU memory. Stop the generation or quit ComfyUI to start the local model.";
+"ComfyUI가 응답하지 않고 4090 그래픽 메모리 %d%%가 사용 중입니다. ComfyUI를 종료해야 로컬 모델을 시작할 수 있습니다." = "ComfyUI is not responding and %d%% of the 4090 GPU memory is in use. Quit ComfyUI to start the local model.";
+"ComfyUI가 아닌 다른 프로그램이 4090 그래픽 메모리 %d%%를 쓰고 있습니다. 그 프로그램을 정리한 뒤 다시 시작하세요." = "A program other than ComfyUI is using %d%% of the 4090 GPU memory. Close it and try again.";

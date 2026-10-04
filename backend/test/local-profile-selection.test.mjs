@@ -21,6 +21,19 @@ test('model control resolves selected host and reasoning without modifying assig
   await assert.rejects(controlLocalModel({...args,runtime:{draining:true}}),/준비/);
   assert.equal(calls.length,1);
 });
+test('model start carries the chosen ComfyUI release and rejects it elsewhere',async()=>{
+  const calls=[];
+  const args={runtime:{draining:false},characterID:'test',action:'start',comfyRelease:'interrupt',
+    pool:{query:async()=>({rows:[{definition,address:null,reasoning:null}]})},
+    localProviders:{controlModel:async(d,action,options)=>{calls.push({action,options});return {state:'ready',loaded:true};}}};
+  await controlLocalModel(args);
+  assert.deepEqual(calls[0],{action:'start',options:{comfyRelease:'interrupt'}});
+  await controlLocalModel({...args,comfyRelease:undefined});
+  assert.equal(calls[1].options,undefined);
+  await assert.rejects(controlLocalModel({...args,action:'stop'}),/Unsupported ComfyUI release mode/);
+  await assert.rejects(controlLocalModel({...args,comfyRelease:'shutdown-pc'}),/Unsupported ComfyUI release mode/);
+  assert.equal(calls.length,2);
+});
 test('IPv4 input rejects commands, ports, URLs, invalid octets and empty values',()=>{
   assert.equal(normalizeLocalHostAddress(' 222.109.147.73 '),'222.109.147.73');
   for(const value of ['',null,123,'host','127.0.0.1:22','http://127.0.0.1','1.2.3.256','01.2.3.4','1.2.3.4;whoami','::1'])assert.throws(()=>normalizeLocalHostAddress(value));

@@ -2,7 +2,7 @@ import { AgentBusyError } from './agent-runtime.mjs';
 import { withCharacterSessionLocks } from './character-settings.mjs';
 import { normalizeLocalDefinition, localProfileReasoningOptions } from './local-provider-service.mjs';
 import { isIP } from 'node:net';
-import { WindowsLMStudioHost } from './local-provider-host.mjs';
+import { WindowsLMStudioHost, COMFY_RELEASE_MODES } from './local-provider-host.mjs';
 
 export function assignedLocalDefinition(definition, assignment) {
   return normalizeLocalDefinition({
@@ -12,16 +12,17 @@ export function assignedLocalDefinition(definition, assignment) {
   });
 }
 
-export async function controlLocalModel({pool,runtime,localProviders,characterID,action}) {
+export async function controlLocalModel({pool,runtime,localProviders,characterID,action,comfyRelease}) {
   if(!runtime||runtime.draining)throw new AgentBusyError('백엔드가 준비된 뒤 다시 선택하세요.');
   if(!['start','stop'].includes(action))throw new Error('Unsupported model action');
+  if(comfyRelease!==undefined&&(action!=='start'||!COMFY_RELEASE_MODES.includes(comfyRelease)))throw new Error('Unsupported ComfyUI release mode');
   const result=await pool.query(`SELECT p.definition, c.config->>'localHostAddress' AS address,
     c.config->>'localReasoning' AS reasoning FROM characters c
     JOIN local_agent_profiles p ON p.id=c.config->>'localProfileId'
     WHERE c.id=$1 AND p.enabled=true`,[characterID]);
   const row=result.rows[0];
   if(!row)throw new Error('로컬 모델을 먼저 선택하세요.');
-  return {ok:true,...await localProviders.controlModel(assignedLocalDefinition(row.definition,row),action)};
+  return {ok:true,...await localProviders.controlModel(assignedLocalDefinition(row.definition,row),action,comfyRelease?{comfyRelease}:undefined)};
 }
 
 export function normalizeLocalHostAddress(value) {

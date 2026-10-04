@@ -272,5 +272,6 @@
   {"source":"Antigravity 계정 한도 조회 시간이 초과됐습니다.","translation":"Antigravity account limit request timed out."},
   {"source":"알 수 없는 백엔드입니다. {0}","translation":"Unknown backend: {0}."},
   {"source":"알 수 없는 집계 단위입니다. {0}","translation":"Unknown report granularity: {0}."},
-  {"source":"올바르지 않은 시간대입니다. {0}","translation":"Invalid time zone: {0}."}
+  {"source":"올바르지 않은 시간대입니다. {0}","translation":"Invalid time zone: {0}."},
+  {"source":"4090 그래픽 메모리를 다른 작업이 쓰고 있어 로컬 모델을 시작할 수 없습니다.","translation":"Another workload is using the 4090 GPU memory, so the local model cannot start."}
 ]
