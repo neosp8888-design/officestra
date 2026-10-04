@@ -29,6 +29,7 @@ export class TerminalActivityCollector {
     this.entries = new Map();
     this.omitted = 0;
     this.revision = 0;
+    this.latest = null;
   }
 
   add(activity) {
@@ -37,13 +38,14 @@ export class TerminalActivityCollector {
     const old = this.entries.get(key);
     const text = activity.preserveText && old ? old.text : clipped(activity.text);
     if (!text) return;
+    const status = ["running", "failed"].includes(activity.status) ? activity.status : "completed";
+    if (old?.kind === activity.kind && old.text === text && old.status === status) return;
+    this.latest = { kind: activity.kind, text, status };
     if (!old && this.entries.size >= MAX_ACTIVITIES) {
       this.omitted += 1;
       this.revision += 1;
       return;
     }
-    const status = ["running", "failed"].includes(activity.status) ? activity.status : "completed";
-    if (old?.kind === activity.kind && old.text === text && old.status === status) return;
     this.revision += 1;
     this.entries.set(key, {
       kind: activity.kind,
@@ -56,10 +58,14 @@ export class TerminalActivityCollector {
   parsed(event) {
     for (const value of event?.activities ?? []) this.add(value);
     if (event?.activity) this.add(event.activity);
+    const operation = event?.activity || event?.activities?.length ? this.latest : null;
     if (event?.agentMessage) this.add({
       kind: "message", text: decodeAgentResponse(event.agentMessage).text,
       eventKey: event.agentMessageKey ? `message:${event.agentMessageKey}` : null,
     });
+    // Keep transcript ordering intact while preferring an operation that starts
+    // in the same assistant message over its preceding prose for the bubble.
+    if (operation?.status === "running") this.latest = operation;
   }
 
   codex(record) {

@@ -84,6 +84,7 @@ enum OfficeCharacterBubbleStatus: Equatable {
 
 struct CharacterInteractionLayer: View, Equatable {
     private let speechBubbleStore: SpeechBubbleStore
+    private let workStatusStores: [OfficeCharacter: OfficeWorkStatusStore]
     private let presentation: CharacterInteractionPresentationState
     private let selectCharacter: (CharacterConfiguration) -> Void
     let artStyle: OfficeArtStyle
@@ -101,6 +102,9 @@ struct CharacterInteractionLayer: View, Equatable {
         onBubbleTapped: @escaping (OfficeCharacter, String) -> Void
     ) {
         speechBubbleStore = director.speechBubbleStore
+        workStatusStores = Dictionary(uniqueKeysWithValues: director.characters.map {
+            ($0.id, director.liveFeedStore.characterStore(for: $0.id.rawValue).workStatusStore)
+        })
         presentation = CharacterInteractionPresentationState(
             director: director
         )
@@ -260,6 +264,7 @@ struct CharacterInteractionLayer: View, Equatable {
 
                 CharacterSpeechBubbleLayer(
                     speechBubbleStore: speechBubbleStore,
+                    workStatusStores: workStatusStores,
                     presentation: presentation,
                     artStyle: artStyle,
                     fittedFrame: fittedFrame,
@@ -274,6 +279,7 @@ struct CharacterInteractionLayer: View, Equatable {
 
 struct CharacterSpeechBubbleLayer: View {
     @ObservedObject var speechBubbleStore: SpeechBubbleStore
+    var workStatusStores: [OfficeCharacter: OfficeWorkStatusStore] = [:]
     let presentation: CharacterInteractionPresentationState
     let artStyle: OfficeArtStyle
     let fittedFrame: CGRect
@@ -300,10 +306,12 @@ struct CharacterSpeechBubbleLayer: View {
                         onBubbleTapped(character.id, message)
                     }
                 } label: {
-                    CharacterSpeechBubble(
+                    OfficeStatusBubble(
                         name: presentation.displayNames[character.id]
                             ?? character.name,
                         status: status,
+                        store: workStatusStores[character.id] ?? fallbackWorkStatus,
+                        isCompacting: presentation.compactingCharacters.contains(character.id),
                         accent: DashboardPalette.providerAccent(for: character.backend),
                         tailEdge: character.id == .boss
                             ? .leading
@@ -329,9 +337,6 @@ struct CharacterSpeechBubbleLayer: View {
                     )
                 )
                 .transition(.scale(scale: 0.88).combined(with: .opacity))
-                .accessibilityLabel(
-                    displayName(for: character) + " · " + OfficeLocalization.string(status.label)
-                )
                 .accessibilityIdentifier("officeStatusBubble-\(character.id.rawValue)")
                 .help(OfficeLocalization.string(status.label))
             }
@@ -342,9 +347,7 @@ struct CharacterSpeechBubbleLayer: View {
         )
     }
 
-    private func displayName(for character: CharacterConfiguration) -> String {
-        presentation.displayNames[character.id] ?? character.name
-    }
+    private let fallbackWorkStatus = OfficeWorkStatusStore()
 }
 
 enum OfficeBubbleLayout {
@@ -364,6 +367,14 @@ enum OfficeBubbleLayout {
             x: fittedFrame.minX + bubbleAnchor.x * scale,
             y: fittedFrame.minY + bubbleAnchor.y * scale
         )
+        if character == .leftWoman || character == .rightWoman {
+            // The card stays the same size while the office shrinks, so keep
+            // a screen-space minimum lift above these characters' heads.
+            return CGPoint(
+                x: idealPosition.x,
+                y: idealPosition.y - max(18, 60 * scale)
+            )
+        }
         guard character == .boss else {
             return idealPosition
         }
@@ -398,12 +409,20 @@ enum OfficeBubbleLayout {
     }
 }
 
-private struct CharacterSpeechBubble: View {
+struct OfficeStatusBubble: View {
     let name: String
     let status: OfficeCharacterBubbleStatus
+    @ObservedObject var store: OfficeWorkStatusStore
+    var isCompacting = false
     let accent: Color
     let tailEdge: SpeechBubbleTailEdge
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var statusText: String {
+        status == .working
+            ? OfficeLocalization.string((isCompacting ? OfficeWorkPhase.compacting : store.phase ?? .working).label)
+            : OfficeLocalization.string(status.label)
+    }
 
     var body: some View {
         Group {
@@ -423,15 +442,26 @@ private struct CharacterSpeechBubble: View {
                 }
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(name + " · " + statusText)
     }
 
     private var bubbleCard: some View {
-        HStack(spacing: 5) {
-            Text(name)
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(Color.black.opacity(0.68))
-                .lineLimit(1)
-            statusLabel
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 5) {
+                Text(name)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Color.black.opacity(0.68))
+                    .lineLimit(1)
+                statusLabel
+            }
+            if status == .working {
+                Text(statusText)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(Color.black.opacity(0.75))
+                    .lineLimit(1)
+                    .accessibilityIdentifier("officeWorkStatus")
+            }
         }
         .padding(.horizontal, 7)
         .padding(.vertical, 5)
@@ -439,7 +469,7 @@ private struct CharacterSpeechBubble: View {
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(bubbleColor)
-                .shadow(color: .black.opacity(0.16), radius: 4, y: 2)
+                .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
         )
         .overlay {
             if status == .question || status == .failed || status == .offDuty {
@@ -476,16 +506,16 @@ private struct CharacterSpeechBubble: View {
 
     private var bubbleColor: Color {
         status == .question
-            ? Color(red: 1.0, green: 0.97, blue: 0.86).opacity(0.98)
+            ? Color(red: 1.0, green: 0.97, blue: 0.86).opacity(0.60)
             : status == .offDuty
-            ? Color(red: 0.91, green: 0.94, blue: 1.0).opacity(0.98)
+            ? Color(red: 0.91, green: 0.94, blue: 1.0).opacity(0.60)
             : status == .failed
-            ? Color(red: 1.0, green: 0.91, blue: 0.90).opacity(0.98)
-            : .white.opacity(0.96)
+            ? Color(red: 1.0, green: 0.91, blue: 0.90).opacity(0.60)
+            : .white.opacity(0.60)
     }
 }
 
-private enum SpeechBubbleTailEdge {
+enum SpeechBubbleTailEdge {
     case bottom
     case leading
 }

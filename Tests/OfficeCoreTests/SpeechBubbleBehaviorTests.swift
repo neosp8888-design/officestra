@@ -180,9 +180,9 @@ final class SpeechBubbleBehaviorTests: XCTestCase {
                 else {
                     continue
                 }
-                if color.redComponent > 0.65,
-                   color.greenComponent > 0.65,
-                   color.blueComponent > 0.65,
+                // Detect visible content against the black test canvas, not
+                // an opaque white card: speech bubbles are now translucent.
+                if max(color.redComponent, color.greenComponent, color.blueComponent) > 0.10,
                    color.alphaComponent > 0.2
                 {
                     count += 1

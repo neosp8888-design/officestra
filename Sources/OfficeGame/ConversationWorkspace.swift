@@ -127,19 +127,6 @@ struct ConversationWorkspaceView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(spacing: 0) {
-            if let character = layout.selected {
-                ConversationWorkProgressView(
-                    store: director.liveFeedStore.characterStore(for: character.rawValue).workProgressStore,
-                    characterName: director.displayName(for: character)
-                )
-                .id(character)
-            }
-            workspace
-        }
-    }
-
-    private var workspace: some View {
         GeometryReader { geometry in
             let leftWidth = ConversationLayoutStore.leftWidth(in: geometry.size.width, fraction: layout.state.fraction)
             ZStack(alignment: .topLeading) {

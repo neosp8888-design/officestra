@@ -30,21 +30,27 @@ test("live snapshot retains running then failure and hides command credentials",
   assert.equal(c.finish()[0].eventKey, c.snapshot()[0].eventKey);
 });
 
-test("progress shares the developer-tool writer, updates in place and skips unchanged sweeps", async () => {
+test("bubble status only broadcasts the latest operation, with no DB writes or transcript summary", async () => {
   const h = harness();
   h.state.toolActivityState = { turnID:"turn-1", character:{id:"boss"}, sequence:1, activityRecords:new Map(), activityWritePromise:null };
   h.state.activities.add({ kind:"command",text:"swift test",eventKey:"test",status:"running" });
   await publishTerminalProgress(h.state,h.runtime);
-  const first = h.writes.find(w => w.sql.includes("INSERT INTO turn_activities"));
-  assert.deepEqual(first.values.slice(0,6),["turn-1",2,"command","swift test","terminal:test","running"]);
-  const count = h.writes.length;
+  assert.deepEqual(h.events, [{ type: "terminal.work-status", characterId: "boss", turnId: "turn-1",
+    workActivity: { kind: "command", text: "swift test", status: "running" } }]);
   await publishTerminalProgress(h.state,h.runtime);
-  assert.equal(h.writes.length,count);
+  assert.equal(h.events.length,1);
   h.state.activities.add({ kind:"command",text:"swift test",eventKey:"test",status:"completed" });
   await publishTerminalProgress(h.state,h.runtime);
-  assert.equal(h.writes.filter(w => w.sql.includes("INSERT INTO turn_activities")).length,1);
-  assert.equal(h.writes.find(w => w.sql.includes("UPDATE turn_activities")).values[4],"completed");
-  assert.equal(h.events.at(-1).type,"feed.changed");
+  assert.equal(h.events.at(-1).workActivity.status,"completed");
+  h.state.activities.add({kind:"message",text:"long private progress prose",eventKey:"m1"});
+  await publishTerminalProgress(h.state,h.runtime);
+  assert.deepEqual(h.events.at(-1).workActivity, {kind:"message",text:"",status:"completed"});
+  const count=h.events.length;
+  h.state.activities.add({kind:"message",text:"different prose",eventKey:"m2"});
+  await publishTerminalProgress(h.state,h.runtime);
+  assert.equal(h.events.length,count,"response text does not republish the same status");
+  assert.equal(h.writes.length,0);
+  assert.equal(h.state.toolActivityState.sequence,1,"no activity writer is used");
 });
 
 test("a long final answer stays bounded live and is excluded from the final activity import", () => {
@@ -55,20 +61,21 @@ test("a long final answer stays bounded live and is excluded from the final acti
   assert.deepEqual(c.finish(response), []);
 });
 
-test("progress obeys the completion lock and starts a fresh writer per turn", async () => {
+test("status obeys completion locks and includes a fresh turn identity", async () => {
   const h = harness();
   h.state.activities.add({kind:"message",text:"진행",eventKey:"m"});
   h.state.toolEventsClosing = true;
   await publishTerminalProgress(h.state,h.runtime);
-  assert.equal(h.writes.length,0);
+  assert.equal(h.events.length,0);
   h.state.toolEventsClosing = false;
   await publishTerminalProgress(h.state,h.runtime);
   h.state.runningTurnID = "turn-2";
   h.state.activities = new TerminalActivityCollector();
   h.state.activities.add({kind:"message",text:"다음 턴",eventKey:"n"});
   await publishTerminalProgress(h.state,h.runtime);
-  assert.equal(h.state.toolActivityState.turnID,"turn-2");
-  assert.equal(h.state.toolActivityState.sequence,1);
+  assert.deepEqual(h.events.map(e=>e.turnId),["turn-1","turn-2"]);
+  assert.equal(h.state.toolActivityState,undefined);
+  assert.equal(h.writes.length,0);
 });
 
 async function claudeFixture(t) {
@@ -92,11 +99,12 @@ test("Claude imports new same-session public events and waits for complete UTF-8
   const bytes=Buffer.from(text), split=bytes.indexOf(Buffer.from("정상"))+1;
   await appendFile(h.path,bytes.subarray(0,split));
   await h.watcher.sweep();
-  assert.equal(h.writes.length,0);
+  assert.equal(h.events.length,0);
   await appendFile(h.path,bytes.subarray(split));
   await h.watcher.sweep();
   assert.deepEqual(h.state.activities.snapshot().map(a=>a.text),["정상 진행"]);
-  assert.ok(h.writes.some(w=>w.sql.includes("INSERT INTO turn_activities")));
+  assert.deepEqual(h.events.at(-1).workActivity,{kind:"message",text:"",status:"completed"});
+  assert.equal(h.writes.length,0);
 });
 
 test("Claude file events publish before Stop and dispose the watch without idle polling", async t => {
@@ -104,23 +112,24 @@ test("Claude file events publish before Stop and dispose the watch without idle 
   h.watcher.start();
   await appendFile(h.path,JSON.stringify(row("작업 중"))+"\n");
   const deadline=Date.now()+2000;
-  while(!h.writes.length&&Date.now()<deadline)await delay(20);
-  assert.ok(h.writes.length>0,"publish must happen without a Stop hook");
+  while(!h.events.length&&Date.now()<deadline)await delay(20);
+  assert.ok(h.events.length>0,"status must arrive without a Stop hook");
+  assert.equal(h.writes.length,0);
   await h.watcher.stop();
   assert.equal(h.watcher.watcher,null);
-  const count=h.writes.length;
+  const count=h.events.length;
   await appendFile(h.path,JSON.stringify(row("종료 이후"))+"\n");
   await h.watcher.sweep();
-  assert.equal(h.writes.length,count);
+  assert.equal(h.events.length,count);
 });
 
 test("Claude stops live reads after turn change or file truncation", async t => {
   const h=await claudeFixture(t);
   await writeFile(h.path,"\n");
   await h.watcher.sweep();
-  assert.equal(h.writes.length,0);
+  assert.equal(h.events.length,0);
   h.state.runningTurnID="turn-2";
   await appendFile(h.path,JSON.stringify(row("섞으면 안 됨"))+"\n");
   await h.watcher.sweep();
-  assert.equal(h.writes.length,0);
+  assert.equal(h.events.length,0);
 });

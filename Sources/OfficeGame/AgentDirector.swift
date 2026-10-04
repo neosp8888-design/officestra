@@ -70,7 +70,7 @@ final class CharacterSelectionStore: ObservableObject {
 
 @MainActor
 final class CharacterLiveFeedStore: ObservableObject {
-    let workProgressStore = ConversationWorkProgressStore()
+    let workStatusStore = OfficeWorkStatusStore()
     @Published private(set) var turns: [LiveFeedTurn]
     @Published private(set) var isLoadingInitialFeed: Bool
     @Published private(set) var presentationRevision = 0
@@ -88,14 +88,14 @@ final class CharacterLiveFeedStore: ObservableObject {
         self.isLoadingInitialFeed = isLoadingInitialFeed
         latestTurns = turns
         latestIsLoadingInitialFeed = isLoadingInitialFeed
-        workProgressStore.update(turns: turns)
+        workStatusStore.update(turns: turns)
     }
 
     func stage(
         turns: [LiveFeedTurn],
         isLoadingInitialFeed: Bool
     ) {
-        workProgressStore.update(turns: turns)
+        workStatusStore.update(turns: turns)
         latestTurns = turns
         latestIsLoadingInitialFeed = isLoadingInitialFeed
         guard isPresented else {
@@ -155,6 +155,7 @@ struct RealtimeFeedEvent: Decodable, Equatable {
     let compactingCharacterIds: [String]?
     let dispatchId: String?
     let terminalSessionId: String?
+    let workActivity: TerminalWorkActivity?
 
     init(
         type: String,
@@ -167,7 +168,8 @@ struct RealtimeFeedEvent: Decodable, Equatable {
         errorMessage: String? = nil,
         compactingCharacterIds: [String]? = nil,
         dispatchId: String? = nil,
-        terminalSessionId: String? = nil
+        terminalSessionId: String? = nil,
+        workActivity: TerminalWorkActivity? = nil
     ) {
         self.type = type
         self.turnId = turnId
@@ -180,6 +182,7 @@ struct RealtimeFeedEvent: Decodable, Equatable {
         self.compactingCharacterIds = compactingCharacterIds
         self.dispatchId = dispatchId
         self.terminalSessionId = terminalSessionId
+        self.workActivity = workActivity
     }
 }
 
@@ -2642,6 +2645,13 @@ final class AgentDirector: ObservableObject {
                         && !self.compactingCharacters.contains(character)
                 }
             )
+            return true
+
+        case "terminal.work-status":
+            guard let character = event.officeCharacter, let turnID = event.turnId,
+                  let activity = event.workActivity else { return false }
+            liveFeedStore.characterStore(for: character.rawValue).workStatusStore
+                .receive(turnID: turnID, activity: activity)
             return true
 
         case "terminal.changed":

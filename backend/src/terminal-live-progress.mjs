@@ -1,5 +1,5 @@
-// Publish existing public transcript events while the PTY turn is running.
-// Share the developer-tool writer so sequence numbers and completion stay ordered.
+// Ephemeral current-operation signal for the office bubble. This path never
+// writes activities, summaries or progress history to the database.
 import { closeSync, openSync, readSync, statSync, watch } from "node:fs";
 import { basename, dirname } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -7,25 +7,24 @@ import { parseAgentEvent } from "./agent-event-parser.mjs";
 
 export async function publishTerminalProgress(state, runtime) {
   const turnID = state.runningTurnID;
-  if (!turnID || state.closed || state.toolEventsClosing || !runtime.addActivity) return;
+  if (!turnID || state.closed || state.toolEventsClosing || !runtime.broadcast) return;
   const collector = state.activities;
   const revision = collector.revision;
   const published = state.publishedProgress;
   if (published?.turnID === turnID && published.collector === collector && published.revision === revision) return;
-  const activities = collector.snapshot();
-  if (!activities.length) return;
-  if (state.toolActivityState?.turnID !== turnID) {
-    state.toolActivityState = {
-      turnID, character: { id: state.characterID }, sequence: 0,
-      activityRecords: new Map(), activityWritePromise: null,
-    };
+  const activity = collector.latest;
+  if (!activity) return;
+  const workActivity = {
+    kind: activity.kind,
+    // Prose/reasoning content is unnecessary for a short status label.
+    text: ["message", "thinking"].includes(activity.kind) ? "" : activity.text.slice(0, 600),
+    status: activity.status,
+  };
+  const signature = JSON.stringify(workActivity);
+  if (published?.turnID !== turnID || published.signature !== signature) {
+    runtime.broadcast({ type: "terminal.work-status", characterId: state.characterID, turnId: turnID, workActivity });
   }
-  const writer = state.toolActivityState;
-  for (const activity of activities) {
-    if (state.runningTurnID !== turnID || state.closed || state.toolEventsClosing) return;
-    await runtime.addActivity(writer, activity);
-  }
-  state.publishedProgress = { turnID, collector, revision };
+  state.publishedProgress = { turnID, collector, revision, signature };
 }
 
 // Claude supplies the start offset through UserPromptSubmit. Watch just this
@@ -62,7 +61,7 @@ export class ClaudeTerminalProgressWatcher {
 
   schedule() {
     this.pending = this.pending.then(() => this.sweep()).catch(error => {
-      console.warn("Claude 터미널 진행 기록 읽기 실패:", error.message);
+      console.warn("Claude 터미널 작업 상태 읽기 실패:", error.message);
     });
     return this.pending;
   }

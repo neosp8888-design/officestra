@@ -181,14 +181,14 @@ test("Claude terminal streams a newly created transcript and stops at the turn b
   } }) + "\n");
   await watcher.schedule();
   assert.equal(runtime.completed.length, 0);
-  assert.ok(runtime.progress.some(a => a.text === "파일 확인 중"));
-  assert.ok(runtime.progress.some(a => a.eventKey === "terminal:read-1" && a.status === "running"));
+  assert.equal(runtime.progress.length,1);
+  assert.ok(runtime.progress.some(a => a.kind === "tool" && a.status === "running"));
   await appendFile(path, [
     { type: "user", sessionId: "claude-session", message: { content: [{ type: "tool_result", tool_use_id: "read-1", content: "private output" }] } },
     { type: "assistant", sessionId: "claude-session", message: { id: "final", usage: { input_tokens: 3, output_tokens: 2 }, content: [{ type: "text", text: "완료" }] } },
   ].map(record => JSON.stringify(record) + "\n").join(""));
   await watcher.schedule();
-  assert.ok(runtime.progress.some(a => a.eventKey === "terminal:read-1" && a.status === "completed"));
+  assert.deepEqual(runtime.progress.at(-1),{turnID:"turn-1",kind:"message",text:"",status:"completed"});
   assert.equal(runtime.progress.some(a => a.text.includes("private output")), false);
   await manager.handleEvent("boss", { source: "claude", payload: {
     ...payload, hook_event_name: "Stop", last_assistant_message: "완료",
@@ -808,7 +808,7 @@ test("Codex 터미널은 rollout의 시작과 질문을 보면 running 턴을 �
   await manager.close("boss");
 });
 
-test("Codex terminal publishes commentary and command state before notify, excluding foreign turns", async t => {
+test("Codex terminal broadcasts only current operation before notify, excluding foreign turns", async t => {
   const {sessionsRoot,workdir,rollout}=await codexFixture();
   const runtime=fakeRuntime({backend:"codex",externalSessionID:codexThreadID,workdir,executablePath:"/usr/bin/true"});
   const manager=new TerminalSessionManager({runtime,broadcast(){},codexSessionsRoot:sessionsRoot});
@@ -824,14 +824,14 @@ test("Codex terminal publishes commentary and command state before notify, exclu
   ].map(rolloutLine).join(""));
   await state.watcher.sweep();
   assert.equal(runtime.completed.length,0);
-  assert.deepEqual(runtime.progress.map(a=>[a.kind,a.status]),[["message","completed"],["command","running"]]);
+  assert.deepEqual(runtime.progress.map(a=>[a.kind,a.status]),[["command","running"]]);
   const count=runtime.progress.length;
   await state.watcher.sweep();
   assert.equal(runtime.progress.length,count);
   await appendFile(rollout,rolloutLine({type:"response_item",payload:{type:"function_call_output",call_id:"live",output:JSON.stringify({exit_code:0})}}));
   await state.watcher.sweep();
   assert.equal(runtime.progress.at(-1).status,"completed");
-  assert.equal(runtime.progress.at(-1).eventKey,"terminal:call:live");
+  assert.equal(runtime.progress.at(-1).text,"swift test");
   await appendFile(rollout,[
     {type:"turn_context",payload:{turn_id:"another-turn"}},
     {type:"response_item",payload:{type:"message",role:"assistant",phase:"commentary",content:[{type:"output_text",text:"다른 턴"}]}},
@@ -961,7 +961,8 @@ function fakeRuntime({
       return turn;
     },
     async completeTerminalTurn(entry) { this.completed.push(entry); },
-    async addActivity(state, activity) { this.progress.push({ turnID: state.turnID, ...activity }); },
+    broadcast(event) { if (event.type === "terminal.work-status") this.progress.push({turnID:event.turnId,...event.workActivity}); },
+    async addActivity() { assert.fail("short terminal status must not be persisted"); },
     async interruptTerminalTurn(characterID, turnID) {
       this.interrupted.push({ characterID, turnID });
       return true;
