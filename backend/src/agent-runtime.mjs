@@ -107,6 +107,12 @@ const CODEX_ROLLOUT_MONITOR_INTERVAL_MS = 400;
 const ANTIGRAVITY_REASONING_MONITOR_INTERVAL_MS = 400;
 const rolloutPathCache = new Map();
 
+// 응답 단계 열쇠("antigravity:<대화>:<단계>")에서 단계 번호를 꺼낸다.
+function antigravityStepIndexFromKey(key) {
+  const match = /^antigravity:[^:]+:(\d+)$/.exec(String(key ?? ""));
+  return match ? Number(match[1]) : null;
+}
+
 const BLOCKED_WORKSPACE_STATUSES = new Set([
   "awaiting_approval",
   "merging",
@@ -1392,20 +1398,36 @@ export class AgentRuntime {
       return;
     }
     if (state.failure) {
-      throw new Error(state.failure);
-    }
-    if (exitCode !== 0) {
-      throw new Error(
-        state.warning ||
-        stderr ||
-        `CLI가 종료 코드 ${exitCode}로 끝났습니다.`,
+      // agy는 한도 오류가 한 번 난 대화를 이어 가면 정상 종료한 턴에도
+      // result를 ERROR와 그때의 오류 문구로 보낸다. 답이 있으면 경고로 낮춘다.
+      const staleAntigravityFailure =
+        state.character.backend === "antigravity" &&
+        exitCode === 0 &&
+        this.finalResponseCandidate(state).trim().length > 0;
+      if (!staleAntigravityFailure) {
+        throw new Error(state.failure);
+      }
+      console.warn(
+        `[agent-runtime] ${state.character.id} Antigravity가 정상 종료했지만 이전 오류를 보고해 경고로 처리합니다. (${state.failure})`,
       );
     }
 
     const candidate = this.finalResponseCandidate(state);
     const decoded = this.decodeCompletedResponse(state, candidate);
     if (!decoded.text) {
+      if (exitCode !== 0) {
+        throw new Error(
+          stderr ||
+          state.warning ||
+          `CLI가 종료 코드 ${exitCode}로 끝났습니다.`,
+        );
+      }
       throw new Error("CLI 최종 메시지가 없습니다.");
+    }
+    if (exitCode !== 0) {
+      console.warn(
+        `[agent-runtime] ${state.character.id} CLI가 종료 코드 ${exitCode}로 끝났지만 응답 텍스트가 정상 확보되어 완료 처리합니다. (경고: ${state.warning ?? "없음"}, stderr: ${stderr || "없음"})`,
+      );
     }
     await this.complete(state, decoded);
     await this.maybeAutoCompactAfterTurn(state);
@@ -2437,6 +2459,7 @@ export class AgentRuntime {
       });
       const emitted = state.emittedReasoning ??= new Map();
       const activities = [];
+      let latestStepIndex = null;
       for (const { stepIndex, text, done } of reasonings) {
         const status = done || final ? "completed" : "running";
         const previous = emitted.get(stepIndex);
@@ -2444,6 +2467,9 @@ export class AgentRuntime {
           continue;
         }
         emitted.set(stepIndex, { text, status });
+        latestStepIndex = latestStepIndex === null
+          ? stepIndex
+          : Math.max(latestStepIndex, stepIndex);
         activities.push({
           kind: "thinking",
           text,
@@ -2456,7 +2482,15 @@ export class AgentRuntime {
       if (activities.length === 0) {
         return;
       }
-      await this.promotePendingAgentMessage(state);
+      // Opus 등은 추론을 단계가 끝날 때 한꺼번에 기록해, 같은 단계의 답변이
+      // stdout으로 먼저 도착한다. 대기 중인 답변보다 뒤 단계의 추론일 때만
+      // 답변을 활동으로 올려야 추론 카드가 답변 위에 남는다.
+      const pendingStepIndex = antigravityStepIndexFromKey(
+        state.pendingAgentMessage?.key,
+      );
+      if (pendingStepIndex === null || latestStepIndex > pendingStepIndex) {
+        await this.promotePendingAgentMessage(state);
+      }
       for (const activity of activities) {
         await this.addParsedActivity(state, this.scopedActivity(state, activity));
       }

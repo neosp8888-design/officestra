@@ -5742,6 +5742,48 @@ test("턴이 끝나면 진행 중이던 추론 카드를 완료로 확정한다"
   ]);
 });
 
+test("같은 단계 답변보다 늦게 읽힌 추론은 답변을 먼저 올리지 않는다", async () => {
+  const added = [];
+  const runtime = antigravityReasoningRuntime([
+    [{ stepIndex: 882, text: "단계가 끝날 때 기록된 추론", done: true }],
+  ], added);
+  let promoted = 0;
+  runtime.promotePendingAgentMessage = async () => {
+    promoted += 1;
+  };
+  const state = antigravityReasoningState();
+  state.pendingAgentMessage = {
+    key: "antigravity:conversation-1:882",
+    text: "최종 답변",
+  };
+
+  await runtime.consumeAntigravityReasoning(state, { final: true });
+
+  assert.equal(promoted, 0);
+  assert.equal(added.length, 1);
+});
+
+test("대기 중인 답변보다 뒤 단계의 추론은 답변을 먼저 올린다", async () => {
+  const added = [];
+  const runtime = antigravityReasoningRuntime([
+    [{ stepIndex: 5, text: "다음 단계 추론", done: false }],
+  ], added);
+  let promoted = 0;
+  runtime.promotePendingAgentMessage = async () => {
+    promoted += 1;
+  };
+  const state = antigravityReasoningState();
+  state.pendingAgentMessage = {
+    key: "antigravity:conversation-1:3",
+    text: "중간 메시지",
+  };
+
+  await runtime.consumeAntigravityReasoning(state);
+
+  assert.equal(promoted, 1);
+  assert.equal(added.length, 1);
+});
+
 test("추론 폴링은 Antigravity 이외의 백엔드와 대화 ID 없는 상태를 건너뛴다", async () => {
   const added = [];
   let reads = 0;
@@ -6074,3 +6116,147 @@ function terminalTurnRuntime() {
     broadcast: () => {},
   });
 }
+
+test("executeSingleProcess: 응답 텍스트가 정상 확보되면 exitCode !== 0이어도 완료 처리한다", async () => {
+  let completed = null;
+  const runtime = new AgentRuntime({
+    pool: { query: async () => ({ rowCount: 1 }) },
+    withTransaction: async (fn) => await fn({ query: async () => ({}) }),
+    workdir: process.cwd(),
+    broadcast: () => {},
+  });
+  runtime.complete = async (state, decoded) => {
+    completed = decoded;
+  };
+  runtime.maybeAutoCompactAfterTurn = async () => {};
+
+  const state = {
+    turnID: "turn-test",
+    character: { id: "right-man", backend: "antigravity" },
+    workdir: process.cwd(),
+    visibleAgentMessages: [],
+    activityRecords: new Map(),
+    initialGeneratedImages: new Set(),
+    responseText: "",
+    partialText: "",
+    warning: "이전 쿼터 경고",
+    failure: null,
+  };
+
+  const spec = {
+    executable: process.execPath,
+    args: [
+      "-e",
+      'console.log(JSON.stringify({event:"result",result:{status:"SUCCESS",response:"성공한 응답입니다"}})); process.exit(1);',
+    ],
+  };
+
+  await runtime.executeSingleProcess(state, spec);
+  assert.equal(completed?.text, "성공한 응답입니다");
+});
+
+test("executeSingleProcess: 응답 텍스트가 없고 exitCode !== 0이면 stderr를 우선하여 에러를 던진다", async () => {
+  const runtime = new AgentRuntime({
+    pool: { query: async () => ({ rowCount: 1 }) },
+    withTransaction: async () => {},
+    workdir: process.cwd(),
+    broadcast: () => {},
+  });
+
+  const state = {
+    turnID: "turn-test",
+    character: { id: "right-man", backend: "antigravity" },
+    workdir: process.cwd(),
+    visibleAgentMessages: [],
+    activityRecords: new Map(),
+    initialGeneratedImages: new Set(),
+    responseText: "",
+    partialText: "",
+    warning: "이전 쿼터 경고",
+    failure: null,
+  };
+
+  const spec = {
+    executable: process.execPath,
+    args: [
+      "-e",
+      'console.error("진짜 프로세스 에러"); process.exit(1);',
+    ],
+  };
+
+  await assert.rejects(
+    () => runtime.executeSingleProcess(state, spec),
+    /진짜 프로세스 에러/,
+  );
+});
+
+function antigravityResultState() {
+  return {
+    turnID: "turn-test",
+    character: { id: "right-man", backend: "antigravity" },
+    workdir: process.cwd(),
+    visibleAgentMessages: [],
+    activityRecords: new Map(),
+    initialGeneratedImages: new Set(),
+    responseText: "",
+    partialText: "",
+    warning: null,
+    failure: null,
+  };
+}
+
+const STALE_QUOTA_ERROR =
+  "Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 154h37m12s.";
+
+test("executeSingleProcess: agy가 정상 종료하며 이전 한도 오류를 ERROR로 보내도 답이 있으면 완료한다", async () => {
+  let completed = null;
+  const runtime = new AgentRuntime({
+    pool: { query: async () => ({ rowCount: 1 }) },
+    withTransaction: async (fn) => await fn({ query: async () => ({}) }),
+    workdir: process.cwd(),
+    broadcast: () => {},
+  });
+  runtime.complete = async (state, decoded) => {
+    completed = decoded;
+  };
+  runtime.maybeAutoCompactAfterTurn = async () => {};
+
+  const result = {
+    status: "ERROR",
+    response: "4\n",
+    error: STALE_QUOTA_ERROR,
+  };
+  await runtime.executeSingleProcess(antigravityResultState(), {
+    executable: process.execPath,
+    args: [
+      "-e",
+      `console.log(${JSON.stringify(JSON.stringify({ event: "result", result }))}); process.exit(0);`,
+    ],
+  });
+  assert.equal(completed?.text, "4");
+});
+
+test("executeSingleProcess: agy가 ERROR와 함께 비정상 종료하면 답이 있어도 실패한다", async () => {
+  const runtime = new AgentRuntime({
+    pool: { query: async () => ({ rowCount: 1 }) },
+    withTransaction: async () => {},
+    workdir: process.cwd(),
+    broadcast: () => {},
+  });
+
+  const result = {
+    status: "ERROR",
+    response: "중간까지 쓴 답",
+    error: STALE_QUOTA_ERROR,
+  };
+  await assert.rejects(
+    () => runtime.executeSingleProcess(antigravityResultState(), {
+      executable: process.execPath,
+      args: [
+        "-e",
+        `console.log(${JSON.stringify(JSON.stringify({ event: "result", result }))}); process.exit(3);`,
+      ],
+    }),
+    /Individual quota reached/,
+  );
+});

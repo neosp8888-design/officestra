@@ -728,6 +728,9 @@ function parseAntigravityEvent(object, workdir) {
         usageFallback,
         failure: cleanText(result.error ?? result.response) ??
           "Antigravity 작업이 완료되지 못했습니다.",
+        // 한도 오류가 난 대화를 이어 가면 agy가 정상 답에도 옛 오류를
+        // ERROR로 붙인다. 런타임이 종료 코드로 가릴 수 있게 답도 넘긴다.
+        responseFallback: result.error ? cleanText(result.response) : null,
       };
     }
     // 최종 결과의 response는 단계별 메시지를 모두 이어 붙인 전문이다.
