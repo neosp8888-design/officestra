@@ -1380,6 +1380,22 @@ struct LiveWorkspaceFeedPagingPolicy: Equatable {
             total
         )
     }
+
+    // 앵커 고정만으로는 일하는 동안 새 턴마다 카드가 늘어나 휠 이벤트의
+    // 히트 테스트 비용이 계속 커진다. 최신을 따라가는 중 새 턴이 들어올
+    // 때만 처음 크기로 되돌린다. 과거 불러오기는 가장 새 턴을 바꾸지
+    // 않으므로 불러오자마자 다시 접히지 않는다.
+    static func shouldTrimToLatest(
+        previousNewestID: String?,
+        newestID: String?,
+        didPerformInitialScroll: Bool,
+        isFollowingLatest: Bool
+    ) -> Bool {
+        didPerformInitialScroll
+            && isFollowingLatest
+            && newestID != nil
+            && previousNewestID != newestID
+    }
 }
 
 // 최신 N개 인덱스로 매번 다시 자르면 새 턴이 앞에 삽입될 때 기존
@@ -1415,6 +1431,20 @@ struct LiveWorkspaceFeedDisplayAnchor: Equatable {
     func pinning(turnIDsNewestFirst: [String]) -> Self {
         pinning(
             limit: effectiveLimit(turnIDsNewestFirst: turnIDsNewestFirst),
+            turnIDsNewestFirst: turnIDsNewestFirst
+        )
+    }
+
+    /// 표시 창이 limit보다 크면 최신 limit개로 다시 고정한다.
+    func trimming(
+        toLimit limit: Int,
+        turnIDsNewestFirst: [String]
+    ) -> Self {
+        pinning(
+            limit: min(
+                effectiveLimit(turnIDsNewestFirst: turnIDsNewestFirst),
+                max(1, limit)
+            ),
             turnIDsNewestFirst: turnIDsNewestFirst
         )
     }
@@ -3360,10 +3390,16 @@ struct LiveWorkspaceFeed: View, Equatable {
         )
     }
 
-    private func repinDisplayAnchor() {
-        let pinned = displayAnchor.pinning(
-            turnIDsNewestFirst: selectedTurns.map(\.id)
-        )
+    private func repinDisplayAnchor(trimToLatest: Bool = false) {
+        let turnIDs = selectedTurns.map(\.id)
+        let pinned = trimToLatest
+            ? displayAnchor.trimming(
+                toLimit: LiveWorkspaceFeedPagingPolicy.initialVisibleTurnCount(
+                    for: selectedTurns
+                ),
+                turnIDsNewestFirst: turnIDs
+            )
+            : displayAnchor.pinning(turnIDsNewestFirst: turnIDs)
         if displayAnchor != pinned {
             displayAnchor = pinned
         }
@@ -3553,8 +3589,19 @@ struct LiveWorkspaceFeed: View, Equatable {
                         }
                         settleInitialAnchorIfNeeded()
                     }
-                    .onChange(of: initialLayoutRevision) { _, _ in
-                        repinDisplayAnchor()
+                    .onChange(of: initialLayoutRevision) {
+                        oldRevision, newRevision in
+                        repinDisplayAnchor(
+                            trimToLatest: LiveWorkspaceFeedPagingPolicy
+                                .shouldTrimToLatest(
+                                    previousNewestID: oldRevision.last?.id,
+                                    newestID: newRevision.last?.id,
+                                    didPerformInitialScroll:
+                                        didPerformInitialScroll,
+                                    isFollowingLatest:
+                                        followState.isFollowingLatest
+                                )
+                        )
                         switch LiveWorkspaceFeedContentRevisionPolicy.action(
                             didPerformInitialScroll: didPerformInitialScroll,
                             isFollowingLatest: followState.isFollowingLatest

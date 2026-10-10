@@ -1201,6 +1201,85 @@ final class LiveFeedStoreTests: XCTestCase {
         XCTAssertEqual(anchor.oldestVisibleTurnID, pruned[11])
     }
 
+    func testDisplayAnchorTrimsWindowGrownByNewTurnsBackToLimit() {
+        var anchor = LiveWorkspaceFeedDisplayAnchor()
+        let ids = (0..<20).map { "t\(19 - $0)" }
+        anchor = anchor.pinning(limit: 10, turnIDsNewestFirst: ids)
+
+        // 일하는 동안 새 턴 5개가 들어오면 앵커 고정으로 창이 15가 된다.
+        let grown = (0..<5).map { "n\(4 - $0)" } + ids
+        XCTAssertEqual(anchor.effectiveLimit(turnIDsNewestFirst: grown), 15)
+
+        anchor = anchor.trimming(toLimit: 10, turnIDsNewestFirst: grown)
+        XCTAssertEqual(anchor.effectiveLimit(turnIDsNewestFirst: grown), 10)
+        XCTAssertEqual(anchor.oldestVisibleTurnID, grown[9])
+        // 창 밖이어도 실행 중인 턴은 계속 표시된다.
+        XCTAssertTrue(
+            LiveWorkspaceFeedPagingPolicy.includesTurn(
+                at: 12,
+                visibleTurnLimit: 10,
+                isRunning: true,
+                isLatestTerminalTurn: false
+            )
+        )
+    }
+
+    func testDisplayAnchorTrimmingKeepsSmallerWindow() {
+        var anchor = LiveWorkspaceFeedDisplayAnchor()
+        let ids = (0..<20).map { "t\(19 - $0)" }
+        anchor = anchor.pinning(limit: 6, turnIDsNewestFirst: ids)
+
+        anchor = anchor.trimming(toLimit: 10, turnIDsNewestFirst: ids)
+        XCTAssertEqual(anchor.effectiveLimit(turnIDsNewestFirst: ids), 6)
+        XCTAssertEqual(anchor.oldestVisibleTurnID, "t14")
+    }
+
+    func testTrimToLatestOnlyWhenFollowingAndNewestTurnChanges() {
+        XCTAssertTrue(
+            LiveWorkspaceFeedPagingPolicy.shouldTrimToLatest(
+                previousNewestID: "t1",
+                newestID: "t2",
+                didPerformInitialScroll: true,
+                isFollowingLatest: true
+            )
+        )
+        // 과거를 읽는 중에는 카드를 지우지 않는다.
+        XCTAssertFalse(
+            LiveWorkspaceFeedPagingPolicy.shouldTrimToLatest(
+                previousNewestID: "t1",
+                newestID: "t2",
+                didPerformInitialScroll: true,
+                isFollowingLatest: false
+            )
+        )
+        // 과거 불러오기는 가장 새 턴이 그대로라 바로 접지 않는다.
+        // 짧은 대화에서 맨 위도 하단으로 판정될 때의 반복을 막는다.
+        XCTAssertFalse(
+            LiveWorkspaceFeedPagingPolicy.shouldTrimToLatest(
+                previousNewestID: "t2",
+                newestID: "t2",
+                didPerformInitialScroll: true,
+                isFollowingLatest: true
+            )
+        )
+        XCTAssertFalse(
+            LiveWorkspaceFeedPagingPolicy.shouldTrimToLatest(
+                previousNewestID: "t1",
+                newestID: "t2",
+                didPerformInitialScroll: false,
+                isFollowingLatest: true
+            )
+        )
+        XCTAssertFalse(
+            LiveWorkspaceFeedPagingPolicy.shouldTrimToLatest(
+                previousNewestID: "t1",
+                newestID: nil,
+                didPerformInitialScroll: true,
+                isFollowingLatest: true
+            )
+        )
+    }
+
     func testDisplayAnchorPagingExpandsTowardOlderTurns() {
         var anchor = LiveWorkspaceFeedDisplayAnchor()
         let ids = (0..<30).map { "t\(29 - $0)" }
