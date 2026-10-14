@@ -387,8 +387,11 @@ const typedTransitions = {
   done: new Set(),
 };
 
+// 원격이 없는 별도 저장소라 푸시 SHA가 생기지 않는 프로젝트다.
+const NO_REMOTE_PROJECT_KEYS = new Set(["toss-trading", "one-click-studio"]);
+
 function requireDeliveryEvidence(project, ticket) {
-  if (project.projectKey !== "toss-trading" && ticket.state === "done"
+  if (!NO_REMOTE_PROJECT_KEYS.has(project.projectKey) && ticket.state === "done"
       && ["general", "implementation"].includes(ticket.ticketType) && !ticket.pushedCommitSha) {
     throw new WorkBoardError("구현·미분류 티켓 완료에는 원격 푸시를 확인한 커밋 SHA가 필요합니다.");
   }

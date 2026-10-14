@@ -280,6 +280,12 @@ test("오피스 완료에는 푸시 커밋 근거가 필요하고 Toss는 별도
     assert.equal((await createTicket(query, {
       projectId: toss.rows[0].id, title: "별도 저장소", state: "done",
     })).pushedCommitSha, null);
+    const studioRow = await query.query("SELECT id FROM work_board_projects WHERE project_key = 'one-click-studio'");
+    const studioId = studioRow.rows[0]?.id
+      ?? (await createProject(query, { projectKey: "one-click-studio", title: "딸깍 스튜디오" })).id;
+    assert.equal((await createTicket(query, {
+      projectId: studioId, title: "원격 없는 저장소", state: "done",
+    })).pushedCommitSha, null);
   } finally {
     await client.query("ROLLBACK");
     client.release();

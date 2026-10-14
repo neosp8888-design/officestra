@@ -1587,7 +1587,7 @@ private struct WorkBoardTicketEditor: View {
                                     .lineLimit(3...6)
                                 TextField("완료 결과·검사 근거", text: $completionEvidence, axis: .vertical)
                                     .lineLimit(3...6)
-                                if projectKey != "toss-trading" && ticketType.requiresPush {
+                                if !["toss-trading", "one-click-studio"].contains(projectKey) && ticketType.requiresPush {
                                     Text("구현·미분류 티켓은 원격 푸시 SHA가 있어야 완료됩니다.")
                                         .font(.caption).foregroundStyle(.secondary)
                                     TextField("원격에 푸시된 40자리 커밋 SHA", text: $pushedCommitSha)
