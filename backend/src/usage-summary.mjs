@@ -137,25 +137,79 @@ function claudeWindow(window) {
 }
 
 export function parseClaudeRateLimits(payload, tier, subscriptionType) {
+  const modelWeeklyLimits = (Array.isArray(payload?.limits) ? payload.limits : [])
+    .filter((limit) => limit?.kind === "weekly_scoped" && limit?.scope?.model?.display_name)
+    .map((limit) => ({
+      id: String(limit.scope.model.id || limit.scope.model.display_name),
+      name: String(limit.scope.model.display_name),
+      remaining: limit.percent == null || limit.percent === "" ? null : remainingPercent(limit.percent),
+      resetAt: isoDate(limit.resets_at),
+    }));
   return {
     fiveHour: claudeWindow(payload?.five_hour),
     weekly: claudeWindow(payload?.seven_day),
+    modelWeeklyLimits,
     plan: normalizedClaudePlan(tier, subscriptionType),
   };
 }
 
-export function parseAntigravityRateLimits(payload) {
+function antigravityQuotaGroupID(group) {
+  const ids = (group?.buckets ?? []).map((bucket) => String(bucket?.bucketId ?? ""));
+  if (ids.some((id) => id.startsWith("gemini-argon-"))) return "argon";
+  if (ids.some((id) => id.startsWith("3p-"))) return "third-party";
+  if (ids.some((id) => id.startsWith("gemini-"))) return "gemini";
+  return ids[0] || String(group?.displayName ?? "unknown");
+}
+
+function antigravityQuotaBucket(bucket) {
+  const id = String(bucket?.bucketId ?? "");
+  const rawWindow = String(bucket?.window ?? "").toLowerCase();
+  const window = ["five-hour", "five_hour", "5h"].some((key) =>
+    id.includes(key) || rawWindow === key
+  ) ? "fiveHour" : /week/.test(rawWindow || id) ? "weekly" : rawWindow;
+  const fraction = bucket?.remainingFraction == null
+    ? null : finiteNumber(bucket.remainingFraction);
+  return {
+    id,
+    name: String(bucket?.displayName ?? id),
+    window,
+    remaining: fraction === null ? null : Math.round(Math.min(1, Math.max(0, fraction)) * 100),
+    resetAt: isoDate(bucket?.resetTime),
+  };
+}
+
+export function parseAntigravityRateLimits(payload, { model = "" } = {}) {
   const groups = payload?.response?.groups ?? payload?.groups ?? [];
+  // 공급자가 반환한 모든 그룹을 보존한다. 서로 다른 한도를 합산하거나
+  // 현재 직원의 모델 한도 하나로 다른 모델 그룹을 덮어쓰지 않는다.
+  const quotaGroups = groups.map((group) => ({
+    id: antigravityQuotaGroupID(group),
+    name: String(group?.displayName ?? ""),
+    buckets: (group?.buckets ?? []).map(antigravityQuotaBucket),
+  }));
   const geminiGroup = groups.find((group) =>
-    String(group?.displayName ?? "").toLowerCase().includes("gemini") ||
+    String(group?.displayName ?? "").toLowerCase() === "gemini models" ||
     (group?.buckets ?? []).some((bucket) =>
-      String(bucket?.bucketId ?? "").toLowerCase().startsWith("gemini-")
+      ["gemini-weekly", "gemini-5h", "gemini-five-hour"].includes(
+        String(bucket?.bucketId ?? "").toLowerCase(),
+      )
     )
   );
-  const buckets = Array.isArray(geminiGroup?.buckets)
-    ? geminiGroup.buckets
+  // Argon 전용 주간 한도는 공통 Gemini 한도와 별개다. 공통 한도의
+  // 100%나 5시간 창을 전용 한도 대신 표시하지 않는다.
+  const argon = /(?:^|[-_])argon(?:[-_]|$)/i.test(String(model));
+  const thirdParty = /^(claude|gpt|o\d)[-_]/i.test(String(model));
+  const selectedGroup = argon ? groups.find((group) =>
+    /gemini.*argon/i.test(String(group?.displayName ?? "")) ||
+    (group?.buckets ?? []).some((bucket) =>
+      String(bucket?.bucketId ?? "").toLowerCase().startsWith("gemini-argon-")
+    )
+  ) : thirdParty ? groups.find((group) => antigravityQuotaGroupID(group) === "third-party") : geminiGroup;
+  const buckets = Array.isArray(selectedGroup?.buckets)
+    ? selectedGroup.buckets
     : [];
   const parsedBucket = (bucket) => {
+    if (bucket?.remainingFraction == null) return null;
     const fraction = finiteNumber(bucket?.remainingFraction);
     if (fraction === null) return null;
     return {
@@ -170,14 +224,21 @@ export function parseAntigravityRateLimits(payload) {
   });
   const fiveHour = parsedBucket(bucketFor("five-hour", "five_hour", "5h"));
   const weekly = parsedBucket(bucketFor("weekly", "week"));
-  if (!fiveHour && !weekly) {
+  if (!quotaGroups.some((group) => group.buckets.some((bucket) => bucket.remaining !== null))) {
     throw new Error("Antigravity 계정 한도 응답에 Gemini 잔여량이 없습니다.");
   }
   // 한도 응답은 상품명을 직접 주지 않는다. 현재 계정 계약에서는 무료
   // 계정은 주간 한도만, Google AI Pro 계정은 5시간 한도를 함께 받는다.
   // 제3자 모델 그룹은 Pro 응답에도 포함되므로 Ultra 판별 근거로 쓰지 않는다.
-  const plan = fiveHour ? "Google AI Pro" : "Free";
-  return { fiveHour, weekly, plan };
+  const accountHasFiveHour = (geminiGroup?.buckets ?? []).some((bucket) => {
+    const id = String(bucket?.bucketId ?? "").toLowerCase();
+    const window = String(bucket?.window ?? "").toLowerCase();
+    return ["five-hour", "five_hour", "5h"].some((key) =>
+      id.includes(key) || window === key
+    ) && parsedBucket(bucket) !== null;
+  });
+  const plan = accountHasFiveHour ? "Google AI Pro" : "Free";
+  return { fiveHour, weekly, plan, groups: quotaGroups };
 }
 
 function safeError(error, fallback) {
@@ -200,18 +261,20 @@ async function configuredCodexExecutable(pool) {
   return String(result.rows?.[0]?.path ?? "").trim() || "codex";
 }
 
-async function configuredAntigravityExecutable(pool) {
+async function configuredAntigravitySettings(pool) {
   const result = await pool.query(
     `
-      SELECT config ->> 'executablePath' AS path
+      SELECT config ->> 'executablePath' AS path, model
       FROM characters
       WHERE backend = 'antigravity'
-        AND NULLIF(config ->> 'executablePath', '') IS NOT NULL
       ORDER BY updated_at DESC, id
       LIMIT 1
     `,
   );
-  return String(result.rows?.[0]?.path ?? "").trim() || "agy";
+  return {
+    executable: String(result.rows?.[0]?.path ?? "").trim() || "agy",
+    model: String(result.rows?.[0]?.model ?? "").trim(),
+  };
 }
 
 export async function readCodexRateLimits({
@@ -498,11 +561,11 @@ export async function readAntigravityRateLimits({
   quotaProbe = probeAntigravityQuota,
   imageCooldownReader = readAntigravityImageCooldown,
 } = {}) {
-  const executable = await configuredAntigravityExecutable(pool);
+  const { executable, model } = await configuredAntigravitySettings(pool);
   const parsed = parseAntigravityRateLimits(await quotaProbe({
     executable,
     timeoutMs,
-  }));
+  }), { model });
   const imageResetAt = await imageCooldownReader().catch(() => null);
   return { ...parsed, imageResetAt };
 }
@@ -697,10 +760,12 @@ function flattenedLimits(
     claudeFiveHourResetAt: claude?.fiveHour?.resetAt ?? null,
     claudeWeekly: claude?.weekly?.remaining ?? null,
     claudeWeeklyResetAt: claude?.weekly?.resetAt ?? null,
+    claudeModelWeeklyLimits: claude?.modelWeeklyLimits ?? [],
     antigravityFiveHour: antigravity?.fiveHour?.remaining ?? null,
     antigravityFiveHourResetAt: antigravity?.fiveHour?.resetAt ?? null,
     antigravityWeekly: antigravity?.weekly?.remaining ?? null,
     antigravityWeeklyResetAt: antigravity?.weekly?.resetAt ?? null,
+    antigravityQuotaGroups: antigravity?.groups ?? [],
     antigravityImageResetAt: antigravity?.imageResetAt ?? null,
     codexPlan: codex?.plan ?? null,
     claudePlan: claude?.plan ?? null,

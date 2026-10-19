@@ -71,7 +71,7 @@ struct WhiteboardUsageLayer: View {
                 : OfficeLocalization.string("조회할 수 없음")
         }
 
-        return [
+        let providers = [
             accessibilityLimitText(
                 provider: "Codex",
                 window: "5시간",
@@ -96,20 +96,24 @@ struct WhiteboardUsageLayer: View {
                 remaining: snapshot.claudeWeekly,
                 resetAt: snapshot.claudeWeeklyResetAt
             ),
-            accessibilityLimitText(
-                provider: "Antigravity",
-                window: "5시간",
-                remaining: snapshot.antigravityFiveHour,
-                resetAt: snapshot.antigravityFiveHourResetAt
-            ),
-            accessibilityLimitText(
-                provider: "Antigravity",
-                window: "주간",
-                remaining: snapshot.antigravityWeekly,
-                resetAt: snapshot.antigravityWeeklyResetAt
-            ),
         ]
-        .joined(separator: ", ")
+        let claudeModels = (snapshot.claudeModelWeeklyLimits ?? []).map { limit in
+            accessibilityLimitText(provider: "Claude Code \(limit.name)", window: "주간",
+                                   remaining: limit.remaining, resetAt: limit.resetAt)
+        }
+        let groups = snapshot.displayedAntigravityQuotaGroups
+        let antigravity = groups.isEmpty ? [
+            accessibilityLimitText(provider: "Antigravity", window: "5시간",
+                                   remaining: snapshot.antigravityFiveHour, resetAt: snapshot.antigravityFiveHourResetAt),
+            accessibilityLimitText(provider: "Antigravity", window: "주간",
+                                   remaining: snapshot.antigravityWeekly, resetAt: snapshot.antigravityWeeklyResetAt),
+        ] : groups.flatMap { group in
+            group.displayedBuckets.map { bucket in
+                accessibilityLimitText(provider: "Antigravity \(group.displayName)", window: bucket.displayName,
+                                       remaining: bucket.remaining, resetAt: bucket.resetAt)
+            }
+        }
+        return (providers + claudeModels + antigravity).joined(separator: ", ")
     }
 
     @MainActor
@@ -183,27 +187,43 @@ struct WhiteboardUsageLayer: View {
                 fiveHourResetAt: snapshot.claudeFiveHourResetAt,
                 weekly: snapshot.claudeWeekly,
                 weeklyResetAt: snapshot.claudeWeeklyResetAt,
+                modelWeeklyLimits: snapshot.claudeModelWeeklyLimits ?? [],
                 providerY: 26,
                 showsFiveHour: true,
                 context: &context,
                 ink: ink,
                 mutedInk: mutedInk
             )
-            drawUsageGroup(
-                provider: "ANTIGRAVITY",
-                hasUpdate: updateStatus
-                    .package(id: "antigravity")?.updateAvailable == true,
-                fiveHour: snapshot.antigravityFiveHour,
-                fiveHourResetAt: snapshot.antigravityFiveHourResetAt,
-                weekly: snapshot.antigravityWeekly,
-                weeklyResetAt: snapshot.antigravityWeeklyResetAt,
-                imageResetAt: snapshot.antigravityImageResetAt,
-                providerY: 52,
-                showsFiveHour: true,
-                context: &context,
-                ink: ink,
-                mutedInk: mutedInk
-            )
+            let groups = snapshot.displayedAntigravityQuotaGroups
+            if !groups.isEmpty {
+                // 기존 Antigravity 영역 안에 그룹별 한 줄씩 표시한다.
+                // 상세 카드에서는 각 창의 초기화 시각도 함께 보여 준다.
+                let lineHeight = 24 / CGFloat(groups.count)
+                for (index, group) in groups.enumerated() {
+                    let limits = group.displayedBuckets.map { bucket in
+                        "\(bucket.compactWindow) \(compactPercentText(bucket.remaining))"
+                    }.joined(separator: "  ")
+                    drawText("AG \(group.compactName)  \(limits)", in: &context,
+                             at: CGPoint(x: 0, y: 52 + CGFloat(index) * lineHeight),
+                             size: min(8, lineHeight - 1), weight: .semibold, color: ink)
+                }
+            } else {
+                drawUsageGroup(
+                    provider: "ANTIGRAVITY",
+                    hasUpdate: updateStatus
+                        .package(id: "antigravity")?.updateAvailable == true,
+                    fiveHour: snapshot.antigravityFiveHour,
+                    fiveHourResetAt: snapshot.antigravityFiveHourResetAt,
+                    weekly: snapshot.antigravityWeekly,
+                    weeklyResetAt: snapshot.antigravityWeeklyResetAt,
+                    imageResetAt: snapshot.antigravityImageResetAt,
+                    providerY: 52,
+                    showsFiveHour: true,
+                    context: &context,
+                    ink: ink,
+                    mutedInk: mutedInk
+                )
+            }
         } else {
             drawText(
                 "AI LIMIT",
@@ -244,6 +264,7 @@ struct WhiteboardUsageLayer: View {
         weekly: Int?,
         weeklyResetAt: Date?,
         imageResetAt: Date? = nil,
+        modelWeeklyLimits: [AIUsageModelWeeklyLimit] = [],
         providerY: CGFloat,
         showsFiveHour: Bool,
         context: inout GraphicsContext,
@@ -288,11 +309,18 @@ struct WhiteboardUsageLayer: View {
         drawText(
             limits,
             in: &context,
-            at: CGPoint(x: 0, y: providerY + 12),
-            size: 8.5,
+            at: CGPoint(x: 0, y: providerY + (modelWeeklyLimits.isEmpty ? 12 : 10)),
+            size: modelWeeklyLimits.isEmpty ? 8.5 : 7.5,
             weight: .semibold,
             color: mutedInk
         )
+        if !modelWeeklyLimits.isEmpty {
+            let models = modelWeeklyLimits.map {
+                "\($0.name.prefix(8).uppercased()) 7D \(compactPercentText($0.remaining))"
+            }.joined(separator: "  ")
+            drawText(models, in: &context, at: CGPoint(x: 0, y: providerY + 18),
+                     size: 6.5, weight: .semibold, color: mutedInk)
+        }
     }
 
     private func drawText(
@@ -485,11 +513,13 @@ struct AIUsageSnapshot: Decodable, Equatable, Sendable {
     let claudeFiveHourResetAt: Date?
     let claudeWeekly: Int?
     let claudeWeeklyResetAt: Date?
+    let claudeModelWeeklyLimits: [AIUsageModelWeeklyLimit]?
     let antigravityFiveHour: Int?
     let antigravityFiveHourResetAt: Date?
     let antigravityWeekly: Int?
     let antigravityWeeklyResetAt: Date?
     let antigravityImageResetAt: Date?
+    let antigravityQuotaGroups: [AIUsageQuotaGroup]?
     let codexPlan: String?
     let claudePlan: String?
     let antigravityPlan: String?
@@ -501,6 +531,81 @@ struct AIUsageSnapshot: Decodable, Equatable, Sendable {
     let claudeLimitError: String?
     let antigravityLimitError: String?
     let fetchedAt: Date
+
+    var displayedAntigravityQuotaGroups: [AIUsageQuotaGroup] {
+        let groups = (antigravityQuotaGroups ?? []).filter { $0.id != "third-party" }
+        return groups.filter { $0.id == "argon" } + groups.filter { $0.id != "argon" }
+    }
+}
+
+struct AIUsageModelWeeklyLimit: Decodable, Equatable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let remaining: Int?
+    let resetAt: Date?
+
+    var displayName: String { OfficeLocalization.format("%@ 주간", name) }
+}
+
+struct AIUsageQuotaGroup: Decodable, Equatable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let buckets: [AIUsageQuotaBucket]
+
+    var displayedBuckets: [AIUsageQuotaBucket] {
+        buckets.filter { $0.window == "fiveHour" }
+            + buckets.filter { $0.window == "weekly" }
+            + buckets.filter { $0.window != "fiveHour" && $0.window != "weekly" }
+    }
+
+    var displayName: String {
+        switch id {
+        case "gemini": OfficeLocalization.string("일반 Gemini")
+        case "third-party": "Claude · GPT"
+        default: name
+        }
+    }
+
+    var compactName: String {
+        switch id {
+        case "gemini": "GEM"
+        case "third-party": "C/GPT"
+        case "argon": "ARGON"
+        default: String(name.prefix(12))
+        }
+    }
+}
+
+struct AIUsageQuotaBucket: Decodable, Equatable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let window: String
+    let remaining: Int?
+    let resetAt: Date?
+
+    var displayName: String {
+        switch window {
+        case "fiveHour": OfficeLocalization.string("5시간")
+        case "weekly": OfficeLocalization.string("7일")
+        default: name
+        }
+    }
+
+    var compactWindow: String {
+        switch window {
+        case "fiveHour": "5H"
+        case "weekly": "7D"
+        default: name
+        }
+    }
+
+    var windowMinutes: Int {
+        switch window {
+        case "fiveHour": 5 * 60
+        case "weekly": 7 * 24 * 60
+        default: 0
+        }
+    }
 }
 
 struct AIUsageActivitySnapshot: Decodable, Equatable, Sendable {

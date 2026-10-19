@@ -156,9 +156,31 @@ test("Claude OAuth 사용률은 남은 비율로 변환한다", () => {
         remaining: 89,
         resetAt: "2026-08-13T00:00:00.000Z",
       },
+      modelWeeklyLimits: [],
       plan: "Max",
     },
   );
+});
+
+test("Claude Fable 주간 한도는 전체 주간과 구분하며 비활성 0%도 보존한다", () => {
+  const parsed = parseClaudeRateLimits({
+    five_hour: { utilization: 0, resets_at: null },
+    seven_day: { utilization: 18, resets_at: "2026-10-22T00:00:00Z" },
+    limits: [
+      { kind: "weekly_all", percent: 18, scope: null },
+      { kind: "weekly_scoped", percent: 0, is_active: false,
+        resets_at: "2026-10-22T00:00:00Z", scope: { model: { id: null, display_name: "Fable" } } },
+      { kind: "weekly_scoped", percent: 100, scope: { model: { id: "opus", display_name: "Opus" } } },
+      { kind: "weekly_scoped", percent: null, scope: { model: { id: "unknown", display_name: "Unknown" } } },
+      { kind: "weekly_scoped", percent: 25, scope: { surface: "cowork" } },
+    ],
+  });
+  assert.equal(parsed.weekly.remaining, 82);
+  assert.deepEqual(parsed.modelWeeklyLimits, [
+    { id: "Fable", name: "Fable", remaining: 100, resetAt: "2026-10-22T00:00:00.000Z" },
+    { id: "opus", name: "Opus", remaining: 0, resetAt: null },
+    { id: "unknown", name: "Unknown", remaining: null, resetAt: null },
+  ]);
 });
 
 test("Claude의 구체 한도 등급은 Max 배수를 보존한다", () => {
@@ -273,6 +295,12 @@ test("Antigravity Gemini 주간 잔량을 실제 quota bucket에서 읽는다", 
         resetAt: "2026-09-03T13:44:43.000Z",
       },
       plan: "Free",
+      groups: [{
+        id: "gemini", name: "Gemini Models", buckets: [{
+          id: "gemini-weekly", name: "gemini-weekly", window: "weekly",
+          remaining: 85, resetAt: "2026-09-03T13:44:43.000Z",
+        }],
+      }],
     },
   );
 });
@@ -326,6 +354,126 @@ test("Antigravity 제3자 모델 그룹도 5시간 한도 계정은 Google AI Pr
     },
   });
 
+  assert.equal(result.plan, "Google AI Pro");
+});
+
+function argonQuotaFixture() {
+  return { response: { groups: [
+    { displayName: "Gemini Models", buckets: [
+      { bucketId: "gemini-weekly", window: "weekly", remainingFraction: 1 },
+      { bucketId: "gemini-5h", window: "5h", remainingFraction: 1 },
+    ] },
+    { displayName: "Claude and GPT models", buckets: [
+      { bucketId: "3p-weekly", window: "weekly", remainingFraction: 1 },
+    ] },
+    { displayName: "Gemini 4 Argon", buckets: [
+      { bucketId: "gemini-argon-wtu-weekly", window: "weekly",
+        remainingFraction: 0.486284, resetTime: "2026-10-24T05:44:32Z" },
+    ] },
+  ] } };
+}
+
+test("Antigravity Argon은 공통 100% 대신 전용 주간 한도를 읽고 5시간을 섞지 않는다", () => {
+  const { groups, ...selected } = parseAntigravityRateLimits(argonQuotaFixture(), {
+    model: "gemini-4-argon-high",
+  });
+  assert.deepEqual(selected, {
+    fiveHour: null,
+    weekly: { remaining: 49, resetAt: "2026-10-24T05:44:32.000Z" },
+    plan: "Google AI Pro",
+  });
+  assert.deepEqual(groups.map((group) => group.id), ["gemini", "third-party", "argon"]);
+  assert.equal(groups[0].buckets[0].remaining, 100);
+  assert.equal(groups[1].buckets[0].remaining, 100);
+  assert.equal(groups[2].buckets[0].remaining, 49);
+});
+
+test("Antigravity 일반 Gemini는 Argon 그룹이 먼저 와도 공통 한도를 읽는다", () => {
+  const payload = argonQuotaFixture();
+  payload.response.groups.reverse();
+  const result = parseAntigravityRateLimits(payload, { model: "gemini-3.8-flash" });
+  assert.equal(result.weekly.remaining, 100);
+  assert.equal(result.fiveHour.remaining, 100);
+});
+
+test("Antigravity Argon 전용 한도가 없어도 다른 그룹은 보존하고 공통 한도로 대체하지 않는다", () => {
+  const payload = argonQuotaFixture();
+  payload.response.groups.pop();
+  const result = parseAntigravityRateLimits(payload, {
+    model: "gemini-4-argon",
+  });
+  assert.equal(result.weekly, null);
+  assert.equal(result.fiveHour, null);
+  assert.equal(result.groups.length, 2);
+});
+
+test("Antigravity Argon 잔여량 누락은 0%로 만들지 않고 실제 0은 보존한다", () => {
+  const payload = argonQuotaFixture();
+  const bucket = payload.response.groups[2].buckets[0];
+  bucket.remainingFraction = null;
+  const missing = parseAntigravityRateLimits(payload, {
+    model: "gemini-4-argon",
+  });
+  assert.equal(missing.weekly, null);
+  assert.equal(missing.groups[2].buckets[0].remaining, null);
+  bucket.remainingFraction = 0;
+  assert.equal(parseAntigravityRateLimits(payload, {
+    model: "gemini-4-argon",
+  }).weekly.remaining, 0);
+});
+
+test("Antigravity 그룹별 리셋과 새 그룹은 현재 모델과 무관하게 보존한다", () => {
+  const payload = argonQuotaFixture();
+  payload.response.groups[0].buckets[0].resetTime = "2026-10-25T01:00:00Z";
+  payload.response.groups.push({ displayName: "New Model", buckets: [
+    { bucketId: "new-weekly", window: "weekly", remainingFraction: 0.25,
+      resetTime: "2026-10-26T02:00:00Z" },
+  ] });
+  const result = parseAntigravityRateLimits(payload, { model: "claude-opus-5-5" });
+  assert.equal(result.weekly.remaining, 100);
+  assert.equal(result.groups.length, 4);
+  assert.equal(result.groups[0].buckets[0].resetAt, "2026-10-25T01:00:00.000Z");
+  assert.equal(result.groups[2].buckets[0].resetAt, "2026-10-24T05:44:32.000Z");
+  assert.equal(result.groups[3].buckets[0].remaining, 25);
+});
+
+test("Antigravity 모든 그룹이 조회 불가면 0%나 100%로 만들지 않는다", () => {
+  assert.throws(() => parseAntigravityRateLimits({ groups: [
+    { displayName: "Gemini Models", buckets: [{ bucketId: "gemini-weekly" }] },
+  ] }), /잔여량이 없습니다/);
+});
+
+test("사용량 API는 캐시를 재사용해도 Antigravity의 모든 그룹을 전달한다", async () => {
+  let reads = 0;
+  const reader = createUsageSummaryReader({
+    pool: {}, codexReader: async () => null, claudeReader: async () => null,
+    antigravityReader: async () => {
+      reads += 1;
+      return parseAntigravityRateLimits(argonQuotaFixture(), { model: "gemini-4-argon" });
+    },
+    activityReader: async () => ({ codex: emptyActivityFixture(), claude: emptyActivityFixture(),
+      antigravity: emptyActivityFixture() }),
+  });
+  const first = await reader();
+  const cached = await reader({ force: true });
+  assert.equal(reads, 1);
+  assert.deepEqual(first.antigravityQuotaGroups.map((group) => group.id), ["gemini", "third-party", "argon"]);
+  assert.deepEqual(cached.antigravityQuotaGroups, first.antigravityQuotaGroups);
+});
+
+test("Antigravity 한도 조회는 직원 모델을 전달하고 실행 경로가 없으면 agy를 쓴다", async () => {
+  let invocation;
+  const result = await readAntigravityRateLimits({
+    pool: { query: async () => ({ rows: [{ model: "gemini-4-argon" }] }) },
+    quotaProbe: async (options) => {
+      invocation = options;
+      return argonQuotaFixture();
+    },
+    imageCooldownReader: async () => null,
+  });
+  assert.equal(invocation.executable, "agy");
+  assert.equal(result.weekly.remaining, 49);
+  assert.equal(result.fiveHour, null);
   assert.equal(result.plan, "Google AI Pro");
 });
 
@@ -565,6 +713,7 @@ test("Claude 한도 조회가 실패해도 직전 값을 유지하고 오류만 
         return {
           fiveHour: { remaining: 48, resetAt: null },
           weekly: { remaining: 13, resetAt: null },
+          modelWeeklyLimits: [{ id: "Fable", name: "Fable", remaining: 70, resetAt: null }],
           plan: "Max",
         };
       }
@@ -585,6 +734,7 @@ test("Claude 한도 조회가 실패해도 직전 값을 유지하고 오류만 
 
   const healthy = await reader();
   assert.equal(healthy.claudeFiveHour, 48);
+  assert.deepEqual(healthy.claudeModelWeeklyLimits, [{ id: "Fable", name: "Fable", remaining: 70, resetAt: null }]);
   assert.equal(healthy.claudeLimitStale, false);
   assert.equal(healthy.claudeLimitError, null);
 
@@ -594,6 +744,7 @@ test("Claude 한도 조회가 실패해도 직전 값을 유지하고 오류만 
   assert.equal(claudeReads, 2);
   assert.equal(failed.claudeFiveHour, 48, "직전 정상값을 유지한다");
   assert.equal(failed.claudeWeekly, 13);
+  assert.deepEqual(failed.claudeModelWeeklyLimits, healthy.claudeModelWeeklyLimits);
   assert.equal(failed.claudeLimitStale, true);
   assert.match(failed.claudeLimitError, /429/);
   assert.equal(failed.codexFiveHour, 70, "코덱스 한도는 영향받지 않는다");

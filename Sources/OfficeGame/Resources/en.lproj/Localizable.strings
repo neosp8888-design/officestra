@@ -47,6 +47,10 @@
 "새로고침 중" = "Refreshing";
 "다시 시도" = "Try again";
 "사용 가능" = "Available";
+"일반 Gemini" = "General Gemini";
+"전체 주간" = "All models weekly";
+"%@ 주간" = "%@ weekly";
+"그룹별 한도" = "Limits by group";
 "잔여량 낮음" = "Low remaining";
 "정보 없음" = "No data";
 "API 요금 추정" = "Estimated API cost";

@@ -1,6 +1,8 @@
 // 이 파일은 화이트보드의 반응형 제공자 열 배치를 검증한다.
 
 import XCTest
+import AppKit
+import SwiftUI
 @testable import OfficeGame
 
 final class UsageBoardLayoutTests: XCTestCase {
@@ -164,50 +166,113 @@ final class UsageBoardLayoutTests: XCTestCase {
         )
     }
 
-    func testAntigravityFiveHourLimitIsVisibleInBothWhiteboards() throws {
-        let sourceRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appending(path: "Sources/OfficeGame", directoryHint: .isDirectory)
-        let dashboard = try String(
-            contentsOf: sourceRoot.appending(path: "OfficeDashboardPanels.swift"),
-            encoding: .utf8
-        )
-        let whiteboard = try String(
-            contentsOf: sourceRoot.appending(path: "WhiteboardUsageLayer.swift"),
-            encoding: .utf8
-        )
+    private func groupedQuotaSnapshot() throws -> AIUsageSnapshot {
+        let data = Data(#"""
+        {"fetchedAt":"2026-10-17T18:30:00.000Z","antigravityQuotaGroups":[
+          {"id":"gemini","name":"Gemini Models","buckets":[
+            {"id":"gemini-weekly","name":"Weekly","window":"weekly","remaining":100,"resetAt":"2026-10-24T18:30:00.000Z"},
+            {"id":"gemini-5h","name":"Five Hour","window":"fiveHour","remaining":100,"resetAt":"2026-10-17T23:30:00.000Z"}]},
+          {"id":"third-party","name":"Claude and GPT models","buckets":[
+            {"id":"3p-5h","name":"Five Hour","window":"fiveHour","remaining":95,"resetAt":"2026-10-17T23:00:00.000Z"},
+            {"id":"3p-weekly","name":"Weekly","window":"weekly","remaining":80,"resetAt":"2026-10-24T18:00:00.000Z"}]},
+          {"id":"argon","name":"Gemini 4 Argon","buckets":[
+            {"id":"gemini-argon-wtu-weekly","name":"Weekly","window":"weekly","remaining":18,"resetAt":"2026-10-24T05:44:32.000Z"}]}]}
+        """#.utf8)
+        return try OfficeDatabaseClient(baseURL: URL(string: "http://127.0.0.1:4317")!)
+            .decodeUsageSummary(data)
+    }
 
-        let dashboardStart = try XCTUnwrap(
-            dashboard.range(of: "name: \"Antigravity\"")?.lowerBound
-        )
-        let dashboardEnd = try XCTUnwrap(
-            dashboard.range(
-                of: "tint: DashboardPalette.providerAccent(for: .antigravity)",
-                range: dashboardStart..<dashboard.endIndex
-            )?.upperBound
-        )
-        let dashboardBlock = String(dashboard[dashboardStart..<dashboardEnd])
+    func testAntigravityQuotaGroupsDecodeSeparateLimitsAndResetDates() throws {
+        let groups = try XCTUnwrap(groupedQuotaSnapshot().antigravityQuotaGroups)
+        XCTAssertEqual(groups.map(\.id), ["gemini", "third-party", "argon"])
+        XCTAssertEqual(groups[0].buckets.map(\.remaining), [100, 100])
+        XCTAssertEqual(groups[1].buckets.map(\.remaining), [95, 80])
+        XCTAssertEqual(groups[2].buckets.map(\.remaining), [18])
+        XCTAssertEqual(groups[2].buckets.map(\.window), ["weekly"])
+        XCTAssertNotEqual(groups[0].displayedBuckets.last?.resetAt, groups[2].buckets.last?.resetAt)
+        XCTAssertEqual(groups[0].displayedBuckets[0].windowMinutes, 300)
+        XCTAssertEqual(groups[0].displayedBuckets.map(\.window), ["fiveHour", "weekly"])
+        XCTAssertEqual(groups[2].buckets[0].windowMinutes, 10080)
+        XCTAssertEqual(try groupedQuotaSnapshot().displayedAntigravityQuotaGroups.map(\.id), ["argon", "gemini"])
+    }
 
-        let whiteboardStart = try XCTUnwrap(
-            whiteboard.range(of: "provider: \"ANTIGRAVITY\"")?.lowerBound
-        )
-        let whiteboardEnd = try XCTUnwrap(
-            whiteboard.range(
-                of: "context: &context",
-                range: whiteboardStart..<whiteboard.endIndex
-            )?.upperBound
-        )
-        let whiteboardBlock = String(whiteboard[whiteboardStart..<whiteboardEnd])
+    @MainActor
+    func testClaudeModelWeeklyLimitsDecodeAndFitBothThemes() throws {
+        _ = NSApplication.shared
+        let data = Data(#"""
+        {"fetchedAt":"2026-10-18T04:12:51.000Z",
+         "claudeFiveHour":100,"claudeFiveHourResetAt":"2026-10-18T09:00:00.000Z",
+         "claudeWeekly":82,"claudeWeeklyResetAt":"2026-10-22T00:00:00.000Z",
+         "claudeModelWeeklyLimits":[{"id":"Fable","name":"Fable","remaining":100,"resetAt":"2026-10-22T00:00:00.000Z"}]}
+        """#.utf8)
+        let snapshot = try OfficeDatabaseClient(baseURL: URL(string: "http://127.0.0.1:4317")!)
+            .decodeUsageSummary(data)
+        let limits = try XCTUnwrap(snapshot.claudeModelWeeklyLimits)
+        XCTAssertEqual(snapshot.claudeWeekly, 82)
+        XCTAssertEqual(limits.map(\.remaining), [100])
+        XCTAssertEqual(limits.first?.resetAt, snapshot.claudeWeeklyResetAt)
+        XCTAssertNil(try groupedQuotaSnapshot().claudeModelWeeklyLimits)
+        for (name, scheme, width) in [("light", ColorScheme.light, 320.0),
+                                       ("dark", ColorScheme.dark, 320.0),
+                                       ("narrow", ColorScheme.light, 250.0)] {
+            let view = UsageWindowLimitsView(
+                fiveHour: snapshot.claudeFiveHour, fiveHourResetAt: snapshot.claudeFiveHourResetAt,
+                weekly: snapshot.claudeWeekly, weeklyResetAt: snapshot.claudeWeeklyResetAt,
+                modelWeeklyLimits: limits, showsFiveHour: true,
+                fetchedAt: snapshot.fetchedAt, tint: DashboardPalette.providerAccent(for: .claude))
+                .padding(16)
+                .frame(width: width)
+                .officeGameSurface(accent: DashboardPalette.providerAccent(for: .claude), cornerRadius: 14)
+                .environment(\.colorScheme, scheme)
+            let host = NSHostingView(rootView: view)
+            host.frame = NSRect(x: 0, y: 0, width: width, height: 310)
+            let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.contentView = host
+            defer { window.contentView = nil }
+            host.layoutSubtreeIfNeeded()
+            XCTAssertLessThanOrEqual(host.fittingSize.width, width + 1)
+            XCTAssertLessThanOrEqual(host.fittingSize.height, 310)
+            if let directory = ProcessInfo.processInfo.environment["OFFICESTRA_USAGE_PREVIEW_DIR"] {
+                let url = URL(fileURLWithPath: directory, isDirectory: true)
+                try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+                let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                    .write(to: url.appendingPathComponent("claude-\(name).png"))
+            }
+        }
+    }
 
-        XCTAssertTrue(dashboardBlock.contains("showsFiveHour: true"))
-        XCTAssertTrue(whiteboardBlock.contains("showsFiveHour: true"))
-        XCTAssertTrue(
-            whiteboard.contains(
-                "provider: \"Antigravity\",\n                window: \"5시간\""
-            )
-        )
+    @MainActor
+    func testAntigravityGroupedQuotaLayoutAndOptionalPreviews() throws {
+        _ = NSApplication.shared
+        let snapshot = try groupedQuotaSnapshot()
+        let groups = snapshot.displayedAntigravityQuotaGroups
+        for (name, scheme, width) in [("light", ColorScheme.light, 320.0),
+                                       ("dark", ColorScheme.dark, 320.0),
+                                       ("narrow", ColorScheme.light, 250.0)] {
+            let view = AntigravityQuotaGroupsView(groups: groups, fetchedAt: snapshot.fetchedAt, tint: .blue)
+                .padding(16)
+                .frame(width: width)
+                .officeGameSurface(accent: .blue, cornerRadius: 14)
+                .environment(\.colorScheme, scheme)
+            let host = NSHostingView(rootView: view)
+            host.frame = NSRect(x: 0, y: 0, width: width, height: 470)
+            let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.contentView = host
+            defer { window.contentView = nil }
+            host.layoutSubtreeIfNeeded()
+            XCTAssertLessThanOrEqual(host.fittingSize.width, width + 1)
+            XCTAssertLessThanOrEqual(host.fittingSize.height, 470)
+            if let directory = ProcessInfo.processInfo.environment["OFFICESTRA_USAGE_PREVIEW_DIR"] {
+                let url = URL(fileURLWithPath: directory, isDirectory: true)
+                try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+                let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                    .write(to: url.appendingPathComponent("\(name).png"))
+            }
+        }
     }
 
     func testConversationFooterUsesSelectedProviderAccent() throws {

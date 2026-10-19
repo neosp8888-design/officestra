@@ -718,6 +718,7 @@ private struct UsageBoardContent: View {
             fiveHourResetAt: snapshot.claudeFiveHourResetAt,
             weekly: snapshot.claudeWeekly,
             weeklyResetAt: snapshot.claudeWeeklyResetAt,
+            modelWeeklyLimits: snapshot.claudeModelWeeklyLimits ?? [],
             fetchedAt: snapshot.fetchedAt,
             plan: snapshot.claudePlan,
             subscriptionExpiresAt: nil,
@@ -755,6 +756,7 @@ private struct UsageBoardContent: View {
             weekly: snapshot.antigravityWeekly,
             weeklyResetAt: snapshot.antigravityWeeklyResetAt,
             imageResetAt: snapshot.antigravityImageResetAt,
+            quotaGroups: snapshot.displayedAntigravityQuotaGroups,
             fetchedAt: snapshot.fetchedAt,
             plan: snapshot.antigravityPlan,
             subscriptionExpiresAt: nil,
@@ -799,6 +801,8 @@ private struct UsageProviderColumn: View {
     let weekly: Int?
     let weeklyResetAt: Date?
     var imageResetAt: Date? = nil
+    var quotaGroups: [AIUsageQuotaGroup] = []
+    var modelWeeklyLimits: [AIUsageModelWeeklyLimit] = []
     let fetchedAt: Date
     let plan: String?
     let subscriptionExpiresAt: Date?
@@ -819,6 +823,8 @@ private struct UsageProviderColumn: View {
             weekly: weekly,
             weeklyResetAt: weeklyResetAt,
             imageResetAt: imageResetAt,
+            quotaGroups: quotaGroups,
+            modelWeeklyLimits: modelWeeklyLimits,
             fetchedAt: fetchedAt,
             plan: plan,
             subscriptionExpiresAt: subscriptionExpiresAt,
@@ -842,6 +848,8 @@ private struct UsageProviderCard: View {
     let weekly: Int?
     let weeklyResetAt: Date?
     var imageResetAt: Date? = nil
+    var quotaGroups: [AIUsageQuotaGroup] = []
+    var modelWeeklyLimits: [AIUsageModelWeeklyLimit] = []
     let fetchedAt: Date
     let plan: String?
     let subscriptionExpiresAt: Date?
@@ -925,24 +933,16 @@ private struct UsageProviderCard: View {
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(.secondary)
             }
-            if showsFiveHour {
-                UsageMeter(
-                    label: OfficeLocalization.string("5시간"),
-                    value: fiveHour,
-                    windowMinutes: 5 * 60,
-                    resetAt: fiveHourResetAt,
-                    fetchedAt: fetchedAt,
-                    tint: tint
+            if !quotaGroups.isEmpty {
+                AntigravityQuotaGroupsView(groups: quotaGroups, fetchedAt: fetchedAt, tint: tint)
+            } else {
+                UsageWindowLimitsView(
+                    fiveHour: fiveHour, fiveHourResetAt: fiveHourResetAt,
+                    weekly: weekly, weeklyResetAt: weeklyResetAt,
+                    modelWeeklyLimits: modelWeeklyLimits, showsFiveHour: showsFiveHour,
+                    fetchedAt: fetchedAt, tint: tint
                 )
             }
-            UsageMeter(
-                label: OfficeLocalization.string("7일"),
-                value: weekly,
-                windowMinutes: 7 * 24 * 60,
-                resetAt: weeklyResetAt,
-                fetchedAt: fetchedAt,
-                tint: tint
-            )
             if let imageResetAt {
                 UsageResetCountdown(
                     resetAt: imageResetAt,
@@ -991,12 +991,77 @@ private struct UsageProviderCard: View {
     }
 
     private var availabilityText: String {
-        let values = showsFiveHour ? [fiveHour, weekly] : [weekly]
+        if !quotaGroups.isEmpty {
+            return OfficeLocalization.string("그룹별 한도")
+        }
+        let values = (showsFiveHour ? [fiveHour, weekly] : [weekly]) + modelWeeklyLimits.map(\.remaining)
         guard let lowest = values.compactMap({ $0 }).min()
         else {
             return OfficeLocalization.string("정보 없음")
         }
         return lowest > 25 ? OfficeLocalization.string("사용 가능") : OfficeLocalization.string("잔여량 낮음")
+    }
+}
+
+struct UsageWindowLimitsView: View {
+    let fiveHour: Int?
+    let fiveHourResetAt: Date?
+    let weekly: Int?
+    let weeklyResetAt: Date?
+    let modelWeeklyLimits: [AIUsageModelWeeklyLimit]
+    let showsFiveHour: Bool
+    let fetchedAt: Date
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            if showsFiveHour {
+                UsageMeter(label: OfficeLocalization.string("5시간"), value: fiveHour,
+                           windowMinutes: 5 * 60, resetAt: fiveHourResetAt,
+                           fetchedAt: fetchedAt, tint: tint, labelWidth: labelWidth)
+            }
+            UsageMeter(label: OfficeLocalization.string(modelWeeklyLimits.isEmpty ? "7일" : "전체 주간"),
+                       value: weekly, windowMinutes: 7 * 24 * 60, resetAt: weeklyResetAt,
+                       fetchedAt: fetchedAt, tint: tint, labelWidth: labelWidth)
+            ForEach(modelWeeklyLimits) { limit in
+                UsageMeter(label: limit.displayName, value: limit.remaining,
+                           windowMinutes: 7 * 24 * 60, resetAt: limit.resetAt,
+                           fetchedAt: fetchedAt, tint: tint, labelWidth: labelWidth)
+                    .accessibilityIdentifier("claudeModelWeekly-\(limit.id)")
+            }
+        }
+    }
+
+    private var labelWidth: CGFloat { modelWeeklyLimits.isEmpty ? 32 : 88 }
+}
+
+struct AntigravityQuotaGroupsView: View {
+    let groups: [AIUsageQuotaGroup]
+    let fetchedAt: Date
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(groups) { group in
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(group.displayName)
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(tint)
+                    ForEach(group.displayedBuckets) { bucket in
+                        UsageMeter(label: bucket.displayName, value: bucket.remaining,
+                                   windowMinutes: bucket.windowMinutes, resetAt: bucket.resetAt,
+                                   fetchedAt: fetchedAt, tint: tint)
+                    }
+                    if group.buckets.isEmpty {
+                        Text(OfficeLocalization.string("정보 없음"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("antigravityQuotaGroup-\(group.id)")
+            }
+        }
     }
 }
 
@@ -1137,6 +1202,7 @@ private struct UsageMeter: View {
     let resetAt: Date?
     let fetchedAt: Date
     let tint: Color
+    var labelWidth: CGFloat = 32
 
     var body: some View {
         TimelineView(.periodic(from: fetchedAt, by: 60)) { timeline in
@@ -1158,7 +1224,9 @@ private struct UsageMeter: View {
                     Text(label)
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.secondary)
-                        .frame(width: 32, alignment: .leading)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .frame(width: labelWidth, alignment: .leading)
 
                     GeometryReader { geometry in
                         ZStack(alignment: .leading) {
