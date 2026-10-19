@@ -59,7 +59,9 @@ export function localCodexModelCatalog(profile) {
     base_instructions:`You are a coding assistant running a local ${isMeroMero(profile)?'MeroMero':'Qwen'} model through Codex. Use the available tools to complete the user request. Follow tool documentation and do not invent tool results.`,
     model_messages:null,default_reasoning_summary:'none',support_verbosity:false,
     default_verbosity:null,apply_patch_tool_type:'freeform',web_search_tool_type:'text',
-    truncation_policy:{mode:'tokens',limit:10000},supports_image_detail_original:false,
+    // Codex estimates 4 bytes/token; Korean/JSON output runs ~2.5x denser on the
+    // local tokenizer, so 10000 let one tool result add ~25K of a 64K window.
+    truncation_policy:{mode:'tokens',limit:2500},supports_image_detail_original:false,
     context_window:profile.contextWindow,max_context_window:profile.contextWindow,
     effective_context_window_percent:100,experimental_supported_tools:[],
     input_modalities:localModelSupportsVision(profile)?['text','image']:['text'],supports_search_tool:true,supports_experimental_context:false,

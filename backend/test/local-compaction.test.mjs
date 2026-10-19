@@ -17,6 +17,7 @@ test('local 100 percent reaches Claude/Codex GUI and terminal while cloud normal
     else{
       assert.ok(launch.args.includes('model_auto_compact_token_limit=65536'));
       assert.equal(localCodexModelCatalog(profile).models[0].effective_context_window_percent,100);
+      assert.deepEqual(localCodexModelCatalog(profile).models[0].truncation_policy,{mode:'tokens',limit:2500});
     }
     assert.notEqual(launch.signature,createLocalAgentLaunch({...options,character:{...character,autoCompactPercent:95}}).signature);
     const fallback=createLocalAgentLaunch({...options,character:{...character,autoCompactPercent:undefined}});
