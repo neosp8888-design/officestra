@@ -867,6 +867,7 @@ final class AgentDirector: ObservableObject {
 
     private let configuration: OfficeAgentConfiguration
     private let database: OfficeDatabaseClient
+    let roleplay: RoleplayStore
     private var conversationIDs: [OfficeCharacter: UUID] = [:]
     private var sessionIDs: [OfficeCharacter: String] = [:]
     private var realtimeTask: Task<Void, Never>?
@@ -1176,6 +1177,7 @@ final class AgentDirector: ObservableObject {
         database = OfficeDatabaseClient(
             baseURL: configuration.databaseBaseURL
         )
+        roleplay = RoleplayStore(baseURL: configuration.databaseBaseURL)
         liveFeedStore.selectCharacterFeed(
             characterSelectionStore.selectedCharacterID?.rawValue
         )
@@ -2558,6 +2560,7 @@ final class AgentDirector: ObservableObject {
                 await self?.refreshReplyRoutes()
                 await self?.refreshLocalProviderStatuses()
                 try? await self?.refreshModelCatalog()
+                await self?.roleplay.refresh(OfficeCharacter.allCases)
             }
             let synchronized = Set(
                 (event.compactingCharacterIds ?? []).compactMap(
@@ -2575,6 +2578,13 @@ final class AgentDirector: ObservableObject {
                     automatic: false
                 )
             }
+            return true
+
+        case "roleplay.changed":
+            guard let character = event.officeCharacter else {
+                return false
+            }
+            Task { [weak self] in await self?.roleplay.refresh(character) }
             return true
 
         case "context.compaction.started":

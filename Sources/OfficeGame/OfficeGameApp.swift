@@ -1838,6 +1838,11 @@ private extension LiveWorkspaceCommandBar {
         }
         guard !director.savingReplyRoutes.contains(selectedCharacterID) else { return false }
 
+        // 롤플레이를 켠 직원은 업무 CLI 대신 롤플레이 대화로 보낸다. 첨부는 쓰지 않는다.
+        if director.roleplay.isEnabled(selectedCharacterID) {
+            return director.roleplay.send(prompt, for: selectedCharacterID)
+        }
+
         // 응답 생성 중이면 같은 입력을 다음 턴 예약으로 넘긴다.
         // 첨부는 예약이 실제로 제출될 때까지 director가 들고 있다가
         // 정리하므로 여기서 목록만 비운다. 터미널 모드도 같은 예약을 쓰고,
@@ -2813,6 +2818,8 @@ private struct AgentQuickSettingsView: View {
             .help(OfficeLocalization.string("직원 CLI 선택"))
             .accessibilityIdentifier("agentProviderPicker")
 
+            RoleplayQuickToggle(roleplay: director.roleplay, character: character.id)
+
             if isLocal {
                 QuickSettingLabel(text: localModelTitle, systemImage: "cpu")
                 QuickSettingLabel(text: localContextTitle, systemImage: "memorychip")
@@ -3298,6 +3305,28 @@ private struct QuickSettingLabel: View {
             .padding(.vertical, 5)
             .officeGameSurface(emphasis: .control, cornerRadius: 8)
             .fixedSize()
+    }
+}
+
+/// 켜면 이 직원의 대화 칸과 입력이 업무 CLI 대신 롤플레이 대화로 바뀐다.
+private struct RoleplayQuickToggle: View {
+    @ObservedObject var roleplay: RoleplayStore
+    let character: OfficeCharacter
+
+    var body: some View {
+        let isOn = roleplay.isEnabled(character)
+        Button {
+            Task { await roleplay.setEnabled(!isOn, for: character) }
+        } label: {
+            QuickSettingLabel(
+                text: OfficeLocalization.string(isOn ? "롤플레이 켜짐" : "롤플레이"),
+                systemImage: isOn ? "theatermasks.fill" : "theatermasks"
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(roleplay.states[character]?.generating == true)
+        .help(OfficeLocalization.string("롤플레이 대화 모드 켜기·끄기"))
+        .accessibilityIdentifier("roleplayToggle")
     }
 }
 

@@ -176,6 +176,35 @@ export class LocalProviderService {
     if(this.closed)throw new Error('Local service is shutting down');
     const definition=normalizeLocalDefinition(character.localProfile);
     if(!localModelSupportsVision(definition.profile)&&options.attachments?.some(a=>a.isCodexImage||/\.(png|jpe?g|gif|webp|bmp|heic)$/i.test(a.path??'')))throw new Error('31B는 텍스트 전용입니다. 이미지 분석은 G4 MeroMero 26B A4B · 비전 모델을 선택하세요.');
+    let catalogDirectory,catalogPath;
+    const {e,release}=await this.openEntry(definition,options.mode,async()=>{
+      // Temporary metadata cleanup must not strand a GPU lease if the file was
+      // already removed by the OS. The live process has exited before release.
+      if(catalogPath)await unlink(catalogPath).catch(error=>{if(error.code!=='ENOENT')console.warn('Local catalog cleanup failed:',error.code);});
+      if(catalogDirectory)await rmdir(catalogDirectory).catch(error=>{if(error.code!=='ENOENT')console.warn('Local catalog directory cleanup failed:',error.code);});
+    });
+    try {
+      const profile={...definition.profile,endpoint:`http://127.0.0.1:${e.server.address().port}`};
+      if(profile.backend==='codex'){
+        // A shared fresh cloud models_cache.json can suppress provider refresh.
+        // Pin metadata per process; never modify the user's shared Codex home.
+        catalogDirectory=await mkdtemp(join(tmpdir(),'officestra-local-catalog-'));
+        catalogPath=join(catalogDirectory,'models.json');
+        await writeFile(catalogPath,JSON.stringify(localCodexModelCatalog(profile)),{mode:0o600});
+      }
+      return {...createLocalAgentLaunch({...options,character,profile,catalogPath,baseEnvironment:{...(options.baseEnvironment??process.env),[profile.credentialEnv]:e.token}}),release};
+    }catch(error){await release();throw error;}
+  }
+  // 롤플레이처럼 CLI 없이 Anthropic Messages를 직접 보내는 호출자용 입구.
+  // 직원 CLI와 같은 entry·모델 잠금을 쓰므로 4090 모델을 함부로 바꾸지 않는다.
+  async openMessagesDoor(rawDefinition) {
+    if(this.closed)throw new Error('Local service is shutting down');
+    const definition=normalizeLocalDefinition(rawDefinition);
+    if(definition.profile.backend!=='claude')throw new Error('Messages 형식을 쓰는 로컬 프로필만 연결할 수 있습니다.');
+    const {e,release}=await this.openEntry(definition,'gui');
+    return {url:`http://127.0.0.1:${e.server.address().port}/v1/messages`,token:e.token,model:definition.profile.model,maxOutputTokens:definition.profile.maxOutputTokens,release};
+  }
+  async openEntry(definition,mode,cleanup=async()=>{}) {
     if(this.models.group(definition).paused)throw new Error('로컬 모델이 중지되어 있습니다. 모델 실행 버튼을 눌러주세요.');
     const id=`${definition.profile.id}:${definition.profile.reasoning??'default'}`;
     let e=this.entries.get(id);
@@ -194,27 +223,14 @@ export class LocalProviderService {
     await this.awaitCleanup(e);
     if(e.closed)throw new Error('Local session is closed');
     e.users++;
-    let released=false,catalogDirectory,catalogPath;
+    let released=false;
     const release=async()=>{if(released)return;released=true;
-      // Temporary metadata cleanup must not strand a GPU lease if the file was
-      // already removed by the OS. The live process has exited before release.
-      if(catalogPath)await unlink(catalogPath).catch(error=>{if(error.code!=='ENOENT')console.warn('Local catalog cleanup failed:',error.code);});
-      if(catalogDirectory)await rmdir(catalogDirectory).catch(error=>{if(error.code!=='ENOENT')console.warn('Local catalog directory cleanup failed:',error.code);});
+      await cleanup();
       e.users--;if(!e.users){
-      if(options.mode==='terminal')await this.close(e);
+      if(mode==='terminal')await this.close(e);
       else {for(const controller of e.controllers)if(controller!==e.active?.abort||!e.active.completed)controller.abort();e.retire=setTimeout(()=>{this.close(e).catch(error=>this.change(e,'error',error.message));},this.idleMs);e.retire.unref();}
     }};
-    try {
-      const profile={...definition.profile,endpoint:`http://127.0.0.1:${e.server.address().port}`};
-      if(profile.backend==='codex'){
-        // A shared fresh cloud models_cache.json can suppress provider refresh.
-        // Pin metadata per process; never modify the user's shared Codex home.
-        catalogDirectory=await mkdtemp(join(tmpdir(),'officestra-local-catalog-'));
-        catalogPath=join(catalogDirectory,'models.json');
-        await writeFile(catalogPath,JSON.stringify(localCodexModelCatalog(profile)),{mode:0o600});
-      }
-      return {...createLocalAgentLaunch({...options,character,profile,catalogPath,baseEnvironment:{...(options.baseEnvironment??process.env),[profile.credentialEnv]:e.token}}),release};
-    }catch(error){await release();throw error;}
+    return {e,release};
   }
   async awaitCleanup(e,signal) {
     // Completed HTTP streams may still be draining when Codex starts its next

@@ -134,6 +134,7 @@ import {
   ModelCatalogService,
   ModelCatalogValidationError,
 } from "./model-catalog.mjs";
+import { RoleplayError, RoleplayService } from "./roleplay-service.mjs";
 
 const port = Number(process.env.OFFICE_BACKEND_PORT ?? 4317);
 const liveFeedMinimumTurnsPerCharacter = 10;
@@ -145,6 +146,7 @@ let localProviders;
 let replyDeliveries;
 let pricingCatalogService;
 let modelCatalogService;
+const roleplayService = new RoleplayService({ pool, broadcast, localProviders: () => localProviders });
 let shuttingDown = false;
 const readUsageSummary = createUsageSummaryReader({ pool });
 const turnCostSummaryCache = new CharacterTurnCostSummaryCache(pool);
@@ -2297,6 +2299,42 @@ async function searchRAG(response, body) {
   send(response, 200, { documents: result.documents });
 }
 
+async function roleplayEndpoint(request, response, pathname) {
+  const profileMatch = pathname.match(/^\/api\/roleplay\/profiles\/([^/]+)(?:\/(chats|messages))?$/);
+  const characterId = profileMatch ? decodeURIComponent(profileMatch[1]) : null;
+  const action = profileMatch?.[2] ?? null;
+  try {
+    if (request.method === "GET" && pathname === "/api/roleplay/assets") {
+      send(response, 200, { assets: await roleplayService.listAssets() });
+      return;
+    }
+    if (request.method === "GET" && characterId && !action) {
+      send(response, 200, await roleplayService.readProfile(characterId));
+      return;
+    }
+    if (!trustedJSONMutation(request, response)) return;
+    const body = await readJSON(request);
+    if (request.method === "POST" && pathname === "/api/roleplay/assets") {
+      const result = await roleplayService.importAsset(body);
+      send(response, result.created ? 201 : 200, result);
+    } else if (request.method === "PUT" && characterId && !action) {
+      send(response, 200, await roleplayService.updateProfile(characterId, body));
+    } else if (request.method === "POST" && action === "chats") {
+      send(response, 201, await roleplayService.startNewChat(characterId));
+    } else if (request.method === "POST" && action === "messages") {
+      send(response, 202, await roleplayService.sendMessage(characterId, body));
+    } else {
+      send(response, 405, { error: "지원하지 않는 롤플레이 요청입니다." });
+    }
+  } catch (error) {
+    if (error instanceof RoleplayError) {
+      send(response, error.status, { error: error.message });
+      return;
+    }
+    throw error;
+  }
+}
+
 async function workBoardEndpoint(request, response, pathname) {
   try {
     if (request.method === "GET" && pathname === "/api/work-board") {
@@ -2470,6 +2508,8 @@ const server = createServer(async (request, response) => {
       send(response,200,{id:definition.profile.id});
     } else if (url.pathname === "/api/work-board" || url.pathname.startsWith("/api/work-board/")) {
       await workBoardEndpoint(request, response, url.pathname);
+    } else if (url.pathname.startsWith("/api/roleplay/")) {
+      await roleplayEndpoint(request, response, url.pathname);
     } else if (
       request.method === "GET" &&
       url.pathname === "/api/characters"

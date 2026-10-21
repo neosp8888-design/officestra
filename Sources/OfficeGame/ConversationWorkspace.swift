@@ -133,8 +133,9 @@ struct ConversationWorkspaceView: View {
                 if mode == .terminal {
                     CachedTerminalWorkspaces(director: director)
                 } else {
-                    ConversationFeedHosts(director: director, layout: layout)
+                    ConversationFeedHosts(director: director, layout: layout, roleplay: director.roleplay)
                 }
+                RoleplayOverlays(director: director, roleplay: director.roleplay, layout: layout, size: geometry.size)
                 if layout.state.isSplit {
                     let focusedCharacter = layout.selected
                     if let focusedCharacter, let frame = layout.frames(in: CGRect(origin: .zero, size: geometry.size))[focusedCharacter] {
@@ -240,8 +241,12 @@ final class ConversationPaneFocusNSView: NSView {
 struct ConversationFeedHosts: NSViewRepresentable {
     let director: AgentDirector
     @ObservedObject var layout: ConversationLayoutStore
+    @ObservedObject var roleplay: RoleplayStore
     func makeNSView(context: Context) -> ConversationFeedHostsNSView { ConversationFeedHostsNSView() }
-    func updateNSView(_ view: ConversationFeedHostsNSView, context: Context) { view.configure(director: director, layout: layout) }
+    func updateNSView(_ view: ConversationFeedHostsNSView, context: Context) {
+        view.configure(director: director, layout: layout,
+            hiddenCharacters: layout.visible.filter { roleplay.isEnabled($0) })
+    }
     // The viewport is sized by GeometryReader, never by the transcripts inside it.
     // Default AppKit fitting-size traversal probes both hosted feeds repeatedly.
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: ConversationFeedHostsNSView, context: Context) -> CGSize? {
@@ -262,7 +267,9 @@ final class ConversationFeedHostsNSView: NSView {
     var visibleCharactersForTesting: Set<OfficeCharacter> { Set(hosts.filter { $0.value.superview === self }.map(\.key)) }
     func hostForTesting(_ character: OfficeCharacter) -> CachedLiveWorkspaceFeedsNSView? { hosts[character] }
 
-    func configure(director: AgentDirector, layout: ConversationLayoutStore) {
+    /// hiddenCharacters는 롤플레이 화면이 덮은 칸이다. 숨겨야 휠 경계 판정이 아래 칸을 보지 않는다.
+    func configure(director: AgentDirector, layout: ConversationLayoutStore,
+                   hiddenCharacters: Set<OfficeCharacter> = []) {
         self.director = director
         workspaceLayout = layout
         for character in hosts.keys.filter({ !layout.visible.contains($0) }) {
@@ -281,6 +288,7 @@ final class ConversationFeedHostsNSView: NSView {
             host.configure(director: director, selectedCharacterID: character,
                 followsGlobalSelection: false, showsInitialLoadingGate: true)
             host.setWorkspaceVisible(true)
+            host.isHidden = hiddenCharacters.contains(character)
         }
     }
     override func layout() {

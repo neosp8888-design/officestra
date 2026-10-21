@@ -422,6 +422,25 @@ final class ConversationWorkspaceTests: XCTestCase {
         XCTAssertFalse(director.characterSelectionStore.isConversationLoading)
     }
 
+    func testRoleplayCoveredFeedHostIsHiddenSoScrollEdgeGateIgnoresIt() async throws {
+        let director = AgentDirector(startBackgroundTasks: false, conversationDefaults: nil)
+        director.selectedCharacterID = .rightWoman
+        director.liveFeedStore.replace(with: [turn(.rightWoman, text: String(repeating: "업무 대화 내용입니다.\n\n", count: 100))])
+        director.liveFeedStore.finishInitialLoading()
+        let view = ConversationFeedHostsNSView(frame: CGRect(x: 0, y: 0, width: 920, height: 500))
+        let window = NSWindow(contentRect: view.bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = view
+        defer { view.tearDown(); window.contentView = nil }
+        view.configure(director: director, layout: director.conversationLayout, hiddenCharacters: [.rightWoman])
+        try await settle(view)
+        let host = try XCTUnwrap(view.hostForTesting(.rightWoman))
+        XCTAssertTrue(host.isHidden)
+        XCTAssertTrue(try XCTUnwrap(scrollView(in: host)).isHiddenOrHasHiddenAncestor)
+        view.configure(director: director, layout: director.conversationLayout)
+        XCTAssertTrue(view.hostForTesting(.rightWoman) === host, "Turning roleplay off reuses the cached feed")
+        XCTAssertFalse(host.isHidden)
+    }
+
     func testTerminalSplitUsesOneInputSinkAndMergeDoesNotCloseCachedSessions() async {
         let director = AgentDirector(startBackgroundTasks: false, conversationDefaults: nil)
         director.selectedCharacterID = .rightMan
