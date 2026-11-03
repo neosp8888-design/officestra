@@ -12,6 +12,10 @@ if [ "${1:-}" = "--version" ]; then
 fi
 [ "${1:-}" = "exec" ] || exit 64
 
+if [ -n "${OFFICESTRA_RESULT_PATH:-}" ]; then
+    officestra-result source --kind file --title 'Rust native E2E' --locator 'fixtures/fake-codex.sh' >/dev/null
+fi
+
 printf '%s\n' '{"type":"thread.started","thread_id":"community-preview-e2e-session"}'
 printf '%s\n' '{"type":"item.completed","item":{"id":"message-1","type":"agent_message","text":"Community preview first task completed."}}'
 printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":8,"reasoning_output_tokens":0}}'

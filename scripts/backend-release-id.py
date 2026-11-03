@@ -12,35 +12,31 @@ import sys
 from pathlib import Path
 
 
-IDENTITY_FORMAT = b"OFFICESTRA_BACKEND_RELEASE_ID_V3\0"
+IDENTITY_FORMAT = b"OFFICESTRA_BACKEND_RELEASE_ID_V4\0"
 # Rust backend executables and the ONNX Runtime library they load. Like Node,
 # the identity uses the pre-signing SHA256 and post-signing CDHash records so
 # timestamped signature containers do not change it.
 RUST_RUNTIME_FILES = (
     "officestra-backend",
+    "officestra-result",
+    "officestra-telegram",
     "officestra-terminal-hook",
     "officestra-voice-follow",
     "libonnxruntime.dylib",
 )
 REQUIRED_FILES = (
-    "OFFICESTRARuntime/backend/package.json",
-    "OFFICESTRARuntime/backend/package-lock.json",
     "OFFICESTRARuntime/infra/compose.yaml",
-    "OFFICESTRARuntime/node/SHA256",
-    "OFFICESTRARuntime/node/VERSION",
-    "OFFICESTRARuntime/node/CDHASH",
-    "OFFICESTRARuntime/node/ENTITLEMENTS.plist",
     "OFFICESTRARuntime/rust/SHA256",
     "OFFICESTRARuntime/rust/CDHASH",
     "OfficeLLM_OfficeCore.bundle/characters.json",
 )
 REQUIRED_PRESENT_FILES = (
-    "OFFICESTRARuntime/node/bin/node",
     *(f"OFFICESTRARuntime/rust/bin/{name}" for name in RUST_RUNTIME_FILES),
 )
 REQUIRED_TREES = (
-    "OFFICESTRARuntime/backend/src",
     "OFFICESTRARuntime/database/migrations",
+    "OFFICESTRARuntime/tools/antigravity-playwright",
+    "OFFICESTRARuntime/licenses",
 )
 
 
@@ -69,6 +65,9 @@ def release_input_files(app_bundle: Path) -> tuple[Path, list[Path]]:
     resources = app_bundle / "Contents" / "Resources"
     if not resources.is_dir():
         raise ReleaseIdentityError(f"App resources are missing: {resources}")
+
+    if (resources / "OFFICESTRARuntime/node").exists() or (resources / "OFFICESTRARuntime/backend").exists():
+        raise ReleaseIdentityError("Rust-only bundle contains a Node runtime or backend")
 
     files: list[Path] = []
     for relative in REQUIRED_PRESENT_FILES:
@@ -130,80 +129,6 @@ def verify_release_id(app_bundle: Path) -> str:
     return calculated
 
 
-def verify_node_signature_metadata(app_bundle: Path) -> None:
-    if sys.platform != "darwin":
-        raise ReleaseIdentityError(
-            "Node signature metadata can only be verified on macOS"
-        )
-    node_root = (
-        app_bundle
-        / "Contents"
-        / "Resources"
-        / "OFFICESTRARuntime"
-        / "node"
-    )
-    executable = node_root / "bin" / "node"
-    source_sha256 = (node_root / "SHA256").read_text(encoding="utf-8").strip()
-    if not re.fullmatch(r"[0-9a-f]{64}", source_sha256):
-        raise ReleaseIdentityError("Bundled Node source SHA256 is malformed")
-
-    subprocess.run(
-        ["/usr/bin/codesign", "--verify", "--strict", str(executable)],
-        check=True,
-        capture_output=True,
-    )
-    expected_version = (node_root / "VERSION").read_text(
-        encoding="utf-8"
-    ).strip()
-    actual_version = subprocess.check_output(
-        [str(executable), "-p", "process.versions.node"],
-        text=True,
-    ).strip()
-    if expected_version != actual_version:
-        raise ReleaseIdentityError(
-            "Bundled Node version metadata does not match executable: "
-            f"expected={expected_version} actual={actual_version}"
-        )
-
-    details = subprocess.run(
-        ["/usr/bin/codesign", "-d", "--verbose=4", str(executable)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    match = re.search(r"(?m)^CDHash=([0-9a-fA-F]+)$", details.stderr)
-    if match is None:
-        raise ReleaseIdentityError("Bundled Node CDHash could not be read")
-    expected_cdhash = (node_root / "CDHASH").read_text(
-        encoding="utf-8"
-    ).strip()
-    actual_cdhash = match.group(1).lower()
-    if expected_cdhash != actual_cdhash:
-        raise ReleaseIdentityError(
-            "Bundled Node CDHash metadata does not match signature: "
-            f"expected={expected_cdhash} actual={actual_cdhash}"
-        )
-
-    entitlements = subprocess.run(
-        [
-            "/usr/bin/codesign",
-            "-d",
-            "--entitlements",
-            ":-",
-            str(executable),
-        ],
-        check=True,
-        capture_output=True,
-    )
-    actual_entitlements = plistlib.loads(entitlements.stdout)
-    with (node_root / "ENTITLEMENTS.plist").open("rb") as handle:
-        expected_entitlements = plistlib.load(handle)
-    if actual_entitlements != expected_entitlements:
-        raise ReleaseIdentityError(
-            "Bundled Node entitlements do not match packaged policy"
-        )
-
-
 def rust_runtime_records(path: Path, digest_pattern: str) -> dict[str, str]:
     """Read `<digest>  <name>` lines and require exactly RUST_RUNTIME_FILES."""
     records: dict[str, str] = {}
@@ -258,9 +183,10 @@ def main() -> int:
         help="fail unless Info.plist contains the calculated identity",
     )
     parser.add_argument(
-        "--verify-node-signature",
+        "--verify-rust-signature", "--verify-node-signature",
+        dest="verify_rust_signature",
         action="store_true",
-        help="also compare the signed Node and Rust executables with packaged metadata",
+        help="compare native executable signatures with packaged metadata (old flag is an alias)",
     )
     arguments = parser.parse_args()
     try:
@@ -269,8 +195,7 @@ def main() -> int:
             if arguments.verify
             else calculate_release_id(arguments.app_bundle)
         )
-        if arguments.verify_node_signature:
-            verify_node_signature_metadata(arguments.app_bundle)
+        if arguments.verify_rust_signature:
             verify_rust_signature_metadata(arguments.app_bundle)
     except (
         OSError,

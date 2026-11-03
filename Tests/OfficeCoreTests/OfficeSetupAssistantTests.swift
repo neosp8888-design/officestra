@@ -96,7 +96,7 @@ final class OfficeSetupAssistantTests: XCTestCase {
         let repository = root.appending(path: "repository")
         try createFile(at: repository.appending(path: "Package.swift"))
         try createFile(
-            at: repository.appending(path: "backend/src/server.mjs")
+            at: repository.appending(path: "scripts/build-app.sh")
         )
         try createFile(at: repository.appending(path: "infra/compose.yaml"))
         let buildDirectory = repository.appending(path: ".build/debug")
@@ -113,29 +113,30 @@ final class OfficeSetupAssistantTests: XCTestCase {
         )
     }
 
-    func testRuntimeValidationRequiresEveryPackagedFileAndExecutableNode()
+    func testRuntimeValidationRequiresRustAndNativeResultWithoutNode()
         throws
     {
         let layout = OfficeRuntimeLayout.resolve(
             resourceURL: root.appending(path: "Resources"),
             supportDirectory: root.appending(path: "Support")
         )
-        try createFile(
-            at: layout.backendDirectory.appending(path: "src/server.mjs")
-        )
-        try createFile(at: layout.nodeExecutable)
+        let rust = layout.runtimeRoot.appending(path: "rust/bin/officestra-backend")
+        let result = layout.runtimeRoot.appending(path: "rust/bin/officestra-result")
+        try createFile(at: rust)
+        try createExecutable(at: result)
         try createFile(at: layout.composeFile)
         try createFile(at: layout.bundledConfiguration)
 
         XCTAssertThrowsError(try layout.validate()) { error in
             XCTAssertEqual(
                 error.localizedDescription,
-                "앱에 포함된 Node 실행 파일을 실행할 수 없습니다."
+                "앱에 포함된 실행 파일이 완전하지 않습니다. 앱을 다시 설치하세요."
             )
         }
 
-        try makeExecutable(layout.nodeExecutable)
+        try makeExecutable(rust)
         XCTAssertNoThrow(try layout.validate())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: layout.nodeExecutable.path))
 
         try FileManager.default.removeItem(at: layout.composeFile)
         XCTAssertThrowsError(try layout.validate()) { error in
@@ -1253,7 +1254,7 @@ final class OfficeSetupAssistantTests: XCTestCase {
             "CHARACTER_CONFIG_PATH='/Users/example/Library/Application Support/OFFICESTRA/runtime/characters.json'"
         ))
         XCTAssertTrue(command.contains(
-            "exec '\(node.path)' src/server.mjs >> '\(logs.path)/backend.out.log' 2>> '\(logs.path)/backend.err.log'"
+            "exec '\(configuration.backendDirectoryURL.deletingLastPathComponent().appending(path: "rust/bin/officestra-backend").path)' >> '\(logs.path)/backend.out.log' 2>> '\(logs.path)/backend.err.log'"
         ))
     }
 

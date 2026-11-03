@@ -54,26 +54,20 @@ enum OfficeBackendRuntimeLocation {
         let bundledBackend = resourceURL
             .appending(path: "OFFICESTRARuntime")
             .appending(path: "backend")
-        let bundledServer = bundledBackend
-            .appending(path: "src")
-            .appending(path: "server.mjs")
-        if fileManager.fileExists(atPath: bundledServer.path) {
+        if rustExecutable(backendDirectoryURL: bundledBackend, fileManager: fileManager) != nil {
             return bundledBackend
         }
         if let developmentRoot {
             let developmentBackend = developmentRoot.appending(path: "backend")
-            let developmentServer = developmentBackend
-                .appending(path: "src")
-                .appending(path: "server.mjs")
-            if fileManager.fileExists(atPath: developmentServer.path) {
+            if rustExecutable(backendDirectoryURL: developmentBackend, fileManager: fileManager) != nil {
                 return developmentBackend
             }
         }
         return workdir.appending(path: "backend")
     }
 
-    /// 번들 런타임의 Rust 백엔드 실행 파일. 백엔드 폴더 옆 rust/bin에 실행 가능한 파일이 있을 때만 돌려주고,
-    /// 없으면 nil이라 실행기는 Node 백엔드를 띄운다(개발 실행·Rust 없는 번들).
+    /// backendDirectoryURL은 기존 호출자의 런타임 위치 표식이다. 해당 디렉터리는 생성하지 않는다.
+    /// 배포는 rust/bin, 개발 실행은 이 저장소 backend-rs의 release 실행 파일을 쓴다.
     static func rustExecutable(
         backendDirectoryURL: URL,
         fileManager: FileManager = .default
@@ -83,9 +77,11 @@ enum OfficeBackendRuntimeLocation {
             .appending(path: "rust")
             .appending(path: "bin")
             .appending(path: "officestra-backend")
-        return fileManager.isExecutableFile(atPath: executable.path)
-            ? executable
-            : nil
+        let developmentExecutable = backendDirectoryURL.deletingLastPathComponent()
+            .appending(path: "backend-rs/target/release/officestra-backend")
+        return [executable, developmentExecutable].first {
+            fileManager.isExecutableFile(atPath: $0.path)
+        }
     }
 }
 
@@ -113,17 +109,16 @@ enum OfficeBackendLaunchCommands {
         )
     }
 
-    /// rustExecutableURL이 있으면 Rust 백엔드를, 없으면 Node `src/server.mjs`를 띄운다.
-    /// Rust도 Node 실행 파일을 받는다(Antigravity Playwright 드라이버와 결과 도구가 Node로 돈다).
+    /// 백엔드는 Rust만 실행한다. Node는 설치된 외부 CLI의 Playwright에만 선택적으로 넘긴다.
     static func start(
         configuration: OfficeBackendLaunchConfiguration,
-        nodeExecutableURL: URL,
+        nodeExecutableURL: URL? = nil,
         rustExecutableURL: URL? = nil,
         standardOutputURL: URL? = nil,
         standardErrorURL: URL? = nil,
         executableSearchPaths: [String] = []
     ) -> OfficeBackendLaunchCommand {
-        let path = ([nodeExecutableURL.deletingLastPathComponent().path]
+        let path = ([nodeExecutableURL?.deletingLastPathComponent().path].compactMap { $0 }
             + executableSearchPaths
             + [
                 "/opt/homebrew/bin",
@@ -158,23 +153,27 @@ enum OfficeBackendLaunchCommands {
         let prepareLogs = logDirectories.isEmpty
             ? ""
             : "mkdir -p \(quotedLogDirectories); "
-        // Node는 모듈 위치로 마이그레이션·결과 도구를 찾지만 Rust는 번들 경로를 환경 변수로 받는다.
-        let backendExecution: String
-        if let rustExecutableURL {
-            let runtimeRoot = configuration.backendDirectoryURL
-                .deletingLastPathComponent()
-            backendExecution = "export OFFICE_MIGRATIONS_DIR="
+        let runtimeRoot = configuration.backendDirectoryURL.deletingLastPathComponent()
+        let packagedDriver = runtimeRoot.appending(path: "tools/antigravity-playwright")
+        let sourceDriver = runtimeRoot.appending(path: "backend/src/playwright-driver-1.57.0")
+        let driver = !FileManager.default.fileExists(atPath: packagedDriver.appending(path: "package/cli.js").path)
+            && FileManager.default.fileExists(atPath: sourceDriver.appending(path: "package/cli.js").path)
+            ? sourceDriver : packagedDriver
+        let rust = rustExecutableURL
+            ?? OfficeBackendRuntimeLocation.rustExecutable(backendDirectoryURL: configuration.backendDirectoryURL)
+            ?? runtimeRoot.appending(path: "rust/bin/officestra-backend")
+        let externalNode = nodeExecutableURL.map {
+            "export OFFICE_NODE_EXECUTABLE=\(shellQuoted($0.path)); "
+        } ?? "unset OFFICE_NODE_EXECUTABLE; "
+        let backendExecution = "export OFFICE_MIGRATIONS_DIR="
                 + "\(shellQuoted(runtimeRoot.appending(path: "database/migrations").path)); "
                 + "export OFFICE_RESULT_TOOL_DIR="
-                + "\(shellQuoted(configuration.backendDirectoryURL.appending(path: "src").path)); "
-                + "export OFFICE_NODE_EXECUTABLE="
-                + "\(shellQuoted(nodeExecutableURL.path)); "
-                + "cd \(shellQuoted(configuration.backendDirectoryURL.path)); "
-                + "exec \(shellQuoted(rustExecutableURL.path))"
-        } else {
-            backendExecution = "cd \(shellQuoted(configuration.backendDirectoryURL.path)); "
-                + "exec \(shellQuoted(nodeExecutableURL.path)) src/server.mjs"
-        }
+                + "\(shellQuoted(rust.deletingLastPathComponent().path)); "
+                + "export OFFICE_PLAYWRIGHT_DRIVER_DIR="
+                + "\(shellQuoted(driver.path)); "
+                + externalNode
+                + "cd \(shellQuoted(runtimeRoot.path)); "
+                + "exec \(shellQuoted(rust.path))"
         let command = "umask 077; \(prepareLogs)"
             + "export PATH=\(shellQuoted(path)); "
             + "export OFFICE_WORKDIR=\(shellQuoted(configuration.workdir.path)); "
@@ -342,21 +341,8 @@ final class OfficeBackendController: ObservableObject {
 
     private nonisolated static func nodeExecutableURL(
         configuration: OfficeBackendLaunchConfiguration
-    ) throws -> URL {
-        let bundledNode = configuration.backendDirectoryURL
-            .deletingLastPathComponent()
-            .appending(path: "node/bin/node")
-        let candidates = [
-            bundledNode,
-            URL(fileURLWithPath: "/opt/homebrew/bin/node"),
-            URL(fileURLWithPath: "/usr/local/bin/node"),
-        ]
-        guard let executable = candidates.first(where: {
-            FileManager.default.isExecutableFile(atPath: $0.path)
-        }) else {
-            throw OfficeBackendControlError.nodeExecutableMissing
-        }
-        return executable
+    ) -> URL? {
+        OfficeToolLocator.locate("node")
     }
 
     private nonisolated static func logURL(

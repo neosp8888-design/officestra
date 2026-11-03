@@ -144,8 +144,6 @@ struct OfficeRuntimeLayout: Equatable, Sendable {
 
     func validate(fileManager: FileManager = .default) throws {
         let requiredFiles = [
-            backendDirectory.appending(path: "src/server.mjs"),
-            nodeExecutable,
             composeFile,
             bundledConfiguration,
         ]
@@ -154,8 +152,11 @@ struct OfficeRuntimeLayout: Equatable, Sendable {
         }) else {
             throw OfficeSetupError.runtimeIncomplete
         }
-        guard fileManager.isExecutableFile(atPath: nodeExecutable.path) else {
-            throw OfficeSetupError.bundledNodeNotExecutable
+        guard let rust = OfficeBackendRuntimeLocation.rustExecutable(
+            backendDirectoryURL: backendDirectory, fileManager: fileManager
+        ), fileManager.isExecutableFile(atPath: rust.deletingLastPathComponent()
+            .appending(path: "officestra-result").path) else {
+            throw OfficeSetupError.runtimeIncomplete
         }
     }
 }
@@ -177,7 +178,7 @@ enum OfficeDevelopmentRuntimeLocator {
                 .resolvingSymlinksInPath()
             while visited.insert(candidate.path).inserted {
                 let requiredPaths = [
-                    candidate.appending(path: "backend/src/server.mjs"),
+                    candidate.appending(path: "scripts/build-app.sh"),
                     candidate.appending(path: "infra/compose.yaml"),
                     candidate.appending(path: "Package.swift"),
                 ]
@@ -1393,7 +1394,7 @@ enum OfficeSetupAssistant {
         )
         let start = OfficeBackendLaunchCommands.start(
             configuration: launchConfiguration,
-            nodeExecutableURL: layout.nodeExecutable,
+            nodeExecutableURL: OfficeToolLocator.locate("node"),
             rustExecutableURL: OfficeBackendRuntimeLocation.rustExecutable(
                 backendDirectoryURL: layout.backendDirectory
             ),

@@ -64,7 +64,7 @@ final class OfficeBackendLaunchCommandsTests: XCTestCase {
             "OFFICESTRA_RELEASE_ID='release-test'"
         ) == true)
         XCTAssertTrue(command.arguments.last?.contains(
-            "cd '/Applications/OFFICESTRA.app/Contents/Resources/OFFICESTRARuntime/backend'"
+            "cd '/Applications/OFFICESTRA.app/Contents/Resources/OFFICESTRARuntime'"
         ) == true)
     }
 
@@ -87,9 +87,10 @@ final class OfficeBackendLaunchCommandsTests: XCTestCase {
         ))
         XCTAssertTrue(command.hasSuffix(
             "export OFFICE_MIGRATIONS_DIR='\(runtime)/database/migrations'; "
-                + "export OFFICE_RESULT_TOOL_DIR='\(runtime)/backend/src'; "
+                + "export OFFICE_RESULT_TOOL_DIR='\(runtime)/rust/bin'; "
+                + "export OFFICE_PLAYWRIGHT_DRIVER_DIR='\(runtime)/tools/antigravity-playwright'; "
                 + "export OFFICE_NODE_EXECUTABLE='\(runtime)/node/bin/node'; "
-                + "cd '\(runtime)/backend'; "
+                + "cd '\(runtime)'; "
                 + "exec '\(runtime)/rust/bin/officestra-backend'"
                 + " >> '/tmp/officestra-logs/backend.out.log'"
                 + " 2>> '/tmp/officestra-logs/backend.err.log'"
@@ -131,7 +132,7 @@ final class OfficeBackendLaunchCommandsTests: XCTestCase {
         ))
         XCTAssertNil(
             OfficeBackendRuntimeLocation.rustExecutable(backendDirectoryURL: backend),
-            "실행 권한이 없으면 Node로 띄운다"
+            "실행 권한이 없으면 설치 오류이며 Node로 우회하지 않는다"
         )
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o755],
@@ -150,9 +151,8 @@ final class OfficeBackendLaunchCommandsTests: XCTestCase {
         let bundledBackend = resources
             .appending(path: "OFFICESTRARuntime")
             .appending(path: "backend")
-        let server = bundledBackend
-            .appending(path: "src")
-            .appending(path: "server.mjs")
+        let server = bundledBackend.deletingLastPathComponent()
+            .appending(path: "rust/bin/officestra-backend")
         let workdir = root.appending(path: "SelectedProject")
         try FileManager.default.createDirectory(
             at: server.deletingLastPathComponent(),
@@ -162,6 +162,7 @@ final class OfficeBackendLaunchCommandsTests: XCTestCase {
             atPath: server.path,
             contents: Data()
         ))
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: server.path)
         defer { try? FileManager.default.removeItem(at: root) }
 
         XCTAssertEqual(
@@ -178,7 +179,7 @@ final class OfficeBackendLaunchCommandsTests: XCTestCase {
             .appending(path: UUID().uuidString)
         let resources = root.appending(path: "build/resources")
         let sourceRoot = root.appending(path: "OFFICESTRA")
-        let server = sourceRoot.appending(path: "backend/src/server.mjs")
+        let server = sourceRoot.appending(path: "backend-rs/target/release/officestra-backend")
         let workdir = root.appending(path: "SelectedProject")
         try FileManager.default.createDirectory(
             at: server.deletingLastPathComponent(),
@@ -188,6 +189,7 @@ final class OfficeBackendLaunchCommandsTests: XCTestCase {
             atPath: server.path,
             contents: Data()
         ))
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: server.path)
         defer { try? FileManager.default.removeItem(at: root) }
 
         XCTAssertEqual(
@@ -211,5 +213,30 @@ final class OfficeBackendLaunchCommandsTests: XCTestCase {
             ),
             workdir.appending(path: "backend")
         )
+    }
+
+    func testRustStartsWithoutNodeAndNeverFallsBackToJavaScript() throws {
+        let command = try XCTUnwrap(OfficeBackendLaunchCommands.start(
+            configuration: configuration
+        ).arguments.last)
+        XCTAssertTrue(command.contains("unset OFFICE_NODE_EXECUTABLE;"))
+        XCTAssertTrue(command.contains("rust/bin/officestra-backend'"))
+        XCTAssertFalse(command.contains("server.mjs"))
+        XCTAssertFalse(command.contains("node/bin/node"))
+    }
+
+    func testDevelopmentUsesCachedThirdPartyDriverWithoutNodeBackend() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let driver = root.appending(path: "backend/src/playwright-driver-1.57.0")
+        try FileManager.default.createDirectory(at: driver.appending(path: "package"), withIntermediateDirectories: true)
+        XCTAssertTrue(FileManager.default.createFile(atPath: driver.appending(path: "package/cli.js").path, contents: Data()))
+        let development = OfficeBackendLaunchConfiguration(
+            workdir: root, backendDirectoryURL: root.appending(path: "backend"),
+            healthURL: configuration.healthURL, runtimeConfigurationURL: configuration.runtimeConfigurationURL,
+            releaseID: "test", userID: 501)
+        let command = try XCTUnwrap(OfficeBackendLaunchCommands.start(configuration: development).arguments.last)
+        XCTAssertTrue(command.contains("OFFICE_PLAYWRIGHT_DRIVER_DIR='\(driver.path)'"))
+        XCTAssertFalse(command.contains("server.mjs"))
     }
 }

@@ -5,10 +5,10 @@
   <key>Label</key><string>com.neo.officestra-telegram</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/neo/.nvm/versions/node/v24.22.1/bin/node</string>
-    <string>/Users/neo/office/scripts/office-telegram.mjs</string>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>exec "$HOME/Library/Application Support/OFFICESTRA/bin/officestra-telegram"</string>
   </array>
-  <key>WorkingDirectory</key><string>/Users/neo/office</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ThrottleInterval</key><integer>20</integer>

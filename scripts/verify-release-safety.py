@@ -53,6 +53,7 @@ def main() -> int:
         action="store_true",
         help="fail unless dist/OFFICESTRA.app exists and is scanned",
     )
+    parser.add_argument('--app', type=Path, default=Path('dist/OFFICESTRA.app'))
     arguments = parser.parse_args()
     if arguments.tracked_only and arguments.require_app:
         parser.error("--tracked-only and --require-app cannot be combined")
@@ -71,7 +72,7 @@ def main() -> int:
             if pattern.search(content):
                 bad_contents.append(f"{path}: {label}")
 
-    app = Path("dist/OFFICESTRA.app")
+    app = arguments.app
     if arguments.require_app and not app.is_dir():
         print(f"Required app bundle is missing: {app}", file=sys.stderr)
         return 1
@@ -94,6 +95,7 @@ def main() -> int:
         Path("infra"),
         Path("Resources"),
         Path("scripts/build-app.sh"),
+        Path("scripts/build-rust-app.py"),
     ]
     if scan_app:
         scan_roots.append(app)

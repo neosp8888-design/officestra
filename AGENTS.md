@@ -26,10 +26,11 @@
 명령 출력은 읽은 파일과 똑같이 대화에 쌓여 남은 턴마다 다시 전송된다. 조용한 형태로 실행한다.
 
 - 저장소 루트에서 아래 공통 실행 명령을 사용한다. CLI·모델·GUI/터미널에 관계없이 같은 스크립트이며 별도 설치나 훅이 필요 없다.
-- 백엔드 테스트 전체 — `python3 scripts/office-test.py --cwd backend --kind node -- node --test`
-- 백엔드 한 파일만 — `python3 scripts/office-test.py --cwd backend --kind node -- node --test test/<파일>`
+- 운영 백엔드는 이 저장소의 `backend-rs/` Rust 코드만 사용한다. 앱과 백엔드는 기존 `officestra` 원격에 함께 커밋·푸시한다. `backend/`의 Node 소스·테스트는 이전 동등성 비교·이력 참고용이며 앱에 포함하거나 운영 서버로 실행하지 않는다.
+- 백엔드 테스트 전체 — `PATH="$HOME/.cargo/bin:$PATH" python3 scripts/office-test.py --cwd backend-rs --kind cargo -- cargo test --offline`
+- Node 동등성 참고 테스트(필요한 경우만) — `python3 scripts/office-test.py --cwd backend --kind node -- node --test test/<파일>`
 - Swift 테스트 — `python3 scripts/office-test.py --kind swift -- swift test` (필요한 `--filter` 등은 뒤에 그대로 붙인다.)
-- Rust 백엔드 테스트(독립 저장소 /Users/neo/office-rs) — `PATH="$HOME/.cargo/bin:$PATH" python3 scripts/office-test.py --cwd ../office-rs --kind cargo -- cargo test`
+- Rust 백엔드 테스트 — `PATH="$HOME/.cargo/bin:$PATH" python3 scripts/office-test.py --cwd backend-rs --kind cargo -- cargo test`
 - 반복적인 시작·통과 출력만 정리하며, 실패 상세·경고·건너뜀·TODO·개수 요약과 원래 종료 코드를 보존한다. 전체 원문은 출력에 안내된 로컬 로그에서 확인한다. 결과 뒤에 `tail`을 붙이지 않는다.
 - 스크립트나 Python이 없는 환경에서는 원래 `node --test` / `swift test`를 필터 없이 실행한다. `grep | tail`로 대체하면 실패 상세가 잘리고 실패 종료가 성공처럼 보일 수 있다.
 
@@ -37,7 +38,7 @@
 
 - zsh에서 파일 패턴을 명령 인자로 넘길 때는 `--glob '*.mjs'`처럼 따옴표로 감싼다.
 - 기록·상태 조회는 읽기 전용 API를 우선 사용한다: `GET /api/work-records`, `/api/live-feed`, `/api/active-sessions`, `/api/characters`. 필요한 항목만 출력한다.
-- 직접 DB 조회가 필요하면 `backend/src/db.mjs`의 `pool`을 재사용한다. 조회 전용 작업은 같은 연결에서 `BEGIN READ ONLY`로 시작하고, `finally`에서 트랜잭션 정리·연결 반환·독립 조회 프로세스의 풀 종료를 보장한다.
+- 직접 DB 조회가 필요하면 Rust의 `backend-rs/src/db.rs` 연결 설정을 재사용한다. 기존 Node 조회 보조 도구를 쓸 때는 `backend/src/db.mjs`의 `pool`을 재사용한다. 조회 전용 작업은 같은 연결에서 `BEGIN READ ONLY`로 시작하고, 종료 시 트랜잭션 정리·연결 반환·독립 조회 프로세스의 풀 종료를 보장한다.
 - 테이블·컬럼명은 추측하지 않는다. 필요한 경우 `information_schema.columns`로 실제 스키마를 확인한다.
 - pg의 bigint·numeric은 문자열로 반환될 수 있다. 비교·합산 전에 용도에 맞게 변환하되, 큰 정수·정밀 금액을 무조건 `Number()`로 변환하지 않는다.
 - Claude 비용은 앱에서 토큰으로 재계산하지 않고 CLI 보고 금액을 사용한다. 보고값이 없으면 비용을 만들어내지 않는다(`backend/src/token-cost-estimator.mjs`).

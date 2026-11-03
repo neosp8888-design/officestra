@@ -49,7 +49,7 @@ fi
 /usr/bin/python3 \
     "$PROJECT_DIR/scripts/backend-release-id.py" \
     --verify \
-    --verify-node-signature \
+    --verify-rust-signature \
     "$APP_PATH" >/dev/null
 
 ISOLATED_HOME="$TEMP_ROOT/home"

@@ -196,6 +196,8 @@ OFFICESTRA는 자신이 시작한 로컬 프로세스만 관리하며, 다른 GP
 
 ### 앱으로 내려받기
 
+현재 `main`의 소스 빌드는 `backend-rs/` Rust 백엔드만 포함합니다. 아래 공개 DMG 안내는 기존 v1.7.0 배포본 기준이며, 최신 Rust 운영·빌드 절차는 [Rust 런타임 안내](docs/rust-runtime.md)를 참고하세요.
+
 [OFFICESTRA v1.7.0 DMG 다운로드](https://github.com/neosp8888-design/officestra/releases/tag/v1.7.0)
 — Apple silicon · macOS 14 이상 · 영문/한글.
 
@@ -213,7 +215,8 @@ DMG를 열고 OFFICESTRA를 응용 프로그램 폴더로 옮기세요. Node.js�
 
 - Apple silicon Mac과 macOS 14 이상
 - Git과 Swift 6.0 이상을 포함한 Xcode Command Line Tools
-- Node.js 20 이상과 npm
+- Rust stable 도구 모음과 Python 3
+- 외부 AI CLI 설치에 필요한 Node.js 20 이상과 npm (백엔드는 Rust)
 - Docker Desktop
 - Codex, Claude Code, Antigravity 중 로그인된 CLI 하나 이상
 
@@ -306,7 +309,7 @@ swift run OfficeLLM
 종료 코드는 보존하고, 전체 원문 로그 경로를 출력합니다.
 
 ```sh
-python3 scripts/office-test.py --cwd backend --kind node -- node --test
+PATH="$HOME/.cargo/bin:$PATH" python3 scripts/office-test.py --cwd backend-rs --kind cargo -- cargo test --offline
 python3 scripts/office-test.py --kind swift -- swift test
 ```
 

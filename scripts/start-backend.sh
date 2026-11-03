@@ -21,6 +21,16 @@ until docker compose -f infra/compose.yaml exec -T postgres \
     sleep 0.5
 done
 
-npm --prefix backend install
-
-exec npm --prefix backend start
+export PATH="$HOME/.cargo/bin:$PATH"
+cargo build --manifest-path backend-rs/Cargo.toml --locked --release --bins
+if [[ -z "${ORT_DYLIB_PATH:-}" ]]; then
+    for ort_library in "${OFFICESTRA_ORT_DYLIB:-}" \
+        "$PROJECT_DIR/dist/OFFICESTRA.app/Contents/Resources/OFFICESTRARuntime/rust/bin/libonnxruntime.dylib" \
+        "$PROJECT_DIR/backend/node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64/libonnxruntime.1.24.3.dylib"; do
+        if [[ -f "$ort_library" ]]; then
+            export ORT_DYLIB_PATH="$ort_library"
+            break
+        fi
+    done
+fi
+exec "$PROJECT_DIR/backend-rs/target/release/officestra-backend"

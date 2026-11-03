@@ -204,6 +204,8 @@ use one of them:
 
 ### Download the app
 
+Current `main` source builds include only the Rust backend in `backend-rs/`. The public DMG instructions below describe the existing v1.7.0 release. See [Rust runtime notes](docs/rust-runtime.md) for current build and operation details.
+
 [Download OFFICESTRA v1.7.0 DMG](https://github.com/neosp8888-design/officestra/releases/tag/v1.7.0)
 — Apple silicon · macOS 14 or later · English/Korean.
 
@@ -222,7 +224,8 @@ need Docker Desktop and the AI CLIs you want to use, installed and signed in.
 
 - An Apple silicon Mac running macOS 14 or later
 - Xcode Command Line Tools with Git and Swift 6.0 or later
-- Node.js 20 or later and npm
+- The stable Rust toolchain and Python 3
+- Node.js 20 or later and npm for external AI CLI installation (the backend is Rust)
 - Docker Desktop
 - At least one signed-in Codex, Claude Code, or Antigravity CLI
 
@@ -309,7 +312,7 @@ output while preserving errors, warnings, skips, and exit codes, and print the
 path to the complete raw log.
 
 ```sh
-python3 scripts/office-test.py --cwd backend --kind node -- node --test
+PATH="$HOME/.cargo/bin:$PATH" python3 scripts/office-test.py --cwd backend-rs --kind cargo -- cargo test --offline
 python3 scripts/office-test.py --kind swift -- swift test
 ```
 
