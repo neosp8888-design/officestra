@@ -126,7 +126,8 @@ export class LocalProviderService {
   }
   async applyModelControl(rawDefinition,action,{comfyRelease}={}) {
     if(this.closed)throw new Error('Local service is shutting down');
-    if(!['start','stop'].includes(action))throw new Error('Unsupported model action');
+    // unload는 롤플레이처럼 실행 버튼 없이 요청이 올 때 올리는 모델용이다. 잠그지 않고 내려서 다음 요청이 다시 올린다.
+    if(!['start','stop','unload'].includes(action))throw new Error('Unsupported model action');
     if(comfyRelease!==undefined&&(action!=='start'||!COMFY_RELEASE_MODES.includes(comfyRelease)))throw new Error('Unsupported ComfyUI release mode');
     const definition=normalizeLocalDefinition(rawDefinition),group=this.models.group(definition);
     if(group.controlState)throw new LocalHostBusyError('모델 실행 또는 중지 처리 중입니다.');
@@ -134,12 +135,12 @@ export class LocalProviderService {
     const controller=new AbortController();group.controlAbort=action==='start'?controller:null;
     // Gate both existing CLI front doors and newly opened ones until an explicit
     // start succeeds. Stopping preserves their URLs and conversation identity.
-    group.paused=true;
+    if(action!=='unload')group.paused=true;
     const changed=()=>this.broadcast({type:'local.changed',profileId:definition.profile.id});
     changed();
     let unlock;
     try {
-      if(action==='stop') {
+      if(action!=='start') {
         const entries=[...this.entries.values()].filter(e=>e.group===group);
         for(const e of entries)for(const controller of e.controllers)controller.abort();
         await Promise.all(entries.flatMap(e=>[...e.pending]));
@@ -202,7 +203,7 @@ export class LocalProviderService {
     const definition=normalizeLocalDefinition(rawDefinition);
     if(definition.profile.backend!=='claude')throw new Error('Messages 형식을 쓰는 로컬 프로필만 연결할 수 있습니다.');
     const {e,release}=await this.openEntry(definition,'gui');
-    return {url:`http://127.0.0.1:${e.server.address().port}/v1/messages`,token:e.token,model:definition.profile.model,maxOutputTokens:definition.profile.maxOutputTokens,release};
+    return {url:`http://127.0.0.1:${e.server.address().port}/v1/messages`,token:e.token,model:definition.profile.model,contextWindow:definition.profile.contextWindow,maxOutputTokens:definition.profile.maxOutputTokens,release};
   }
   async openEntry(definition,mode,cleanup=async()=>{}) {
     if(this.models.group(definition).paused)throw new Error('로컬 모델이 중지되어 있습니다. 모델 실행 버튼을 눌러주세요.');

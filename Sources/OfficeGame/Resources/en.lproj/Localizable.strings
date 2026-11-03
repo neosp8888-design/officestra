@@ -852,6 +852,10 @@
 "내 페르소나" = "My persona";
 "토글" = "Toggles";
 "프리셋에 토글이 없어요." = "This preset has no toggles.";
+"대사에 화자 이름표" = "Speaker tags on dialogue";
+"프리셋의 화자 표시가 켜져 있어 따로 넣지 않아요." = "The preset's speaker cue is on, so no extra instruction is added.";
+"새 답변부터 대사 앞에 이모지와 이름을 쓰게 해요." = "New replies put an emoji and name before each line of dialogue.";
 "모델 연결" = "Model connection";
 "안티그래비티 프록시" = "Antigravity proxy";
 "로컬 AI는 프로필 모델을 씁니다" = "Local AI uses the profile's model";
+"모델 목록을 받지 못해 직접 입력합니다" = "Couldn't load the model list; type the model name";

@@ -2308,6 +2308,10 @@ async function roleplayEndpoint(request, response, pathname) {
       send(response, 200, { assets: await roleplayService.listAssets() });
       return;
     }
+    if (request.method === "GET" && pathname === "/api/roleplay/models") {
+      send(response, 200, await roleplayService.listProxyModels());
+      return;
+    }
     if (request.method === "GET" && characterId && !action) {
       send(response, 200, await roleplayService.readProfile(characterId));
       return;

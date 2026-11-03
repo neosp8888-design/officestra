@@ -17,12 +17,22 @@ export async function controlLocalModel({pool,runtime,localProviders,characterID
   if(!['start','stop'].includes(action))throw new Error('Unsupported model action');
   if(comfyRelease!==undefined&&(action!=='start'||!COMFY_RELEASE_MODES.includes(comfyRelease)))throw new Error('Unsupported ComfyUI release mode');
   const result=await pool.query(`SELECT p.definition, c.config->>'localHostAddress' AS address,
-    c.config->>'localReasoning' AS reasoning FROM characters c
+    c.config->>'localReasoning' AS reasoning, r.local_profile_id AS roleplay_profile_id,
+    rp.definition AS roleplay_definition FROM characters c
     JOIN local_agent_profiles p ON p.id=c.config->>'localProfileId'
+    LEFT JOIN roleplay_profiles r ON r.character_id=c.id
+    LEFT JOIN local_agent_profiles rp ON rp.id=r.local_profile_id AND rp.enabled=true
     WHERE c.id=$1 AND p.enabled=true`,[characterID]);
   const row=result.rows[0];
   if(!row)throw new Error('로컬 모델을 먼저 선택하세요.');
-  return {ok:true,...await localProviders.controlModel(assignedLocalDefinition(row.definition,row),action,comfyRelease?{comfyRelease}:undefined)};
+  const status=await localProviders.controlModel(assignedLocalDefinition(row.definition,row),action,comfyRelease?{comfyRelease}:undefined);
+  // 롤플레이는 메시지가 올 때 자기 로컬 모델을 올리고 계속 붙잡는다. 중지 버튼이 그 모델도 내려야 그래픽 메모리가 빈다(2026-10-21).
+  // 주소는 직원 설정을, 추론은 같은 프로필일 때만 따르는 roleplay-service localDefinition과 같은 규칙이다.
+  if(action==='stop'&&row.roleplay_definition){
+    const reasoning=row.roleplay_profile_id===row.definition.profile.id?row.reasoning:null;
+    await localProviders.controlModel(assignedLocalDefinition(row.roleplay_definition,{address:row.address,reasoning}),'unload');
+  }
+  return {ok:true,...status};
 }
 
 export function normalizeLocalHostAddress(value) {

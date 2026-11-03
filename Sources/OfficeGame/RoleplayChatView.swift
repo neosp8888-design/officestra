@@ -31,6 +31,9 @@ struct RoleplayChatView: View {
     @ObservedObject var roleplay: RoleplayStore
     let character: OfficeCharacter
     @State private var isShowingSettings = false
+    /// 대화 끝 표시의 화면 안 위치. 지연 목록이 끝 표시를 내리면 기본값(무한대)이라 버튼이 보인다.
+    @State private var bottomOffset = CGFloat.infinity
+    @State private var viewportHeight = CGFloat.zero
 
     private var state: RoleplayState? { roleplay.states[character] }
 
@@ -117,11 +120,14 @@ struct RoleplayChatView: View {
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
                     }
-                    if let first = state?.profile.firstMessage, !first.isEmpty {
-                        RoleplayBubble(role: "char", text: first)
+                    let first = state?.profile.firstMessage ?? ""
+                    let messages = state?.messages ?? []
+                    let fallbacks = fallbackSpeakers(first: first, messages: messages)
+                    if !first.isEmpty {
+                        RoleplayBubble(role: "char", text: first, fallbackSpeaker: fallbacks.first)
                     }
-                    ForEach(state?.messages ?? []) { message in
-                        RoleplayBubble(role: message.role, text: message.content)
+                    ForEach(messages) { message in
+                        RoleplayBubble(role: message.role, text: message.content, fallbackSpeaker: fallbacks.byMessage[message.id])
                     }
                     if state?.generating == true {
                         HStack(spacing: 6) {
@@ -138,24 +144,80 @@ struct RoleplayChatView: View {
                             .textSelection(.enabled)
                     }
                     Color.clear.frame(height: 1).id("roleplay-bottom")
+                        .background(GeometryReader { geometry in
+                            Color.clear.preference(
+                                key: RoleplayBottomOffsetKey.self,
+                                value: geometry.frame(in: .named("roleplay-scroll")).minY
+                            )
+                        })
                 }
                 .padding(14)
             }
+            .coordinateSpace(name: "roleplay-scroll")
+            .background(GeometryReader { geometry in
+                Color.clear.preference(key: RoleplayViewportHeightKey.self, value: geometry.size.height)
+            })
+            .onPreferenceChange(RoleplayBottomOffsetKey.self) { bottomOffset = $0 }
+            .onPreferenceChange(RoleplayViewportHeightKey.self) { viewportHeight = $0 }
             .onAppear { proxy.scrollTo("roleplay-bottom", anchor: .bottom) }
-            .onChange(of: state?.messages.count) { _, _ in
-                proxy.scrollTo("roleplay-bottom", anchor: .bottom)
+            // 새 답변은 따라 내려가지 않는다. 내가 보낸 메시지만 맨 위로 올려 보이고 나머지는 버튼으로 내린다(2026-10-28 요청).
+            .onChange(of: state?.messages.count) { old, new in
+                guard let old, let new, new > old else {
+                    proxy.scrollTo("roleplay-bottom", anchor: .bottom)
+                    return
+                }
+                let added = (state?.messages ?? []).suffix(new - old)
+                if let sent = added.last(where: { $0.role == "user" }) {
+                    withAnimation { proxy.scrollTo(sent.id, anchor: .top) }
+                }
             }
-            .onChange(of: state?.generating) { _, _ in
-                proxy.scrollTo("roleplay-bottom", anchor: .bottom)
+            .overlay(alignment: .bottomTrailing) {
+                if bottomOffset > viewportHeight + 24 {
+                    Button {
+                        withAnimation { proxy.scrollTo("roleplay-bottom", anchor: .bottom) }
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 11, weight: .bold))
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 6)
+                    }
+                    .officeGameTool(accent: accent)
+                    .padding(12)
+                    .accessibilityLabel(OfficeLocalization.string("맨 아래로 이동"))
+                    .help(OfficeLocalization.string("맨 아래로 이동"))
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+
+    /// 이름표 없는 답변에 붙일 화자. 앞 답변에서 가장 많이 나온 이름표, 없으면 직원 이름이다.
+    private func fallbackSpeakers(
+        first: String,
+        messages: [RoleplayMessage]
+    ) -> (first: RoleplayTranscript.Speaker?, byMessage: [String: RoleplayTranscript.Speaker]) {
+        let replies = messages.filter { $0.role != "user" }
+        let texts = (first.isEmpty ? [] : [first]) + replies.map(\.content)
+        var speakers = RoleplayTranscript.fallbackSpeakers(for: texts, defaultName: director.displayName(for: character))
+        let firstSpeaker = first.isEmpty ? nil : speakers.removeFirst()
+        return (firstSpeaker, Dictionary(uniqueKeysWithValues: zip(replies.map(\.id), speakers)))
+    }
+}
+
+private struct RoleplayBottomOffsetKey: PreferenceKey {
+    static let defaultValue = CGFloat.infinity
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+private struct RoleplayViewportHeightKey: PreferenceKey {
+    static let defaultValue = CGFloat.zero
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
 private struct RoleplayBubble: View {
     let role: String
     let text: String
+    var fallbackSpeaker: RoleplayTranscript.Speaker?
 
     var body: some View {
         if role == "user" {
@@ -169,9 +231,58 @@ private struct RoleplayBubble: View {
                     .officeGameSurface(accent: LiveTurnPromptOrigin.user.accent, emphasis: .prompt, cornerRadius: 12)
             }
         } else {
-            ConversationMarkdownView(source: text, fontSize: 13)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(RoleplayTranscript.segments(text, fallbackSpeaker: fallbackSpeaker).enumerated()), id: \.offset) { _, segment in
+                    RoleplaySegmentView(segment: segment)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+/// 대사는 화자색 상자로, 속마음은 흐린 기울임으로, 서술은 기존 마크다운으로 보여 준다.
+private struct RoleplaySegmentView: View {
+    let segment: RoleplayTranscript.Segment
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        switch segment {
+        case .narration(let source):
+            ConversationMarkdownView(source: source, fontSize: 13)
+        case .dialogue(let speaker, let line):
+            let color = RoleplayTranscript.speakerColor(for: speaker?.name, isDark: colorScheme == .dark)
+            VStack(alignment: .leading, spacing: 3) {
+                if let speaker { speakerLabel(speaker, color: color) }
+                Text(inlineMarkdown(line))
+                    .font(.system(size: 14, weight: .medium))
+                    .textSelection(.enabled)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .officeGameSurface(accent: color, emphasis: .prompt, cornerRadius: 10)
+        case .thought(let speaker, let line):
+            let color = RoleplayTranscript.speakerColor(for: speaker?.name, isDark: colorScheme == .dark)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                if let speaker { speakerLabel(speaker, color: color) }
+                Text(inlineMarkdown(line))
+                    .font(.system(size: 13).italic())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            .padding(.leading, 4)
+        }
+    }
+
+    private func speakerLabel(_ speaker: RoleplayTranscript.Speaker, color: Color) -> some View {
+        Text([speaker.emoji, speaker.name].compactMap { $0 }.joined(separator: " "))
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(color)
+    }
+
+    private func inlineMarkdown(_ line: String) -> AttributedString {
+        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        return (try? AttributedString(markdown: line, options: options)) ?? AttributedString(line)
     }
 }
 
@@ -213,6 +324,7 @@ private struct RoleplaySettingsPanel: View {
             .padding(12)
         }
         .onAppear(perform: loadDraft)
+        .task { await roleplay.refreshProxyModels() }
         .onChange(of: character) { _, _ in loadedProfile = nil; loadDraft() }
         .onChange(of: state?.profile.characterId) { _, _ in loadDraft() }
     }
@@ -326,8 +438,27 @@ private struct RoleplaySettingsPanel: View {
             }
             VStack(alignment: .leading, spacing: 3) {
                 fieldTitle("모델")
-                TextField("", text: $model).textFieldStyle(.roundedBorder)
+                if roleplay.proxyModels.isEmpty {
+                    TextField("", text: $model).textFieldStyle(.roundedBorder)
+                        .disabled(state?.profile.localProfileId != nil)
+                    if state?.profile.localProfileId == nil, roleplay.proxyModelsError != nil {
+                        Text(OfficeLocalization.string("모델 목록을 받지 못해 직접 입력합니다"))
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Picker(OfficeLocalization.string("모델"), selection: $model) {
+                        ForEach(roleplay.proxyModels) { option in
+                            Text(option.title).tag(option.id)
+                        }
+                        // 목록에 없는 모델을 저장해 둔 경우에도 현재 값은 보여 준다.
+                        if !roleplay.proxyModels.contains(where: { $0.id == model }) {
+                            Text(model.isEmpty ? OfficeLocalization.string("고르지 않음") : model).tag(model)
+                        }
+                    }
+                    .labelsHidden()
                     .disabled(state?.profile.localProfileId != nil)
+                }
                 if state?.profile.localProfileId != nil {
                     Text(OfficeLocalization.string("로컬 AI는 프로필 모델을 씁니다"))
                         .font(.system(size: 10))
@@ -360,6 +491,19 @@ private struct RoleplaySettingsPanel: View {
         let definitions = state?.toggleDefinitions ?? []
         VStack(alignment: .leading, spacing: 6) {
             sectionTitle("토글")
+            Toggle(OfficeLocalization.string("대사에 화자 이름표"), isOn: Binding(
+                get: { state?.profile.speakerCue == true },
+                set: { on in Task { await roleplay.update(character, RoleplayProfilePatch(speakerCue: on)) } }
+            ))
+            .font(.system(size: 11.5))
+            Text(OfficeLocalization.string(
+                // 토글 값은 프리셋을 바꿔도 남으므로 지금 프리셋에 cueinput이 있을 때만 본다.
+                state?.profile.toggles["cueinput"] == "1" && definitions.contains { $0.key == "cueinput" }
+                    ? "프리셋의 화자 표시가 켜져 있어 따로 넣지 않아요."
+                    : "새 답변부터 대사 앞에 이모지와 이름을 쓰게 해요."
+            ))
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
             if definitions.isEmpty {
                 Text(OfficeLocalization.string("프리셋에 토글이 없어요."))
                     .font(.system(size: 11))

@@ -23,6 +23,8 @@ struct RoleplayProfile: Codable, Equatable {
     var persona: String
     var model: String
     var localProfileId: String?
+    /// 옛 백엔드는 이 값을 보내지 않는다.
+    var speakerCue: Bool?
     var currentChatId: String?
 }
 
@@ -61,9 +63,17 @@ struct RoleplayProfilePatch: Encodable {
     var model: String?
     /// 빈 문자열을 보내면 안티그래비티 프록시로 되돌린다.
     var localProfileId: String?
+    var speakerCue: Bool?
+}
+
+/// 안티그래비티 프록시가 계정에서 받아 온 모델 하나.
+struct RoleplayModelOption: Codable, Identifiable, Equatable {
+    let id: String
+    let title: String
 }
 
 private struct RoleplayAssetsResponse: Decodable { let assets: [RoleplayAsset] }
+private struct RoleplayModelsResponse: Decodable { let models: [RoleplayModelOption] }
 private struct RoleplayImportResponse: Decodable { let asset: RoleplayAsset }
 private struct RoleplayErrorResponse: Decodable { let error: String }
 private struct RoleplayAssetUpload: Encodable { let fileName: String; let dataBase64: String }
@@ -85,6 +95,12 @@ struct RoleplayClient: Sendable {
         let (data, response) = try await URLSession.shared.data(from: baseURL.appending(path: "api/roleplay/assets"))
         try validate(response, data: data)
         return try JSONDecoder().decode(RoleplayAssetsResponse.self, from: data).assets
+    }
+
+    func proxyModels() async throws -> [RoleplayModelOption] {
+        let (data, response) = try await URLSession.shared.data(from: baseURL.appending(path: "api/roleplay/models"))
+        try validate(response, data: data)
+        return try JSONDecoder().decode(RoleplayModelsResponse.self, from: data).models
     }
 
     func importAsset(fileName: String, data fileData: Data) async throws -> RoleplayAsset {
@@ -153,6 +169,9 @@ final class RoleplayStore: ObservableObject {
     /// 화면 조작 중 생긴 오류. 모델 생성 실패는 RoleplayState.lastError로 따로 온다.
     @Published var errors: [OfficeCharacter: String] = [:]
     @Published var assetError: String?
+    /// 비어 있으면 아직 못 받았거나 프록시가 꺼진 것이라 직접 입력 칸을 보여 준다.
+    @Published private(set) var proxyModels: [RoleplayModelOption] = []
+    @Published private(set) var proxyModelsError: String?
 
     private let client: RoleplayClient
 
@@ -188,6 +207,16 @@ final class RoleplayStore: ObservableObject {
             assetError = nil
         } catch {
             assetError = error.localizedDescription
+        }
+    }
+
+    func refreshProxyModels() async {
+        do {
+            proxyModels = try await client.proxyModels()
+            proxyModelsError = nil
+        } catch {
+            proxyModels = []
+            proxyModelsError = error.localizedDescription
         }
     }
 

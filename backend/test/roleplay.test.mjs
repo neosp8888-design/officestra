@@ -12,12 +12,14 @@ import {
   encodeRPack,
   RisuFormatError,
 } from "../src/roleplay-risu-format.mjs";
-import { parseCBS } from "../src/roleplay-cbs.mjs";
+import { parseCBS, risuUnescape } from "../src/roleplay-cbs.mjs";
 import {
   applyRegexScripts,
   assembleRoleplayMessages,
+  fitRoleplayContext,
   parseToggleDefinitions,
   roleplayRequestBody,
+  SPEAKER_CUE_PROMPT,
 } from "../src/roleplay-prompt.mjs";
 import { RoleplayError, RoleplayService } from "../src/roleplay-service.mjs";
 
@@ -179,6 +181,62 @@ test("CBS 조건·계산·이름을 리스 규칙대로 푼다", () => {
   assert.equal(parseCBS("{{unknownfn::x}} {{abc", {}), "{{unknownfn::x}} {{abc");
 });
 
+test("소악마가 쓰는 CBS 비교·문자열·배열 함수를 리스 규칙대로 푼다", () => {
+  assert.equal(parseCBS("{{equal::a::a}}{{equal::a::b}}{{not_equal::a::b}}{{notequal::a::a}}", {}), "1010");
+  assert.equal(parseCBS("{{greater::3::2}}{{less::3::2}}{{greater_equal::2::2}}", {}), "101");
+  assert.equal(parseCBS("{{and::1::1}}{{and::1::0}}{{or::0::1}}{{or::0::0}}{{not::1}}{{not::0}}", {}), "101001");
+  assert.equal(parseCBS("{{any::0::1}}{{any::0::0}}{{any::{{array::0::1}}}}", {}), "101");
+  assert.equal(parseCBS("{{contains::헬레나가 웃었다::헬레나}}{{contains::abc::d}}", {}), "10");
+  assert.equal(parseCBS("[{{trim::  가 }}][{{replace::a-b-c::-::+}}][{{blank}}][{{u::41}}]", {}), "[가][a+b+c][][A]");
+  assert.equal(parseCBS("{{ruby::漢::한}}", {}), "<ruby>漢<rp> (</rp><rt>한</rt><rp>) </rp></ruby>");
+  assert.equal(parseCBS("{{array::a::b}}", {}), '["a","b"]');
+  assert.equal(parseCBS("{{roll::2d6}}", { random: () => 0.5 }), "8");
+  assert.equal(parseCBS("{{roll::0d6}}", {}), "NaN");
+  // 리스처럼 함수가 실패하면 그 매크로를 글자 그대로 남긴다.
+  assert.equal(parseCBS("{{contains}}", {}), "{{contains}}");
+  assert.equal(parseCBS("{{? 가 || 나}}", {}), "{{? 가 || 나}}");
+  assert.equal(parseCBS("{{? {{nofn::x}} || 1}}", {}), "1");
+});
+
+test("CBS 임시 변수·반복문·escape를 리스 규칙대로 푼다", () => {
+  assert.equal(parseCBS("{{settempvar::a::켜짐}}[{{tempvar::a}}][{{gettempvar::a}}][{{tempvar::b}}]", {}), "[켜짐][켜짐][]");
+  assert.equal(parseCBS("{{tempvar::a}}", {}), "");
+  // 리스 loop.test.ts의 기대값.
+  assert.equal(parseCBS("{{#each [1, 2, 3] as n}}{{slot::n}} {{/}}", {}), "123");
+  assert.equal(
+    parseCBS("{{#each::keep [[1, 2], [3, 4]] as x}}{{#each::keep {{slot::x}} as y}}{{slot::y}}\n{{/}}{{/}}", {}),
+    "1\n2\n3\n4\n",
+  );
+  assert.equal(parseCBS("{{#each {{array::x::y}} v}}[{{slot::v}}]{{/each}}", {}), "[x][y]");
+  const vars = { toggle_g1: "2", toggle_g2: "0" };
+  const genre = "{{settempvar::hit::0}}{{#each {{array::toggle_g1::toggle_g2}} g}}{{#if {{equal::{{getglobalvar::{{slot::g}}}}::2}}}}{{settempvar::hit::1}}{{/if}}{{/each}}{{tempvar::hit}}";
+  assert.equal(parseCBS(genre, { vars }), "1");
+  assert.equal(parseCBS("{{#escape}} {bkspc}(x) {{/}}", {}), "bkspcx");
+  assert.equal(risuUnescape(parseCBS("{{#escape}}{{user}}{{/escape}}", { userName: "민지" })), "{{user}}");
+});
+
+test("CBS 대화 기록·시각 함수는 앱 메시지를 리스 메시지처럼 읽는다", () => {
+  const now = new Date(2026, 9, 25, 9, 5, 7);
+  const messages = [
+    { id: "1", role: "user", content: "안녕", createdAt: new Date(now.getTime() - 3_725_000) },
+    { id: "2", role: "assistant", content: "헬레나 등장", createdAt: new Date(now.getTime() - 65_000) },
+  ];
+  const context = { messages, now: () => now };
+  assert.equal(parseCBS("{{previous_chat_log::1}}|{{previous_chat_log::5}}", context), "헬레나 등장|Out of range");
+  assert.equal(parseCBS("{{idle_duration}}", context), "0:01:05");
+  assert.equal(parseCBS("{{idle_duration}}", { messages: [] }), "00:00:00");
+  assert.equal(parseCBS("{{time::YYYY-MM-DD HH:mm}}", context), "2026-10-25 09:05");
+  assert.equal(parseCBS("{{time}}", context), "9:5:7");
+  const loop = "{{#each {{? {{lastmessageid}}}} item}}{{#if {{contains::{{previous_chat_log::{{slot::item}}}}::헬레나}}}}찾음{{/if}}{{/each}}";
+  assert.equal(parseCBS(loop, { ...context, lastMessageIndex: 1 }), "찾음");
+});
+
+test("조립 결과는 리스처럼 escape한 글자를 보내기 전에 되돌린다", () => {
+  const preset = { promptTemplate: [{ type: "plain", role: "system", text: "규칙 {{#escape}}{bkspc}{{/}}" }] };
+  const formatted = assembleRoleplayMessages({ preset, characterName: "코대리", userName: "민지" });
+  assert.equal(formatted[0].content, "규칙 {bkspc}");
+});
+
 test("토글 정의를 종류별로 읽는다", () => {
   assert.deepEqual(parseToggleDefinitions("on=켜기\nmode=방식=select=짧게,길게\n=묶음=group\nmemo=메모=text"), [
     { key: "on", value: "켜기", type: "checkbox", options: [] },
@@ -253,6 +311,119 @@ test("사용자 지정 플래그가 없으면 뒤쪽 system을 System: 사용자
   ]);
 });
 
+test("화자 이름표 설정은 마지막 대화 뒤에 지시를 넣고 cueinput이 켜져 있으면 넣지 않는다", () => {
+  const preset = syntheticPreset();
+  const messages = [
+    { id: "1", role: "user", content: "안녕" },
+    { id: "2", role: "char", content: "반가워" },
+    { id: "3", role: "user", content: "다음" },
+  ];
+  const assemble = (extra) => assembleRoleplayMessages({ preset, characterName: "코대리", userName: "민지", messages, ...extra });
+  const plain = assemble({});
+  const cued = assemble({ speakerCue: true });
+  const at = cued.findIndex((item) => item.content === SPEAKER_CUE_PROMPT);
+  assert.equal(cued.length, plain.length + 1);
+  assert.equal(cued[at].role, "system");
+  assert.equal(cued[at - 1].content, "다음");
+  assert.deepEqual(cued.toSpliced(at, 1), plain);
+  // 다른 프리셋에서 켠 cueinput 값이 남아 있어도 지금 프리셋에 그 토글이 없으면 넣는다.
+  assert.equal(assemble({ speakerCue: true, toggles: { cueinput: "1" } }).length, plain.length + 1);
+  const cuePreset = syntheticPreset({ customPromptTemplateToggle: "cueinput=화자 표시" });
+  const withCue = (extra) => assembleRoleplayMessages({
+    preset: cuePreset, characterName: "코대리", userName: "민지", messages, toggles: { cueinput: "1" }, ...extra,
+  });
+  assert.deepEqual(withCue({ speakerCue: true }), withCue({}));
+  assert.ok(assemble({ speakerCue: true, messages: [] }).at(-1).content === SPEAKER_CUE_PROMPT);
+});
+
+test("오래된 대화부터 빼고 새 대화 표시와 마지막 메시지는 남긴다", () => {
+  const preset = syntheticPreset({ enableCustomFlags: false, thinkingType: "off" });
+  const messages = [
+    { id: "1", role: "user", content: "하나" },
+    { id: "2", role: "char", content: "둘" },
+    { id: "3", role: "user", content: "셋" },
+    { id: "4", role: "char", content: "넷" },
+  ];
+  const chatTexts = new Set(["[Start a new chat]", "첫인사", "하나", "둘", "셋", "넷"]);
+  const chatsOf = (dropOldest) => assembleRoleplayMessages({
+    preset,
+    characterName: "코대리",
+    userName: "민지",
+    firstMessage: "첫인사",
+    messages,
+    dropOldest,
+  }).map((item) => item.content).filter((content) => chatTexts.has(content));
+  assert.deepEqual(chatsOf(0), ["[Start a new chat]", "첫인사", "하나", "둘", "셋", "넷"]);
+  assert.deepEqual(chatsOf(2), ["[Start a new chat]", "둘", "셋", "넷"]);
+  assert.deepEqual(chatsOf(99), ["[Start a new chat]", "넷"]);
+});
+
+test("한도에 드는 요청 중 대화를 가장 적게 뺀 것을 고른다", async () => {
+  const counted = [];
+  // 대화 하나가 10토큰, 프리셋이 5토큰이라고 친다.
+  const build = (drop) => ({ drop, tokens: 5 + 10 * Math.max(1, 8 - drop) });
+  const countTokens = async (body) => {
+    counted.push(body.drop);
+    return body.tokens;
+  };
+  assert.deepEqual(await fitRoleplayContext({ build, maxDrop: 9, limit: 1000, countTokens }), { body: build(0), dropped: 0 });
+  assert.deepEqual(counted, [0]);
+
+  counted.length = 0;
+  const fit = await fitRoleplayContext({ build, maxDrop: 9, limit: 40, countTokens });
+  assert.equal(fit.dropped, 5);
+  assert.equal(fit.body.tokens, 35);
+  assert.ok(counted.length <= 6, `센 횟수 ${counted.length}`);
+
+  const impossible = await fitRoleplayContext({ build, maxDrop: 9, limit: 10, countTokens });
+  assert.deepEqual(impossible, { body: null, dropped: 9, tokens: 15 });
+});
+
+test("프록시 모델 목록을 키를 붙여 받아 오고 키는 돌려주지 않는다", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "roleplay-models-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const keyFile = join(directory, "key");
+  await writeFile(keyFile, "secret-key\n");
+  const calls = [];
+  const service = new RoleplayService({
+    pool: null,
+    apiURL: "http://proxy.test/v1/messages",
+    apiKeyFile: keyFile,
+    fetchImpl: async (url, options) => {
+      calls.push({ url: String(url), key: options.headers["x-api-key"] });
+      return new Response(JSON.stringify({
+        data: [
+          { id: "gemini-4-argon-high", description: "Gemini 4 Argon (High)" },
+          { id: "claude-opus-5-5-low" },
+          { id: "" },
+        ],
+      }));
+    },
+  });
+  const result = await service.listProxyModels();
+  assert.deepEqual(calls, [{ url: "http://proxy.test/v1/models", key: "secret-key" }]);
+  assert.deepEqual(result, {
+    models: [
+      { id: "claude-opus-5-5-low", title: "claude-opus-5-5-low" },
+      { id: "gemini-4-argon-high", title: "Gemini 4 Argon (High)" },
+    ],
+  });
+  assert.ok(!JSON.stringify(result).includes("secret-key"));
+
+  const down = new RoleplayService({
+    pool: null,
+    apiKeyFile: keyFile,
+    fetchImpl: async () => { throw new TypeError("fetch failed"); },
+  });
+  await assert.rejects(down.listProxyModels(), (error) => error instanceof RoleplayError && error.status === 502);
+  const refused = new RoleplayService({
+    pool: null,
+    apiKeyFile: keyFile,
+    fetchImpl: async () => new Response("{}", { status: 401 }),
+  });
+  await assert.rejects(refused.listProxyModels(), /모델 목록을 받지 못했습니다\(401\)/);
+});
+
 // 실제 PostgreSQL에서 격리 스키마를 만들고 끝나면 되돌린다. 실제 직원·대화 기록은 건드리지 않는다.
 test("롤플레이 서비스 DB 통합", { skip: process.env.OFFICESTRA_TEST_ROLEPLAY_POSTGRES !== "1" }, async (t) => {
   const { pool } = await import("../src/db.mjs");
@@ -273,6 +444,7 @@ test("롤플레이 서비스 DB 통합", { skip: process.env.OFFICESTRA_TEST_ROL
     );
     await client.query(await readFile(new URL("../../database/migrations/066_roleplay_chat.sql", import.meta.url), "utf8"));
     await client.query(await readFile(new URL("../../database/migrations/067_roleplay_local_profile.sql", import.meta.url), "utf8"));
+    await client.query(await readFile(new URL("../../database/migrations/068_roleplay_speaker_cue.sql", import.meta.url), "utf8"));
     const keyFile = join(keyDirectory, "key");
     await writeFile(keyFile, "test-key\n", { mode: 0o600 });
 
@@ -289,7 +461,7 @@ test("롤플레이 서비스 DB 통합", { skip: process.env.OFFICESTRA_TEST_ROL
       broadcast: (event) => events.push(event),
       fetchImpl: async (url, options) => {
         calls.push({ url, options });
-        return await reply();
+        return await reply(url, options);
       },
       apiURL: "http://127.0.0.1:1/v1/messages",
       apiKeyFile: keyFile,
@@ -326,6 +498,10 @@ test("롤플레이 서비스 DB 통합", { skip: process.env.OFFICESTRA_TEST_ROL
         userName: "민지",
       });
       assert.equal(saved.profile.enabled, true);
+      assert.equal(saved.profile.speakerCue, false);
+      assert.equal((await service.updateProfile(id, { speakerCue: true })).profile.speakerCue, true);
+      assert.equal((await service.updateProfile(id, { speakerCue: false })).profile.speakerCue, false);
+      await assert.rejects(service.updateProfile(id, { speakerCue: "1" }), (error) => error.status === 400);
       assert.deepEqual(saved.activeModuleIds, [module.asset.id]);
       assert.deepEqual(saved.toggleDefinitions.map((toggle) => toggle.key), ["on", "mode", ""]);
       assert.equal(events.at(-1).type, "roleplay.changed");
@@ -437,10 +613,61 @@ test("롤플레이 서비스 DB 통합", { skip: process.env.OFFICESTRA_TEST_ROL
       assert.equal(doors.length, 2);
     });
 
-    await t.test("새 대화를 시작하면 빈 대화로 바뀐다", async () => {
+    await t.test("로컬 한도를 넘으면 오래된 대화부터 빼고 보낸다", async () => {
+      await service.updateProfile(id, { localProfileId: "local-test" });
+      let contextWindow = 3000;
+      localProviders = {
+        openMessagesDoor: async (definition) => ({
+          url: "http://127.0.0.1:2/v1/messages",
+          token: "door-token",
+          model: definition.profile.model,
+          contextWindow,
+          maxOutputTokens: 1000,
+          release: async () => {},
+        }),
+      };
+      // 메시지 하나를 400토큰으로 센다. 한도는 3000 - 답 1000 - 여유 256 = 1744다.
+      reply = async (url, options) => {
+        const body = JSON.parse(options.body);
+        if (url.endsWith("/count_tokens")) {
+          return { ok: true, status: 200, text: async () => JSON.stringify({ input_tokens: body.messages.length * 400 }) };
+        }
+        return { ok: true, status: 200, text: async () => JSON.stringify({ content: [{ type: "text", text: "잘린 답" }] }) };
+      };
+      const before = calls.length;
+      await service.sendMessage(id, { content: "길어진 대화" });
+      await finish();
+      const state = await service.readProfile(id);
+      assert.equal(state.lastError, null);
+      assert.equal(state.messages.at(-1).content, "잘린 답");
+      const sent = calls.slice(before);
+      assert.ok(sent.filter((call) => call.url.endsWith("/count_tokens")).length >= 2);
+      const generated = sent.at(-1);
+      assert.equal(generated.url, "http://127.0.0.1:2/v1/messages");
+      const body = JSON.parse(generated.options.body);
+      assert.ok(body.messages.length >= 1 && body.messages.length * 400 <= 1744, `보낸 메시지 ${body.messages.length}개`);
+      assert.match(JSON.stringify(body.messages), /길어진 대화/);
+      assert.doesNotMatch(JSON.stringify(body.messages), /"안녕"/);
+
+      // 마지막 메시지만 남겨도 넘으면 생성 요청 없이 오류로 남긴다.
+      contextWindow = 1300;
+      const beforeTiny = calls.length;
+      await service.sendMessage(id, { content: "너무 작음" });
+      await finish();
+      assert.match((await service.readProfile(id)).lastError, /한도를 넘습니다/);
+      assert.ok(calls.slice(beforeTiny).every((call) => call.url.endsWith("/count_tokens")));
+      assert.equal((await service.updateProfile(id, { localProfileId: "" })).profile.localProfileId, null);
+    });
+
+    await t.test("새 대화를 시작하면 빈 대화로 바뀌고 지난 대화는 지워진다", async () => {
+      const before = (await service.readProfile(id)).profile.currentChatId;
+      assert.ok((await client.query("SELECT count(*)::int AS n FROM roleplay_messages WHERE chat_id = $1", [before])).rows[0].n > 0);
       const state = await service.startNewChat(id);
       assert.deepEqual(state.messages, []);
       assert.equal(state.lastError, null);
+      const chats = await client.query("SELECT id FROM roleplay_chats WHERE character_id = $1", [id]);
+      assert.deepEqual(chats.rows.map((row) => row.id), [state.profile.currentChatId]);
+      assert.equal((await client.query("SELECT count(*)::int AS n FROM roleplay_messages WHERE chat_id = $1", [before])).rows[0].n, 0);
     });
   } finally {
     await client.query("ROLLBACK");

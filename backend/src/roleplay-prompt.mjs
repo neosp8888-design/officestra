@@ -1,6 +1,6 @@
 // 리스 프리셋의 프롬프트 템플릿·토글·정규식으로 롤플레이 요청을 리스와 같은 순서로 조립한다.
 // 원본: RisuAI(GPL-3.0) src/ts/process/index.svelte.ts, scripts.ts, request/anthropic.ts
-import { parseCBS } from "./roleplay-cbs.mjs";
+import { parseCBS, risuUnescape } from "./roleplay-cbs.mjs";
 
 export function parseToggleDefinitions(template) {
   if (!template) return [];
@@ -131,6 +131,22 @@ export function applyRegexScripts(scripts, input, mode, context) {
 }
 
 const PROMPT_ROLE = { system: "system", user: "user", bot: "assistant" };
+
+// 프로필 토글 값은 프리셋을 바꿔도 남으므로, 지금 프리셋·모듈에 cueinput 토글이 있을 때만 켜진 것으로 본다.
+function hasActiveCueToggle(preset, modules, toggles) {
+  if (toggles.cueinput !== "1") return false;
+  return [preset?.customPromptTemplateToggle, ...modules.map((module) => module.data?.customModuleToggle)]
+    .some((template) => parseToggleDefinitions(template).some((definition) => definition.key === "cueinput"));
+}
+
+// 앱의 "대사에 화자 이름표" 설정. 소악마 cueinput과 같은 형식이라 앱 화면이 화자를 구분할 수 있다.
+export const SPEAKER_CUE_PROMPT = `<Character_Cue_Guidelines>
+Put a Character Cue in front of every line of spoken dialogue so readers instantly know who is talking.
+- Format: Gender_Emoji Name: "Dialogue" — each line of dialogue on its own line.
+- Use only 👩 for female speakers and 👨 for male speakers, and keep each character's name the same throughout the chat.
+- Inner thoughts use the same cue with single quotes: Gender_Emoji Name: 'Thought'
+- Narration never gets a cue.
+</Character_Cue_Guidelines>`;
 const removePositions = (text) => String(text ?? "").replace(/{{position::(.+?)}}/g, "");
 
 function sliceChats(chats, card) {
@@ -155,7 +171,9 @@ export function assembleRoleplayMessages({
   firstMessage = "",
   userName,
   persona = "",
+  speakerCue = false,
   messages = [],
+  dropOldest = 0,
 }) {
   const scripts = regexScripts(preset, modules);
   const vars = toggleVariables(toggles);
@@ -164,6 +182,7 @@ export function assembleRoleplayMessages({
     charName: characterName,
     vars,
     lastMessageIndex: messages.length - 1,
+    messages,
   };
   const parse = (text, extra = {}) => parseCBS(text, { ...baseContext, ...extra });
 
@@ -190,7 +209,11 @@ export function assembleRoleplayMessages({
     content = content.replace(/<Thoughts>(.+)<\/Thoughts>/gms, "");
     chats.push({ role: message.role === "user" ? "user" : "assistant", content, memo: message.id });
   });
-  const history = chats.filter((chat) => chat.content.trim() !== "");
+  const allChats = chats.filter((chat) => chat.content.trim() !== "");
+  // 한도를 넘으면 오래된 대화부터 뺀다. 새 대화 표시와 마지막 메시지는 남긴다.
+  const head = allChats[0]?.memo === "NewChat" ? 1 : 0;
+  const drop = Math.min(Math.max(0, dropOldest), Math.max(0, allChats.length - head - 1));
+  const history = [...allChats.slice(0, head), ...allChats.slice(head + drop)];
 
   const formatted = [];
   const push = (items) => {
@@ -237,7 +260,15 @@ export function assembleRoleplayMessages({
         break;
     }
   }
-  return formatted.map((item) => ({ ...item, content: item.content.trim() }));
+  // 프리셋이 이미 화자 표시(cueinput)를 켰으면 겹쳐 넣지 않는다.
+  // 마지막 대화 바로 뒤에 넣어 프리셋 끝의 지시·이어쓰기 블록 앞에 둔다.
+  if (speakerCue && !hasActiveCueToggle(preset, modules, toggles)) {
+    const ids = new Set(messages.map((message) => message.id).filter(Boolean));
+    const last = formatted.findLastIndex((item) => ids.has(item.memo));
+    formatted.splice(last < 0 ? formatted.length : last + 1, 0, { role: "system", content: SPEAKER_CUE_PROMPT });
+  }
+  // 리스 requestChatData처럼 보내기 직전에 #escape로 숨긴 글자를 되돌린다.
+  return formatted.map((item) => ({ ...item, content: risuUnescape(item.content.trim()) }));
 }
 
 // requestClaude의 Anthropic 변환. 앞쪽 system은 system으로, 이후 system은 "System: "을 붙인 user로 보낸다.
@@ -310,6 +341,23 @@ export function reformatForModelFlags(formatted, preset) {
   }
   if (systemPrompt) items.unshift(systemPrompt);
   return items;
+}
+
+// 리스의 최대 컨텍스트처럼, 한도 안에 드는 요청 중 오래된 대화를 가장 적게 뺀 것을 고른다.
+// 뺄수록 토큰이 줄어드므로 이분 탐색으로 세는 횟수를 줄인다. 다 빼도 넘으면 body가 null이다.
+export async function fitRoleplayContext({ build, maxDrop, limit, countTokens }) {
+  const full = build(0);
+  if (await countTokens(full) <= limit) return { body: full, dropped: 0 };
+  const tokens = await countTokens(build(maxDrop));
+  if (tokens > limit) return { body: null, dropped: maxDrop, tokens };
+  let low = 1;
+  let high = maxDrop;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (await countTokens(build(middle)) <= limit) high = middle;
+    else low = middle + 1;
+  }
+  return { body: build(high), dropped: high };
 }
 
 export function roleplayRequestBody({ preset, model, formatted }) {

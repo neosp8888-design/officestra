@@ -21,6 +21,21 @@ test('model control resolves selected host and reasoning without modifying assig
   await assert.rejects(controlLocalModel({...args,runtime:{draining:true}}),/준비/);
   assert.equal(calls.length,1);
 });
+test('model stop also unloads the roleplay local model on the selected host without locking it',async()=>{
+  const calls=[];
+  const roleplay={...definition,profile:{...definition.profile,id:'local-roleplay',model:'roleplay-test'}};
+  const row={definition,address:'192.168.1.15',reasoning:'off',roleplay_profile_id:'local-roleplay',roleplay_definition:roleplay};
+  const args={runtime:{draining:false},characterID:'test',action:'stop',pool:{query:async()=>({rows:[row]})},
+    localProviders:{controlModel:async(d,action)=>{calls.push({d,action});return {state:'stopped',loaded:false};}}};
+  assert.equal((await controlLocalModel(args)).state,'stopped');
+  assert.deepEqual(calls.map(c=>[c.d.profile.id,c.action]),[['local-test','stop'],['local-roleplay','unload']]);
+  assert.equal(calls[1].d.host.address,'192.168.1.15');assert.equal(calls[1].d.profile.reasoning,undefined);
+  calls.length=0;row.roleplay_profile_id='local-test';row.roleplay_definition=definition;
+  await controlLocalModel(args);
+  assert.equal(calls[1].d.profile.reasoning,'off');
+  calls.length=0;await controlLocalModel({...args,action:'start'});
+  assert.deepEqual(calls.map(c=>c.action),['start']);
+});
 test('model start carries the chosen ComfyUI release and rejects it elsewhere',async()=>{
   const calls=[];
   const args={runtime:{draining:false},characterID:'test',action:'start',comfyRelease:'interrupt',

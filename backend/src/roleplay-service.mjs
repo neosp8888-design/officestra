@@ -9,6 +9,7 @@ import {
   activeModules,
   applyRegexScripts,
   assembleRoleplayMessages,
+  fitRoleplayContext,
   parseToggleDefinitions,
   roleplayRequestBody,
 } from "./roleplay-prompt.mjs";
@@ -24,8 +25,12 @@ const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
 const MAX_TEXT = 200_000;
 const MAX_MESSAGE = 20_000;
 const REQUEST_TIMEOUT_MS = 300_000;
+// 프록시는 목록을 계정 서버에서 받아 오므로 몇 초 걸릴 수 있다.
+const MODEL_LIST_TIMEOUT_MS = 15_000;
 // 로컬은 4090에 모델을 올리고 앞선 요청을 기다리는 시간까지 포함한다.
 const LOCAL_REQUEST_TIMEOUT_MS = 600_000;
+// count_tokens에 안 잡히는 생성 시작 표시 몇 토큰을 위한 여유다.
+const CONTEXT_MARGIN_TOKENS = 256;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const PROFILE_DEFAULTS = {
@@ -39,6 +44,7 @@ const PROFILE_DEFAULTS = {
   persona: "",
   model: "gemini-3.8-flash-high",
   localProfileId: null,
+  speakerCue: false,
   currentChatId: null,
   updatedAt: null,
 };
@@ -105,6 +111,7 @@ function profileFromRow(characterId, row) {
     persona: row.persona,
     model: row.model,
     localProfileId: row.local_profile_id ?? null,
+    speakerCue: row.speaker_cue ?? false,
     currentChatId: row.current_chat_id,
     updatedAt: row.updated_at,
   };
@@ -241,6 +248,10 @@ export class RoleplayService {
       if (typeof body.enabled !== "boolean") throw new RoleplayError(400, "enabled는 참/거짓이어야 합니다.");
       next.enabled = body.enabled;
     }
+    if (body.speakerCue !== undefined) {
+      if (typeof body.speakerCue !== "boolean") throw new RoleplayError(400, "speakerCue는 참/거짓이어야 합니다.");
+      next.speakerCue = body.speakerCue;
+    }
     if (body.presetId !== undefined) next.presetId = body.presetId === null ? null : uuid(body.presetId, "presetId");
     if (body.moduleIds !== undefined) {
       if (!Array.isArray(body.moduleIds)) throw new RoleplayError(400, "moduleIds는 배열이어야 합니다.");
@@ -282,8 +293,8 @@ export class RoleplayService {
     await this.pool.query(
       `INSERT INTO roleplay_profiles (
          character_id, enabled, preset_id, module_ids, toggles, character_description,
-         first_message, user_name, persona, model, current_chat_id, local_profile_id, updated_at
-       ) VALUES ($1, $2, $3, $4::uuid[], $5::jsonb, $6, $7, $8, $9, $10, $11, $12, now())
+         first_message, user_name, persona, model, current_chat_id, local_profile_id, speaker_cue, updated_at
+       ) VALUES ($1, $2, $3, $4::uuid[], $5::jsonb, $6, $7, $8, $9, $10, $11, $12, $13, now())
        ON CONFLICT (character_id) DO UPDATE SET
          enabled = EXCLUDED.enabled,
          preset_id = EXCLUDED.preset_id,
@@ -295,6 +306,7 @@ export class RoleplayService {
          persona = EXCLUDED.persona,
          model = EXCLUDED.model,
          local_profile_id = EXCLUDED.local_profile_id,
+         speaker_cue = EXCLUDED.speaker_cue,
          updated_at = now()`,
       [
         characterId,
@@ -309,6 +321,7 @@ export class RoleplayService {
         next.model,
         next.currentChatId,
         next.localProfileId,
+        next.speakerCue,
       ],
     );
     this.broadcast({ type: "roleplay.changed", characterId });
@@ -334,7 +347,9 @@ export class RoleplayService {
   async startNewChat(characterId) {
     await this.character(this.pool, characterId);
     if (this.generating.has(characterId)) throw new RoleplayError(409, "답을 만드는 중에는 새 대화를 시작할 수 없습니다.");
-    await this.createChat(characterId);
+    const chatId = await this.createChat(characterId);
+    // 지난 대화는 남기지 않는다. 메시지는 외래 키로 함께 지워진다(2026-10-28 요청).
+    await this.pool.query("DELETE FROM roleplay_chats WHERE character_id = $1 AND id <> $2", [characterId, chatId]);
     this.lastErrors.delete(characterId);
     this.broadcast({ type: "roleplay.changed", characterId });
     return await this.readProfile(characterId);
@@ -355,8 +370,8 @@ export class RoleplayService {
     try {
       if (!profile.currentChatId) profile = { ...profile, currentChatId: await this.createChat(characterId) };
       const history = await this.messages(this.pool, profile.currentChatId);
-      const context = this.parseContext(profile, character, history.length);
-      const input = applyRegexScripts(this.scripts(preset, modules), content, "editinput", context);
+      const context = this.parseContext(profile, character, history);
+      const input =applyRegexScripts(this.scripts(preset, modules), content, "editinput", context);
       await this.pool.query(
         "INSERT INTO roleplay_messages (chat_id, role, content) VALUES ($1, 'user', $2)",
         [profile.currentChatId, input],
@@ -383,34 +398,41 @@ export class RoleplayService {
     return [...(preset?.regex ?? []), ...modules.flatMap((module) => module.data?.regex ?? [])];
   }
 
-  parseContext(profile, character, messageCount) {
+  parseContext(profile, character, history) {
     return {
       userName: profile.userName,
       charName: character.name,
       vars: Object.fromEntries(Object.entries(profile.toggles).map(([key, value]) => [`toggle_${key}`, value])),
-      chatIndex: messageCount,
-      lastMessageIndex: messageCount,
+      chatIndex: history.length,
+      lastMessageIndex: history.length,
+      messages: history,
     };
   }
 
   async generate(characterId, character, profile, preset, modules) {
     const history = await this.messages(this.pool, profile.currentChatId);
-    const formatted = assembleRoleplayMessages({
+    const build = (dropOldest) => roleplayRequestBody({
       preset,
-      modules,
-      toggles: profile.toggles,
-      characterName: character.name,
-      characterDescription: profile.characterDescription,
-      firstMessage: profile.firstMessage,
-      userName: profile.userName,
-      persona: profile.persona,
-      messages: history,
+      model: profile.model,
+      formatted: assembleRoleplayMessages({
+        preset,
+        modules,
+        toggles: profile.toggles,
+        characterName: character.name,
+        characterDescription: profile.characterDescription,
+        firstMessage: profile.firstMessage,
+        userName: profile.userName,
+        persona: profile.persona,
+        speakerCue: profile.speakerCue,
+        messages: history,
+        dropOldest,
+      }),
     });
-    const requestBody = roleplayRequestBody({ preset, model: profile.model, formatted });
+    // 첫 메시지까지 셀 수 있게 하나 더 잡는다. 실제로 빼는 수는 조립할 때 다시 줄인다.
     const reply = profile.localProfileId
-      ? await this.callLocalModel(requestBody, await this.localDefinition(profile.localProfileId, characterId))
-      : await this.callModel(requestBody);
-    const context = this.parseContext(profile, character, history.length);
+      ? await this.callLocalModel(build, history.length + 1, preset, await this.localDefinition(profile.localProfileId, characterId))
+      : await this.callModel(build(0));
+    const context = this.parseContext(profile, character, history);
     const output = applyRegexScripts(this.scripts(preset, modules), reply, "editoutput", context);
     await this.pool.query(
       "INSERT INTO roleplay_messages (chat_id, role, content) VALUES ($1, 'char', $2)",
@@ -447,7 +469,7 @@ export class RoleplayService {
     return definition;
   }
 
-  async callLocalModel(requestBody, definition) {
+  async callLocalModel(build, maxDrop, preset, definition) {
     const providers = this.localProviders();
     if (!providers) throw new RoleplayError(503, "로컬 모델 서비스가 준비되지 않았습니다.");
     let door;
@@ -458,15 +480,102 @@ export class RoleplayService {
     }
     try {
       // 로컬 브리지는 프로필 모델명과 출력 한도를 그대로 요구한다.
-      const body = {
-        ...requestBody,
-        model: door.model,
-        max_tokens: Math.min(requestBody.max_tokens ?? door.maxOutputTokens, door.maxOutputTokens),
+      const bodyFor = (dropOldest) => {
+        const requestBody = build(dropOldest);
+        return {
+          ...requestBody,
+          model: door.model,
+          max_tokens: Math.min(requestBody.max_tokens ?? door.maxOutputTokens, door.maxOutputTokens),
+        };
       };
+      const body = await this.fitLocalContext(bodyFor, maxDrop, preset, door);
       return await this.callModel(body, { url: door.url, key: door.token, timeoutMs: LOCAL_REQUEST_TIMEOUT_MS });
     } finally {
       await door.release();
     }
+  }
+
+  // 프로필 컨텍스트와 프리셋 최대 컨텍스트 중 작은 쪽에서 답 한도를 뺀 만큼만 입력으로 보낸다.
+  async fitLocalContext(bodyFor, maxDrop, preset, door) {
+    const presetWindow = Number(preset?.maxContext) > 0 ? Number(preset.maxContext) : Infinity;
+    const window = Math.min(door.contextWindow > 0 ? door.contextWindow : Infinity, presetWindow);
+    if (!Number.isFinite(window)) return bodyFor(0);
+    const limit = window - bodyFor(0).max_tokens - CONTEXT_MARGIN_TOKENS;
+    const fit = await fitRoleplayContext({
+      build: bodyFor,
+      maxDrop,
+      limit,
+      countTokens: (body) => this.countLocalTokens(body, door),
+    });
+    if (!fit.body) {
+      throw new RoleplayError(413, `프리셋과 마지막 메시지만으로도 로컬 모델 한도를 넘습니다(${fit.tokens}토큰, 한도 ${limit}토큰).`);
+    }
+    return fit.body;
+  }
+
+  async countLocalTokens(body, door) {
+    let response;
+    try {
+      response = await this.fetchImpl(`${door.url}/count_tokens`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "anthropic-version": "2023-06-01",
+          "x-api-key": door.token,
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(LOCAL_REQUEST_TIMEOUT_MS),
+      });
+    } catch {
+      throw new RoleplayError(502, "로컬 모델에서 입력 토큰 수를 세지 못했습니다.");
+    }
+    const raw = await response.text();
+    let tokens = NaN;
+    try {
+      tokens = Number(JSON.parse(raw)?.input_tokens);
+    } catch {
+      // 아래에서 알린다.
+    }
+    if (!response.ok || !Number.isSafeInteger(tokens) || tokens < 0) {
+      throw new RoleplayError(502, `로컬 모델에서 입력 토큰 수를 세지 못했습니다(${response.status}).`);
+    }
+    return tokens;
+  }
+
+  // 프록시가 계정에서 받아 온 모델을 그대로 보여 준다. 키는 응답에 넣지 않는다.
+  async listProxyModels() {
+    let key;
+    try {
+      key = (await readFile(this.apiKeyFile, "utf8")).trim();
+    } catch {
+      throw new RoleplayError(503, "롤플레이 모델 접근 키 파일을 읽지 못했습니다.");
+    }
+    let response;
+    try {
+      response = await this.fetchImpl(new URL("models", this.apiURL), {
+        headers: { "anthropic-version": "2023-06-01", "x-api-key": key },
+        signal: AbortSignal.timeout(MODEL_LIST_TIMEOUT_MS),
+      });
+    } catch {
+      throw new RoleplayError(502, "롤플레이 모델 서버에 연결하지 못했습니다. 프록시가 켜져 있는지 확인하세요.");
+    }
+    let body = null;
+    try {
+      body = JSON.parse(await response.text());
+    } catch {
+      // 아래에서 알린다.
+    }
+    if (!response.ok || !Array.isArray(body?.data)) {
+      throw new RoleplayError(502, `모델 목록을 받지 못했습니다(${response.status}).`);
+    }
+    const models = body.data
+      .filter((entry) => typeof entry?.id === "string" && entry.id.trim())
+      .map((entry) => ({
+        id: entry.id,
+        title: typeof entry.description === "string" && entry.description.trim() ? entry.description : entry.id,
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id));
+    return { models };
   }
 
   async callModel(requestBody, { url = this.apiURL, key, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {

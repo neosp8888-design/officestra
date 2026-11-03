@@ -248,6 +248,18 @@ test('manual start preloads without inference; stop unloads shared GUI and termi
   assert.equal(s.counts().starts,2);
 });
 
+test('unload frees a retained on-demand model without blocking the next request',async t=>{
+  const s=await fixture(t,{retainModels:true});
+  const a=await s.launch('claude','gui');
+  await(await a.post('FIRST')).text();
+  assert.equal(s.service.modelStatus(definition).loaded,true);
+  const status=await s.service.controlModel(definition,'unload');
+  assert.equal(status.loaded,false);assert.notEqual(status.state,'stopped');
+  assert.equal(s.counts().releases,1);
+  assert.equal((await a.post('AGAIN')).status,200);
+  assert.equal(s.counts().starts,2);
+});
+
 test('stop cancels active and queued shared requests, keeps endpoints, and reports unloaded only after release',async t=>{
   const reached=deferred(),releaseEntered=deferred(),finishRelease=deferred();
   t.after(()=>finishRelease.resolve());
