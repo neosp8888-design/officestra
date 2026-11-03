@@ -29,6 +29,7 @@
 - 백엔드 테스트 전체 — `python3 scripts/office-test.py --cwd backend --kind node -- node --test`
 - 백엔드 한 파일만 — `python3 scripts/office-test.py --cwd backend --kind node -- node --test test/<파일>`
 - Swift 테스트 — `python3 scripts/office-test.py --kind swift -- swift test` (필요한 `--filter` 등은 뒤에 그대로 붙인다.)
+- Rust 백엔드 테스트(독립 저장소 /Users/neo/office-rs) — `PATH="$HOME/.cargo/bin:$PATH" python3 scripts/office-test.py --cwd ../office-rs --kind cargo -- cargo test`
 - 반복적인 시작·통과 출력만 정리하며, 실패 상세·경고·건너뜀·TODO·개수 요약과 원래 종료 코드를 보존한다. 전체 원문은 출력에 안내된 로컬 로그에서 확인한다. 결과 뒤에 `tail`을 붙이지 않는다.
 - 스크립트나 Python이 없는 환경에서는 원래 `node --test` / `swift test`를 필터 없이 실행한다. `grep | tail`로 대체하면 실패 상세가 잘리고 실패 종료가 성공처럼 보일 수 있다.
 

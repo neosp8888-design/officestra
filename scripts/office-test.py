@@ -2,7 +2,7 @@
 """테스트 명령을 셸 없이 그대로 실행하고, 반복되는 성공·시작 줄과 색상·진행률만 걸러 보여 준다.
 
 사용법:
-  python3 scripts/office-test.py [--cwd DIR] --kind node|swift -- COMMAND [ARG...]
+  python3 scripts/office-test.py [--cwd DIR] --kind node|swift|cargo -- COMMAND [ARG...]
 
 - 자식의 종료 코드를 그대로 돌려준다. 신호로 끝나면 128+신호 번호다.
 - stdout·stderr를 합친 원문 전체를 0600 임시 로그에 남기고 마지막 줄에 경로를 적는다.
@@ -28,7 +28,7 @@ import threading
 import time
 from typing import BinaryIO, Callable, Optional
 
-USAGE = "사용법: python3 scripts/office-test.py [--cwd DIR] --kind node|swift -- COMMAND [ARG...]"
+USAGE = "사용법: python3 scripts/office-test.py [--cwd DIR] --kind node|swift|cargo -- COMMAND [ARG...]"
 EXIT_USAGE = 125
 EXIT_NOT_EXECUTABLE = 126
 EXIT_NOT_FOUND = 127
@@ -58,7 +58,15 @@ SWIFT_DROP_PATTERNS = (
     re.compile(r"^Test Suite '[^']+' (?:started|passed) at \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\.$"),
 )
 
-DROP_PATTERNS = {"node": NODE_DROP_PATTERNS, "swift": SWIFT_DROP_PATTERNS}
+# 통과한 시험 줄과 컴파일·실행 시작 줄만 지운다. 실패·무시(ignored)·"test result:" 요약은 남긴다.
+CARGO_DROP_PATTERNS = (
+    re.compile(r"^test \S+ \.\.\. ok$"),
+    re.compile(r"^\s+(?:Compiling|Checking|Downloading|Downloaded|Updating|Locking|Adding) .*$"),
+    re.compile(r"^\s+Running (?:unittests |tests/)?\S+ \(target/[^)]+\)$"),
+    re.compile(r"^\s+Doc-tests \S+$"),
+)
+
+DROP_PATTERNS = {"node": NODE_DROP_PATTERNS, "swift": SWIFT_DROP_PATTERNS, "cargo": CARGO_DROP_PATTERNS}
 
 
 class UsageError(Exception):
@@ -87,7 +95,7 @@ def parse_arguments(argv: list[str]) -> tuple[Optional[str], str, list[str]]:
             continue
         raise UsageError(f"알 수 없는 옵션입니다: {name}")
     if kind not in DROP_PATTERNS:
-        raise UsageError("--kind 는 node 또는 swift 여야 합니다.")
+        raise UsageError("--kind 는 node, swift, cargo 중 하나여야 합니다.")
     if cwd is not None and not os.path.isdir(cwd):
         raise UsageError(f"--cwd 폴더가 없습니다: {cwd}")
     return cwd, kind, command

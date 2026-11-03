@@ -185,6 +185,23 @@ class ProcessTests(unittest.TestCase):
         self.assertEqual(log.read_text("utf-8"), f"{work.resolve()}\n[1 / 2]\n")
         self.assertIn("전체 2줄 중 1줄 생략", output)
 
+    def test_cargo_kind_drops_passed_tests_and_keeps_summary(self) -> None:
+        code = """
+            print('   Compiling officestra-backend v0.1.0 (/tmp/backend-rs)')
+            print('     Running unittests src/main.rs (target/debug/deps/officestra_backend-abc)')
+            print('test tests::ok_case ... ok')
+            print('test tests::bad_case ... FAILED')
+            print('test tests::skipped ... ignored')
+            print('test result: FAILED. 1 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out')
+        """
+        result = run_wrapper("--kind", "cargo", "--", *self.python_child(code), env=self.env)
+        output = result.stdout.decode("utf-8")
+        for needed in ("bad_case ... FAILED", "skipped ... ignored", "test result: FAILED. 1 passed"):
+            self.assertIn(needed, output)
+        for dropped in ("Compiling", "Running unittests", "ok_case ... ok"):
+            self.assertNotIn(dropped, output)
+        self.assertIn("전체 6줄 중 3줄 생략", output)
+
     def test_stderr_is_kept_in_order_with_stdout(self) -> None:
         code = "import sys; print('out1', flush=True); print('err1', file=sys.stderr, flush=True); print('out2', flush=True)"
         result = run_wrapper("--kind", "node", "--", *self.python_child(code), env=self.env)
