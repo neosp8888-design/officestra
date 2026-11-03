@@ -1,0 +1,45 @@
+[package]
+name = "officestra-backend"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = { version = "0.8.9", features = ["ws"] }
+# 리스 프리셋(.risup)의 gzip 풀기. 순수 Rust(miniz_oxide) 구현을 쓴다.
+flate2 = "1.1"
+futures-util = "0.3"
+libc = "0.2"
+# 터미널 세션의 Claude 기록·Antigravity 대화 파일 감시. Node fs.watch처럼 macOS FSEvents를 쓴다.
+notify = "8.2.1"
+# Node와 같은 onnxruntime-node 1.24 라이브러리를 실행 시점에 읽는다. 빌드 때 바이너리를 내려받지 않는다.
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "load-dynamic", "api-24"] }
+regex = "1"
+# 리스 정규식 스크립트를 JS RegExp 문법·의미(뒤보기·이름 그룹·Annex B) 그대로 돌린다. u 플래그가 없으면 UTF-16 단위로 찾는다.
+regress = { version = "0.12", features = ["utf16"] }
+# 리스 프리셋의 AES-256-GCM 해독. rustls가 이미 쓰는 판을 직접 쓴다.
+ring = "0.17"
+# 모델 파일 내려받기. TLS는 sqlx가 이미 쓰는 ring 기반 rustls를 그대로 쓴다.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+# rustls-no-provider는 공급자를 직접 설치해야 한다. 이미 트리에 있는 판의 ring 공급자를 설치하려고 직접 의존한다.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+# sqlx 0.9가 잠금 파일에 libsqlite3-sys 0.37을 두므로 같은 판을 쓰는 rusqlite에 맞춘다.
+rusqlite = { version = "0.39", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order", "float_roundtrip"] }
+sha2 = "0.11.1"
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "json", "derive"] }
+tokio = { version = "1.54.1", features = ["full"] }
+# Slack 소켓 모드 wss의 TLS. 이미 잠금 파일에 있는 판을 ring 공급자로 쓴다.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+# Slack 소켓 모드 웹소켓 핸드셰이크. axum ws가 쓰는 판과 같다. TLS는 위 tokio-rustls로 직접 연다.
+tokio-tungstenite = "0.29"
+# bge-m3 tokenizer.json의 Replace 정규식은 순수 Rust fancy-regex로 처리한다.
+tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"] }
+unicode-normalization = "0.1"
+url = "2"
+# Slack wss 인증서 확인용 Mozilla 인증서 묶음. Node가 내장한 루트 인증서와 같은 출처다.
+webpki-roots = "1.0"
+
+[dev-dependencies]
+http-body-util = "0.1.5"
+tower = { version = "0.5.3", features = ["util"] }

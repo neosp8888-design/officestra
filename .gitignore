@@ -13,6 +13,8 @@ dist/
 *.sqlite
 *.sqlite3
 backend/node_modules/
+backend-rs/target/
+backend-rs/**/__pycache__/
 backend/.env
 backend/src/voice/refs/
 backend/src/voice/__pycache__/

@@ -1,0 +1,10 @@
+{
+  "description": "2026-09-05 local conversation steps 4318-4343. User text and tool bodies are anonymized; step indices, statuses and progress-message sequence are preserved.",
+  "snapshots": [
+    [{"idx":4295,"kind":"user","text":"반영된 작업을 확인해줘"}, {"idx":4318,"kind":"assistant","text":"테스트 빌드 및 실행 중입니다. 잠시 기다려 주세요."}],
+    [{"idx":4319,"kind":"user","text":"결과를 설명해줘"}, {"idx":4323,"kind":"tool","status":7}, {"idx":4329,"kind":"assistant","text":"테스트 결과를 확인하고 있습니다. 잠시 기다려 주세요."}],
+    [{"idx":4330,"kind":"notification"}, {"idx":4332,"kind":"tool"}, {"idx":4335,"kind":"assistant","text":"결과를 취합 중입니다. 잠시만 기다려 주세요."}],
+    [{"idx":4336,"kind":"notification"}, {"idx":4338,"kind":"tool"}, {"idx":4341,"kind":"assistant","text":"거의 다 되었습니다. 잠시 기다려 주세요."}],
+    [{"idx":4342,"kind":"notification"}, {"idx":4343,"kind":"assistant","text":"작업 반영과 테스트 결과를 확인했습니다. 이것이 실제 마지막 응답입니다."}]
+  ]
+}

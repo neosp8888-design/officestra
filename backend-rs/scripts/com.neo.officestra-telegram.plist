@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.neo.officestra-telegram</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/neo/Library/Application Support/OFFICESTRA/bin/officestra-telegram</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/neo/office</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>20</integer>
+  <key>StandardOutPath</key><string>/Users/neo/Library/Logs/officestra-telegram.log</string>
+  <key>StandardErrorPath</key><string>/Users/neo/Library/Logs/officestra-telegram.error.log</string>
+</dict>
+</plist>
