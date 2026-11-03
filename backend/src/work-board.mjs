@@ -388,7 +388,7 @@ const typedTransitions = {
 };
 
 // 원격이 없는 별도 저장소라 푸시 SHA가 생기지 않는 프로젝트다.
-const NO_REMOTE_PROJECT_KEYS = new Set(["toss-trading", "one-click-studio"]);
+const NO_REMOTE_PROJECT_KEYS = new Set(["toss-trading", "one-click-studio", "office-rust"]);
 
 function requireDeliveryEvidence(project, ticket) {
   if (!NO_REMOTE_PROJECT_KEYS.has(project.projectKey) && ticket.state === "done"
