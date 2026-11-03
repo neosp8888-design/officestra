@@ -12,7 +12,16 @@ import sys
 from pathlib import Path
 
 
-IDENTITY_FORMAT = b"OFFICESTRA_BACKEND_RELEASE_ID_V2\0"
+IDENTITY_FORMAT = b"OFFICESTRA_BACKEND_RELEASE_ID_V3\0"
+# Rust backend executables and the ONNX Runtime library they load. Like Node,
+# the identity uses the pre-signing SHA256 and post-signing CDHash records so
+# timestamped signature containers do not change it.
+RUST_RUNTIME_FILES = (
+    "officestra-backend",
+    "officestra-terminal-hook",
+    "officestra-voice-follow",
+    "libonnxruntime.dylib",
+)
 REQUIRED_FILES = (
     "OFFICESTRARuntime/backend/package.json",
     "OFFICESTRARuntime/backend/package-lock.json",
@@ -21,10 +30,13 @@ REQUIRED_FILES = (
     "OFFICESTRARuntime/node/VERSION",
     "OFFICESTRARuntime/node/CDHASH",
     "OFFICESTRARuntime/node/ENTITLEMENTS.plist",
+    "OFFICESTRARuntime/rust/SHA256",
+    "OFFICESTRARuntime/rust/CDHASH",
     "OfficeLLM_OfficeCore.bundle/characters.json",
 )
 REQUIRED_PRESENT_FILES = (
     "OFFICESTRARuntime/node/bin/node",
+    *(f"OFFICESTRARuntime/rust/bin/{name}" for name in RUST_RUNTIME_FILES),
 )
 REQUIRED_TREES = (
     "OFFICESTRARuntime/backend/src",
@@ -192,6 +204,51 @@ def verify_node_signature_metadata(app_bundle: Path) -> None:
         )
 
 
+def rust_runtime_records(path: Path, digest_pattern: str) -> dict[str, str]:
+    """Read `<digest>  <name>` lines and require exactly RUST_RUNTIME_FILES."""
+    records: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = re.fullmatch(rf"({digest_pattern})  (\S+)", line)
+        if match is None or match.group(2) in records:
+            raise ReleaseIdentityError(f"Bundled Rust record is malformed: {path}")
+        records[match.group(2)] = match.group(1).lower()
+    if set(records) != set(RUST_RUNTIME_FILES):
+        raise ReleaseIdentityError(
+            f"Bundled Rust record does not list the packaged files: {path}"
+        )
+    return records
+
+
+def verify_rust_signature_metadata(app_bundle: Path) -> None:
+    rust_root = (
+        app_bundle
+        / "Contents"
+        / "Resources"
+        / "OFFICESTRARuntime"
+        / "rust"
+    )
+    rust_runtime_records(rust_root / "SHA256", r"[0-9a-f]{64}")
+    expected_cdhashes = rust_runtime_records(rust_root / "CDHASH", r"[0-9a-fA-F]+")
+    for name, expected_cdhash in expected_cdhashes.items():
+        executable = rust_root / "bin" / name
+        subprocess.run(
+            ["/usr/bin/codesign", "--verify", "--strict", str(executable)],
+            check=True,
+            capture_output=True,
+        )
+        details = subprocess.run(
+            ["/usr/bin/codesign", "-d", "--verbose=4", str(executable)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        match = re.search(r"(?m)^CDHash=([0-9a-fA-F]+)$", details.stderr)
+        if match is None or match.group(1).lower() != expected_cdhash:
+            raise ReleaseIdentityError(
+                f"Bundled Rust CDHash metadata does not match signature: {name}"
+            )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("app_bundle", type=Path)
@@ -203,7 +260,7 @@ def main() -> int:
     parser.add_argument(
         "--verify-node-signature",
         action="store_true",
-        help="also compare the signed Node executable with packaged metadata",
+        help="also compare the signed Node and Rust executables with packaged metadata",
     )
     arguments = parser.parse_args()
     try:
@@ -214,6 +271,7 @@ def main() -> int:
         )
         if arguments.verify_node_signature:
             verify_node_signature_metadata(arguments.app_bundle)
+            verify_rust_signature_metadata(arguments.app_bundle)
     except (
         OSError,
         plistlib.InvalidFileException,

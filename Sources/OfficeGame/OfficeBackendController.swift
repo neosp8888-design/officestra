@@ -71,6 +71,22 @@ enum OfficeBackendRuntimeLocation {
         }
         return workdir.appending(path: "backend")
     }
+
+    /// 번들 런타임의 Rust 백엔드 실행 파일. 백엔드 폴더 옆 rust/bin에 실행 가능한 파일이 있을 때만 돌려주고,
+    /// 없으면 nil이라 실행기는 Node 백엔드를 띄운다(개발 실행·Rust 없는 번들).
+    static func rustExecutable(
+        backendDirectoryURL: URL,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        let executable = backendDirectoryURL
+            .deletingLastPathComponent()
+            .appending(path: "rust")
+            .appending(path: "bin")
+            .appending(path: "officestra-backend")
+        return fileManager.isExecutableFile(atPath: executable.path)
+            ? executable
+            : nil
+    }
 }
 
 struct OfficeBackendLaunchCommand: Equatable {
@@ -97,9 +113,12 @@ enum OfficeBackendLaunchCommands {
         )
     }
 
+    /// rustExecutableURL이 있으면 Rust 백엔드를, 없으면 Node `src/server.mjs`를 띄운다.
+    /// Rust도 Node 실행 파일을 받는다(Antigravity Playwright 드라이버와 결과 도구가 Node로 돈다).
     static func start(
         configuration: OfficeBackendLaunchConfiguration,
         nodeExecutableURL: URL,
+        rustExecutableURL: URL? = nil,
         standardOutputURL: URL? = nil,
         standardErrorURL: URL? = nil,
         executableSearchPaths: [String] = []
@@ -139,6 +158,23 @@ enum OfficeBackendLaunchCommands {
         let prepareLogs = logDirectories.isEmpty
             ? ""
             : "mkdir -p \(quotedLogDirectories); "
+        // Node는 모듈 위치로 마이그레이션·결과 도구를 찾지만 Rust는 번들 경로를 환경 변수로 받는다.
+        let backendExecution: String
+        if let rustExecutableURL {
+            let runtimeRoot = configuration.backendDirectoryURL
+                .deletingLastPathComponent()
+            backendExecution = "export OFFICE_MIGRATIONS_DIR="
+                + "\(shellQuoted(runtimeRoot.appending(path: "database/migrations").path)); "
+                + "export OFFICE_RESULT_TOOL_DIR="
+                + "\(shellQuoted(configuration.backendDirectoryURL.appending(path: "src").path)); "
+                + "export OFFICE_NODE_EXECUTABLE="
+                + "\(shellQuoted(nodeExecutableURL.path)); "
+                + "cd \(shellQuoted(configuration.backendDirectoryURL.path)); "
+                + "exec \(shellQuoted(rustExecutableURL.path))"
+        } else {
+            backendExecution = "cd \(shellQuoted(configuration.backendDirectoryURL.path)); "
+                + "exec \(shellQuoted(nodeExecutableURL.path)) src/server.mjs"
+        }
         let command = "umask 077; \(prepareLogs)"
             + "export PATH=\(shellQuoted(path)); "
             + "export OFFICE_WORKDIR=\(shellQuoted(configuration.workdir.path)); "
@@ -146,8 +182,7 @@ enum OfficeBackendLaunchCommands {
             + "\(shellQuoted(configuration.releaseID)); "
             + "export CHARACTER_CONFIG_PATH="
             + "\(shellQuoted(configuration.runtimeConfigurationURL.path)); "
-            + "cd \(shellQuoted(configuration.backendDirectoryURL.path)); "
-            + "exec \(shellQuoted(nodeExecutableURL.path)) src/server.mjs"
+            + backendExecution
             + outputRedirect
             + errorRedirect
         return OfficeBackendLaunchCommand(
@@ -273,6 +308,9 @@ final class OfficeBackendController: ObservableObject {
                             configuration: configuration,
                             nodeExecutableURL: nodeExecutableURL(
                                 configuration: configuration
+                            ),
+                            rustExecutableURL: OfficeBackendRuntimeLocation.rustExecutable(
+                                backendDirectoryURL: configuration.backendDirectoryURL
                             ),
                             standardOutputURL: logURL(
                                 named: "backend.out.log",

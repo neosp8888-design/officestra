@@ -40,6 +40,19 @@ class BackendReleaseIdentityTests(unittest.TestCase):
             "OFFICESTRARuntime/node/ENTITLEMENTS.plist": plistlib.dumps(
                 {"com.apple.security.cs.allow-jit": True}
             ),
+            "OFFICESTRARuntime/rust/SHA256": b"".join(
+                hashlib.sha256(name.encode()).hexdigest().encode()
+                + b"  " + name.encode() + b"\n"
+                for name in MODULE.RUST_RUNTIME_FILES
+            ),
+            "OFFICESTRARuntime/rust/CDHASH": b"".join(
+                b"0123456789abcdef  " + name.encode() + b"\n"
+                for name in MODULE.RUST_RUNTIME_FILES
+            ),
+            **{
+                f"OFFICESTRARuntime/rust/bin/{name}": name.encode()
+                for name in MODULE.RUST_RUNTIME_FILES
+            },
             "OfficeLLM_OfficeCore.bundle/characters.json": b'{"workdir":"/tmp/project"}\n',
         }
         for relative, content in fixture_files.items():
@@ -66,6 +79,8 @@ class BackendReleaseIdentityTests(unittest.TestCase):
             "OFFICESTRARuntime/node/VERSION",
             "OFFICESTRARuntime/node/CDHASH",
             "OFFICESTRARuntime/node/ENTITLEMENTS.plist",
+            "OFFICESTRARuntime/rust/SHA256",
+            "OFFICESTRARuntime/rust/CDHASH",
             "OfficeLLM_OfficeCore.bundle/characters.json",
         )
         original = MODULE.calculate_release_id(self.app)
@@ -82,9 +97,41 @@ class BackendReleaseIdentityTests(unittest.TestCase):
 
     def test_signing_container_bytes_do_not_change_stable_identity(self) -> None:
         original = MODULE.calculate_release_id(self.app)
-        node = self.resources / "OFFICESTRARuntime/node/bin/node"
-        node.write_bytes(node.read_bytes() + b"timestamped-cms-signature")
+        for relative in (
+            "OFFICESTRARuntime/node/bin/node",
+            *(f"OFFICESTRARuntime/rust/bin/{name}" for name in MODULE.RUST_RUNTIME_FILES),
+        ):
+            path = self.resources / relative
+            path.write_bytes(path.read_bytes() + b"timestamped-cms-signature")
         self.assertEqual(MODULE.calculate_release_id(self.app), original)
+
+    def test_rust_runtime_is_required(self) -> None:
+        for name in MODULE.RUST_RUNTIME_FILES:
+            with self.subTest(name=name):
+                path = self.resources / "OFFICESTRARuntime/rust/bin" / name
+                before = path.read_bytes()
+                path.unlink()
+                with self.assertRaises(MODULE.ReleaseIdentityError):
+                    MODULE.calculate_release_id(self.app)
+                path.write_bytes(before)
+
+    def test_rust_records_must_list_each_packaged_file_once(self) -> None:
+        record = self.resources / "OFFICESTRARuntime/rust/CDHASH"
+        records = MODULE.rust_runtime_records(record, r"[0-9a-fA-F]+")
+        self.assertEqual(set(records), set(MODULE.RUST_RUNTIME_FILES))
+        original = record.read_bytes()
+        lines = original.splitlines(keepends=True)
+        for broken in (
+            b"".join(lines[1:]),
+            original + lines[0],
+            original.replace(b"  ", b" ", 1),
+            original + b"0123  officestra-extra\n",
+        ):
+            with self.subTest(broken=broken):
+                record.write_bytes(broken)
+                with self.assertRaises(MODULE.ReleaseIdentityError):
+                    MODULE.rust_runtime_records(record, r"[0-9a-fA-F]+")
+        record.write_bytes(original)
 
     def test_verification_uses_embedded_info_plist_value(self) -> None:
         release_id = MODULE.calculate_release_id(self.app)

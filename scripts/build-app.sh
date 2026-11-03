@@ -9,6 +9,11 @@ APP_BUNDLE="$DIST_DIR/OFFICESTRA.app"
 NODE_ENTITLEMENTS="$PROJECT_DIR/scripts/node-runtime.entitlements"
 BACKEND_RELEASE_ID_TOOL="$PROJECT_DIR/scripts/backend-release-id.py"
 PACKAGED_EMBEDDING_SMOKE="$PROJECT_DIR/scripts/smoke-test-packaged-embedding.mjs"
+PACKAGED_RUST_EMBEDDING_SMOKE="$PROJECT_DIR/scripts/smoke-test-packaged-rust-embedding.mjs"
+# Rust 백엔드는 OFFICESTRA 옆 독립 저장소에서 빌드한다. 번들에 Rust가 있으면 앱은 Node 대신 이것을 띄운다.
+RUST_PROJECT_DIR="$PROJECT_DIR/../office-rs"
+# Rust 백엔드가 같은 폴더에서 찾는 실행 파일들(터미널 훅·음성 따라 읽기)과 백엔드 본체.
+RUST_EXECUTABLES=(officestra-backend officestra-terminal-hook officestra-voice-follow)
 
 cd "$PROJECT_DIR"
 HOST_ARCHITECTURE="$(/usr/bin/uname -m)"
@@ -54,6 +59,38 @@ if [[ ! -f "$NODE_PREFIX/LICENSE" ]]; then
     print -u2 "Node 라이선스 파일을 찾을 수 없습니다. $NODE_PREFIX/LICENSE"
     exit 1
 fi
+
+if [[ ! -f "$RUST_PROJECT_DIR/Cargo.toml" || ! -f "$RUST_PROJECT_DIR/Cargo.lock" ]]; then
+    print -u2 "Rust 백엔드 저장소를 찾을 수 없습니다. $RUST_PROJECT_DIR"
+    exit 1
+fi
+RUST_PROJECT_DIR="$(cd "$RUST_PROJECT_DIR" && pwd)"
+CARGO_EXECUTABLE="$(command -v cargo || true)"
+if [[ -z "$CARGO_EXECUTABLE" && -x "$HOME/.cargo/bin/cargo" ]]; then
+    CARGO_EXECUTABLE="$HOME/.cargo/bin/cargo"
+fi
+if [[ ! -x "$CARGO_EXECUTABLE" ]]; then
+    print -u2 "Rust 백엔드를 빌드할 cargo를 찾을 수 없습니다."
+    exit 1
+fi
+# 잠금 파일 그대로, 받아 둔 의존성만으로 빌드한다. 패닉 위치 문자열에 빌드 머신
+# 홈 경로가 남지 않도록 홈을 ~로 바꿔 기록한다(배포 안전 검사가 /Users/이름을 막는다).
+RUST_TARGET_DIR="$RUST_PROJECT_DIR/target"
+RUSTFLAGS="--remap-path-prefix=$HOME=~" \
+    "$CARGO_EXECUTABLE" build \
+    --release \
+    --locked \
+    --offline \
+    --bins \
+    --manifest-path "$RUST_PROJECT_DIR/Cargo.toml" \
+    --target-dir "$RUST_TARGET_DIR"
+RUST_BIN_DIR="$RUST_TARGET_DIR/release"
+for rust_executable in $RUST_EXECUTABLES; do
+    if [[ ! -x "$RUST_BIN_DIR/$rust_executable" ]]; then
+        print -u2 "Rust 빌드 결과가 없습니다. $RUST_BIN_DIR/$rust_executable"
+        exit 1
+    fi
+done
 
 # 병합으로 제거된 프레임워크 참조가 증분 산출물에 남지 않도록 배포 빌드를 깨끗하게 시작한다.
 swift package clean
@@ -120,6 +157,11 @@ if [[ ! -f "$PACKAGED_EMBEDDING_SMOKE" ]]; then
         "패키지 임베딩 스모크 테스트가 없습니다. $PACKAGED_EMBEDDING_SMOKE"
     exit 1
 fi
+if [[ ! -f "$PACKAGED_RUST_EMBEDDING_SMOKE" ]]; then
+    print -u2 \
+        "패키지 Rust 임베딩 스모크 테스트가 없습니다. $PACKAGED_RUST_EMBEDDING_SMOKE"
+    exit 1
+fi
 
 mkdir -p "$DIST_DIR"
 STAGING_ROOT="$(mktemp -d "$DIST_DIR/.officestra-build.XXXXXX")"
@@ -130,6 +172,7 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 RUNTIME_DIR="$RESOURCES_DIR/OFFICESTRARuntime"
 BACKEND_RUNTIME_DIR="$RUNTIME_DIR/backend"
 NODE_RUNTIME_DIR="$RUNTIME_DIR/node"
+RUST_RUNTIME_DIR="$RUNTIME_DIR/rust"
 
 cleanup() {
     if [[ -d "$STAGING_ROOT" ]]; then
@@ -176,6 +219,7 @@ mkdir -p \
     "$RUNTIME_DIR/database/migrations" \
     "$RUNTIME_DIR/infra" \
     "$NODE_RUNTIME_DIR/bin" \
+    "$RUST_RUNTIME_DIR/bin" \
     "$RUNTIME_DIR/licenses"
 /usr/bin/rsync \
     -a \
@@ -204,6 +248,9 @@ cp "$NODE_ENTITLEMENTS" "$NODE_RUNTIME_DIR/ENTITLEMENTS.plist"
 cp "$NODE_PREFIX/LICENSE" "$RUNTIME_DIR/licenses/Node-LICENSE"
 cp "$PROJECT_DIR/LICENSE" "$RUNTIME_DIR/licenses/OFFICESTRA-LICENSE"
 cp "$PROJECT_DIR/Vendor/SwiftTerm/LICENSE" "$RUNTIME_DIR/licenses/SwiftTerm-LICENSE"
+for rust_executable in $RUST_EXECUTABLES; do
+    cp "$RUST_BIN_DIR/$rust_executable" "$RUST_RUNTIME_DIR/bin/$rust_executable"
+done
 
 canonical_architectures() {
     /usr/bin/lipo -archs "$1" \
@@ -223,6 +270,28 @@ if [[ "$APP_ARCHITECTURES" != "arm64" ]]; then
         "OFFICESTRA v1.3.2부터 Apple Silicon arm64만 지원합니다. 현재: $APP_ARCHITECTURES"
     exit 1
 fi
+# Node와 같이 Rust 실행 파일도 시스템 라이브러리 밖의 dylib에 기대면 번들에서 시작할 수 없다.
+# ONNX Runtime은 링크하지 않고 실행 중에 옆의 libonnxruntime.dylib을 연다.
+for rust_executable in $RUST_EXECUTABLES; do
+    RUST_ARCHITECTURES="$(canonical_architectures "$RUST_RUNTIME_DIR/bin/$rust_executable")"
+    if [[ "$RUST_ARCHITECTURES" != "$APP_ARCHITECTURES" ]]; then
+        print -u2 "앱과 번들 Rust 아키텍처가 일치하지 않습니다. $rust_executable=$RUST_ARCHITECTURES"
+        exit 1
+    fi
+    EXTERNAL_RUST_DEPENDENCIES="$(
+        /usr/bin/otool -L "$RUST_RUNTIME_DIR/bin/$rust_executable" \
+            | /usr/bin/awk '
+                NR > 1 && $1 !~ "^/System/Library/" && $1 !~ "^/usr/lib/" {
+                    print $1
+                }
+            '
+    )"
+    if [[ -n "$EXTERNAL_RUST_DEPENDENCIES" ]]; then
+        print -u2 "Rust 실행 파일이 앱에 없는 동적 라이브러리에 의존합니다. $rust_executable"
+        print -u2 "$EXTERNAL_RUST_DEPENDENCIES"
+        exit 1
+    fi
+done
 
 npm \
     --prefix "$BACKEND_RUNTIME_DIR" \
@@ -241,6 +310,9 @@ ORT_NATIVE_ROOT="$BACKEND_RUNTIME_DIR/node_modules/onnxruntime-node/bin/napi-v6"
 ORT_NATIVE_DIR="$ORT_NATIVE_ROOT/darwin/arm64"
 ORT_DYLIB="$ORT_NATIVE_DIR/libonnxruntime.1.24.3.dylib"
 ORT_BINDING="$ORT_NATIVE_DIR/onnxruntime_binding.node"
+# Rust 임베딩 워커는 실행 파일 옆 libonnxruntime.dylib을 연다. Node와 같은 1.24.3을 쓴다.
+RUST_ORT_DYLIB="$RUST_RUNTIME_DIR/bin/libonnxruntime.dylib"
+cp "$ORT_DYLIB" "$RUST_ORT_DYLIB"
 "$NODE_EXECUTABLE" \
     "$PROJECT_DIR/scripts/generate-third-party-notices.mjs" \
     "$BACKEND_RUNTIME_DIR/package-lock.json" \
@@ -265,6 +337,10 @@ for packaged_runtime_path in \
     "$NODE_RUNTIME_DIR/SHA256" \
     "$NODE_RUNTIME_DIR/VERSION" \
     "$NODE_RUNTIME_DIR/ENTITLEMENTS.plist" \
+    "$RUST_RUNTIME_DIR/bin/officestra-backend" \
+    "$RUST_RUNTIME_DIR/bin/officestra-terminal-hook" \
+    "$RUST_RUNTIME_DIR/bin/officestra-voice-follow" \
+    "$RUST_ORT_DYLIB" \
     "$RUNTIME_DIR/licenses/Node-LICENSE" \
     "$RUNTIME_DIR/licenses/THIRD-PARTY-NOTICES.md"; do
     if [[ ! -e "$packaged_runtime_path" ]]; then
@@ -311,6 +387,17 @@ chmod 755 "$NODE_RUNTIME_DIR/bin/node"
 # SwiftPM release 산출물의 DWARF에는 빌드 머신의 절대 소스 경로가 남으므로
 # 배포 번들에 넣기 전에 디버그 심볼을 제거한다.
 /usr/bin/strip -S "$MACOS_DIR/OfficeLLM"
+for rust_executable in $RUST_EXECUTABLES; do
+    # strip은 파일을 새로 써 umask를 따르므로 권한은 그 뒤에 준다.
+    /usr/bin/strip -S "$RUST_RUNTIME_DIR/bin/$rust_executable"
+    chmod 755 "$RUST_RUNTIME_DIR/bin/$rust_executable"
+done
+# Node처럼 서명 전 SHA256과 서명 후 CDHash를 기록한다. 릴리스 식별자는 이 두 기록만
+# 해시하므로 시각이 들어가는 서명 컨테이너가 바뀌어도 흔들리지 않는다.
+(
+    cd "$RUST_RUNTIME_DIR/bin"
+    /usr/bin/shasum -a 256 $RUST_EXECUTABLES libonnxruntime.dylib
+) > "$RUST_RUNTIME_DIR/SHA256"
 CODESIGN_IDENTITY="${OFFICESTRA_CODESIGN_IDENTITY:--}"
 if [[ "$CODESIGN_IDENTITY" == "-" ]]; then
     codesign \
@@ -345,6 +432,31 @@ else
         --sign "$CODESIGN_IDENTITY" \
         "$ORT_BINDING"
 fi
+
+for rust_file in $RUST_EXECUTABLES libonnxruntime.dylib; do
+    if [[ "$CODESIGN_IDENTITY" == "-" ]]; then
+        codesign --force --sign - "$RUST_RUNTIME_DIR/bin/$rust_file"
+    else
+        codesign \
+            --force \
+            --options runtime \
+            --timestamp \
+            --sign "$CODESIGN_IDENTITY" \
+            "$RUST_RUNTIME_DIR/bin/$rust_file"
+    fi
+done
+for rust_file in $RUST_EXECUTABLES libonnxruntime.dylib; do
+    RUST_CDHASH="$(
+        codesign -d --verbose=4 "$RUST_RUNTIME_DIR/bin/$rust_file" 2>&1 \
+            | /usr/bin/sed -n 's/^CDHash=//p' \
+            | /usr/bin/head -n 1
+    )"
+    if [[ -z "$RUST_CDHASH" ]]; then
+        print -u2 "번들 Rust CDHash를 읽지 못했습니다. $rust_file"
+        exit 1
+    fi
+    /usr/bin/printf '%s  %s\n' "$RUST_CDHASH" "$rust_file"
+done > "$RUST_RUNTIME_DIR/CDHASH"
 
 # Developer ID 재서명에서 기존 Node 배포본의 광범위한 entitlement를 무작정
 # 보존하지 않는다. V8 JIT에 필요한 두 권한만 남았는지 서명 결과를 정확히
@@ -412,6 +524,9 @@ if (value !== 250000) {
 "$NODE_RUNTIME_DIR/bin/node" \
     "$PACKAGED_EMBEDDING_SMOKE" \
     "$BACKEND_RUNTIME_DIR"
+"$NODE_RUNTIME_DIR/bin/node" \
+    "$PACKAGED_RUST_EMBEDDING_SMOKE" \
+    "$RUNTIME_DIR"
 
 # 서명된 Node를 포함해 최종 번들에서 백엔드가 실제로 읽는 파일만 해시한다.
 # Info.plist 자체는 순환 입력이므로 제외하고 계산한 값을 주입한 뒤 재계산한다.

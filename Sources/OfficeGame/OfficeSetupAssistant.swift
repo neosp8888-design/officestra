@@ -1394,6 +1394,9 @@ enum OfficeSetupAssistant {
         let start = OfficeBackendLaunchCommands.start(
             configuration: launchConfiguration,
             nodeExecutableURL: layout.nodeExecutable,
+            rustExecutableURL: OfficeBackendRuntimeLocation.rustExecutable(
+                backendDirectoryURL: layout.backendDirectory
+            ),
             standardOutputURL: layout.standardOutputLog,
             standardErrorURL: layout.standardErrorLog,
             executableSearchPaths: executablePaths.values.map {

@@ -105,9 +105,12 @@ def main() -> int:
                 continue
             seen.add(path)
             relative = path.as_posix()
+            # Third-party prebuilt binaries keep their vendors' build paths. The
+            # Rust ONNX Runtime library is a copy of the onnxruntime-node one.
             if (
                 "/OFFICESTRARuntime/node/" in relative
                 or "/node_modules/" in relative
+                or relative.endswith("/OFFICESTRARuntime/rust/bin/libonnxruntime.dylib")
             ):
                 continue
             try:
