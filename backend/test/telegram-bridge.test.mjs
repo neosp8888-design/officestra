@@ -74,7 +74,7 @@ test('staff menu uses real employee IDs; callbacks select employee and answer sp
 test('dispatch persists receipt before POST, preserves multiline prompt and resumes same employee conversation', async () => {
   const f = fixture();
   await f.bridge.receive(message(1, '클대리: 첫 줄\n둘째 줄'));
-  assert.deepEqual(f.jobs[0], { characterId: 'left-man', senderCharacterId: 'boss', requestSource: 'remote', prompt: '첫 줄\n둘째 줄' });
+  assert.deepEqual(f.jobs[0], { characterId: 'left-man', requestSource: 'remote', prompt: '첫 줄\n둘째 줄' });
   assert.ok(f.saved.some(s => s.offset === 2 && Object.values(s.pending)[0]?.stage === 'launching'));
   await f.bridge.receive(message(1, 'duplicate'));
   assert.equal(f.jobs.length, 1);

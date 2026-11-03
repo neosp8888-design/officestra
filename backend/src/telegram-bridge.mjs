@@ -194,7 +194,7 @@ export function createTelegramBridge({ state, persist, telegram, backend, logger
         return;
       }
       const job = await backend('/api/agent-jobs', {
-        characterId: target, senderCharacterId: 'boss', requestSource: 'remote', prompt,
+        characterId: target, requestSource: 'remote', prompt,
         ...(local.conversations[target] ? { conversationId: local.conversations[target] } : {}),
       });
       if (!job.turnId || !job.conversationId) throw new Error('Invalid job response');
