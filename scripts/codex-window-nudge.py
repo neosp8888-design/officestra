@@ -16,7 +16,7 @@ import tempfile
 from urllib import request
 
 
-CODEX = "/Users/neo/.nvm/versions/node/v24.14.0/bin/codex"
+CODEX = "/Users/neo/.nvm/versions/node/v24.22.1/bin/codex"
 MODEL = "gpt-6-luna"
 PROMPT = "Reply exactly OK. Do not use tools."
 STATE_PATH = Path.home() / "Library/Application Support/OFFICESTRA/codex-window-nudge.json"

@@ -17,8 +17,8 @@ from urllib import error, request
 BASE_URL = "http://127.0.0.1:4317"
 CHARACTER_ID = "left-woman"
 PROMPT = "Reply OK."
-CLAUDE = "/Users/neo/.nvm/versions/node/v24.14.0/bin/claude"
-CODEX = "/Users/neo/.nvm/versions/node/v24.14.0/bin/codex"
+CLAUDE = "/Users/neo/.nvm/versions/node/v24.22.1/bin/claude"
+CODEX = "/Users/neo/.nvm/versions/node/v24.22.1/bin/codex"
 RECOVERY_SCHEMA = Path(__file__).with_name("claude-window-recovery.schema.json")
 INTERVAL = dt.timedelta(hours=5, minutes=1)
 RESET_MARGIN = dt.timedelta(minutes=1)
