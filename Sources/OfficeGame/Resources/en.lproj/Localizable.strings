@@ -878,3 +878,5 @@
 "반영됨" = "Delivered";
 "전달 못 함" = "Not delivered";
 "이 끼어들기는 업무에 전달되지 않았습니다. 다음 턴으로 다시 보내세요." = "This interjection didn't reach the task. Send it again for the next turn.";
+"암호 입력" = "Enter password";
+"암호" = "Password";

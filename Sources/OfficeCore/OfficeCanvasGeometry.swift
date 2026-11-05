@@ -116,6 +116,22 @@ public enum OfficeInteractionGeometry {
             ? CGRect(x: 590, y: 95, width: 140, height: 290)
             : fallback
     }
+
+    /// 바닥 화분 두 개(화이트보드 아래, 오른쪽 벽 큰 화분). 숨긴 기능 암호창을 여는 자리다.
+    public static func plantHitboxes(artStyle: OfficeArtStyle) -> [CGRect] {
+        switch artStyle {
+        case .twoD:
+            return [
+                CGRect(x: 135, y: 565, width: 110, height: 145),
+                CGRect(x: 1_240, y: 372, width: 150, height: 280)
+            ]
+        case .threeD:
+            return [
+                CGRect(x: 140, y: 565, width: 105, height: 135),
+                CGRect(x: 1_243, y: 388, width: 125, height: 225)
+            ]
+        }
+    }
 }
 
 public enum OfficeWhiteboardGeometry {

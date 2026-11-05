@@ -28,6 +28,7 @@ final class SpeechBubbleBehaviorTests: XCTestCase {
                 onMonitorTapped: { _ in },
                 onArchiveCabinetTapped: {},
                 onWhiteboardTapped: {},
+                onPlantDoubleTapped: {},
                 onBubbleTapped: { _, _ in }
             )
             .equatable()

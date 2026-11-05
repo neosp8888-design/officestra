@@ -91,6 +91,7 @@ struct CharacterInteractionLayer: View, Equatable {
     let onMonitorTapped: (OfficeCharacter) -> Void
     let onArchiveCabinetTapped: () -> Void
     let onWhiteboardTapped: () -> Void
+    let onPlantDoubleTapped: () -> Void
     let onBubbleTapped: (OfficeCharacter, String) -> Void
 
     init(
@@ -99,6 +100,7 @@ struct CharacterInteractionLayer: View, Equatable {
         onMonitorTapped: @escaping (OfficeCharacter) -> Void,
         onArchiveCabinetTapped: @escaping () -> Void,
         onWhiteboardTapped: @escaping () -> Void,
+        onPlantDoubleTapped: @escaping () -> Void,
         onBubbleTapped: @escaping (OfficeCharacter, String) -> Void
     ) {
         speechBubbleStore = director.speechBubbleStore
@@ -115,6 +117,7 @@ struct CharacterInteractionLayer: View, Equatable {
         self.onMonitorTapped = onMonitorTapped
         self.onArchiveCabinetTapped = onArchiveCabinetTapped
         self.onWhiteboardTapped = onWhiteboardTapped
+        self.onPlantDoubleTapped = onPlantDoubleTapped
         self.onBubbleTapped = onBubbleTapped
     }
 
@@ -136,6 +139,14 @@ struct CharacterInteractionLayer: View, Equatable {
                 fittedFrame.width / OfficeCanvasGeometry.designSize.width
 
             ZStack {
+                // 직원과 겹치는 곳은 뒤에 그리는 직원 영역이 클릭을 받는다.
+                PlantDoubleTapTargets(
+                    hitboxes: OfficeInteractionGeometry.plantHitboxes(artStyle: artStyle),
+                    fittedFrame: fittedFrame,
+                    scale: scale,
+                    action: onPlantDoubleTapped
+                )
+
                 ForEach(presentation.characters) { character in
                     let hitbox =
                         OfficeInteractionGeometry.characterHitbox(
@@ -273,6 +284,29 @@ struct CharacterInteractionLayer: View, Equatable {
                     onBubbleTapped: onBubbleTapped
                 )
             }
+        }
+    }
+}
+
+/// 숨긴 기능의 입구라 도움말·접근성 이름을 달지 않는다.
+private struct PlantDoubleTapTargets: View {
+    let hitboxes: [CGRect]
+    let fittedFrame: CGRect
+    let scale: CGFloat
+    let action: () -> Void
+
+    var body: some View {
+        ForEach(hitboxes.indices, id: \.self) { index in
+            let hitbox = hitboxes[index]
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2, perform: action)
+                .frame(width: hitbox.width * scale, height: hitbox.height * scale)
+                .position(
+                    x: fittedFrame.minX + hitbox.midX * scale,
+                    y: fittedFrame.minY + hitbox.midY * scale
+                )
+                .accessibilityHidden(true)
         }
     }
 }

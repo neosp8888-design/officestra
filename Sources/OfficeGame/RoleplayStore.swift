@@ -172,6 +172,8 @@ final class RoleplayStore: ObservableObject {
     /// 비어 있으면 아직 못 받았거나 프록시가 꺼진 것이라 직접 입력 칸을 보여 준다.
     @Published private(set) var proxyModels: [RoleplayModelOption] = []
     @Published private(set) var proxyModelsError: String?
+    /// 잠겨 있으면 서버에서 켜 둔 직원도 앱에서는 롤플레이 화면·입력 전환 없이 업무 대화로 다룬다.
+    @Published var isUnlocked = false
 
     private let client: RoleplayClient
 
@@ -180,7 +182,7 @@ final class RoleplayStore: ObservableObject {
     }
 
     func isEnabled(_ character: OfficeCharacter) -> Bool {
-        states[character]?.profile.enabled == true
+        isUnlocked && states[character]?.profile.enabled == true
     }
 
     func refresh(_ character: OfficeCharacter) async {

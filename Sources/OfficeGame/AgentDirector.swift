@@ -814,6 +814,8 @@ final class AgentDirector: ObservableObject {
     @Published private(set) var localProviderStatuses: [LocalProviderStatus] = []
     @Published private(set) var isControllingLocalModel = false
     @Published private(set) var voiceFollowStatus: VoiceFollowStatus?
+    /// 음성 지원·롤플레이 버튼 숨김 해제. 저장하지 않으므로 앱을 다시 켜면 다시 숨는다.
+    @Published private(set) var hiddenFeaturesUnlocked = false
     @Published private(set) var localModelOptions: [LocalModelOption] = []
     @Published private(set) var localProfileAssignments: [String: String] = [:]
     @Published private(set) var localHostAddresses: [String: String] = [:]
@@ -2944,6 +2946,22 @@ final class AgentDirector: ObservableObject {
 
     func setVoiceFollow(_ enabled: Bool, for character: OfficeCharacter) async throws {
         voiceFollowStatus = try await database.setVoiceFollow(enabled, for: character)
+    }
+
+    /// 암호가 맞으면 숨긴 기능을 연다. 틀리면 아무것도 바꾸지 않는다.
+    func unlockHiddenFeatures(password: String) -> Bool {
+        guard HiddenFeatureLock.matches(password) else { return false }
+        setHiddenFeaturesUnlocked(true)
+        return true
+    }
+
+    func lockHiddenFeatures() {
+        setHiddenFeaturesUnlocked(false)
+    }
+
+    private func setHiddenFeaturesUnlocked(_ unlocked: Bool) {
+        hiddenFeaturesUnlocked = unlocked
+        roleplay.isUnlocked = unlocked
     }
 
     func localModelOption(for character: OfficeCharacter) -> LocalModelOption? {

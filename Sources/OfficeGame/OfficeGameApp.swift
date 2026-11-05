@@ -326,6 +326,7 @@ private struct OfficeGameView: View {
     @State private var splitDragStartLeftWidth: CGFloat?
     @State private var splitDragStartTopHeight: CGFloat?
     @State private var terminalModeAlert: TerminalModeAlert?
+    @State private var isShowingHiddenFeaturePrompt = false
     @AppStorage("officeTheme") private var selectedThemeRawValue =
         OfficeTheme.modernDay.rawValue
     @AppStorage("officeArtStyle") private var selectedArtStyleRawValue =
@@ -573,6 +574,14 @@ private struct OfficeGameView: View {
                         detailSelection = .usage
                     }
                 },
+                onPlantDoubleTapped: {
+                    // 열려 있으면 바로 다시 숨기고, 숨겨져 있으면 암호를 묻는다.
+                    if director.hiddenFeaturesUnlocked {
+                        director.lockHiddenFeatures()
+                    } else {
+                        isShowingHiddenFeaturePrompt = true
+                    }
+                },
                 onBubbleTapped: { character, message in
                     let offDutyReason = director.offDutyReason(
                         for: character
@@ -593,6 +602,7 @@ private struct OfficeGameView: View {
                 }
             )
             .equatable()
+            .modifier(HiddenFeatureUnlockPrompt(isPresented: $isShowingHiddenFeaturePrompt, director: director))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(
@@ -1190,7 +1200,7 @@ private struct LiveWorkspaceHeader: View {
 
                 ReplyRoutingControl(director: director)
 
-                if let character = characterSelectionStore.selectedCharacterID {
+                if director.hiddenFeaturesUnlocked, let character = characterSelectionStore.selectedCharacterID {
                     VoiceFollowToggle(director: director, character: character)
                 }
 
@@ -2845,7 +2855,9 @@ private struct AgentQuickSettingsView: View {
             .help(OfficeLocalization.string("직원 CLI 선택"))
             .accessibilityIdentifier("agentProviderPicker")
 
-            RoleplayQuickToggle(roleplay: director.roleplay, character: character.id)
+            if director.hiddenFeaturesUnlocked {
+                RoleplayQuickToggle(roleplay: director.roleplay, character: character.id)
+            }
 
             if isLocal {
                 QuickSettingLabel(text: localModelTitle, systemImage: "cpu")
