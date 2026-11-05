@@ -14,6 +14,7 @@ use crate::antigravity_model_selection::is_antigravity_fixed_thinking_model;
 use crate::configuration::{SessionTarget, character_settings_require_new_session};
 use crate::git_workspace::GitWorkspaceError;
 use crate::health::{Runtime, SessionEndPlan};
+use crate::model_catalog::ModelCatalogService;
 
 pub const MAX_BULK_CHARACTER_SETTINGS: usize = 100;
 
@@ -71,6 +72,14 @@ pub struct ModelCapabilities {
 
 pub trait ModelCatalog: Sync {
     fn model_capabilities(&self, backend: &str, model: &str) -> Option<ModelCapabilities>;
+}
+
+/// Node의 modelCatalogService처럼 실행 중 카탈로그로 설정을 검사한다. 카탈로그를 못 읽으면 내장 목록으로 넘어간다.
+impl ModelCatalog for ModelCatalogService {
+    fn model_capabilities(&self, backend: &str, model: &str) -> Option<ModelCapabilities> {
+        let entry = ModelCatalogService::model_capabilities(self, backend, model).ok()??;
+        Some(ModelCapabilities { efforts: entry.efforts, supports_fast_mode: entry.supports_fast_mode })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

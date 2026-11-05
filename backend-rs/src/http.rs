@@ -21,7 +21,8 @@ use crate::character_profile::{
     ProfileError, update_character_context_settings, update_character_identity_prompt, update_character_name,
 };
 use crate::character_settings::{
-    CharacterSettingsError, list_characters, update_character_settings_atomically, update_single_character_settings,
+    CharacterSettingsError, ModelCatalog, list_characters, update_character_settings_atomically,
+    update_single_character_settings,
 };
 use crate::health::{Runtime, health};
 use crate::cli_updates::{
@@ -263,7 +264,7 @@ async fn bulk_settings_handler(State(state): State<AppState>, headers: HeaderMap
         Ok(body) => body,
         Err(response) => return response,
     };
-    match update_character_settings_atomically(&state.pool, &state.runtime, &body, None).await {
+    match update_character_settings_atomically(&state.pool, &state.runtime, &body, settings_catalog(&state)).await {
         Ok(result) => send(StatusCode::OK, &result),
         Err(CharacterSettingsError::TargetsNotFound(ids)) => send(
             StatusCode::NOT_FOUND,
@@ -282,10 +283,15 @@ async fn single_settings_handler(
         Ok(body) => body,
         Err(response) => return response,
     };
-    match update_single_character_settings(&state.pool, &state.runtime, &character_id, &body, None).await {
+    match update_single_character_settings(&state.pool, &state.runtime, &character_id, &body, settings_catalog(&state)).await {
         Ok(character) => send(StatusCode::OK, &character),
         Err(settings_error) => character_settings_error(settings_error),
     }
+}
+
+/// 설정 검사에 실행 중인 모델 카탈로그를 쓴다. 없으면 내장 목록만 쓴다.
+fn settings_catalog(state: &AppState) -> Option<&dyn ModelCatalog> {
+    state.model_catalog.as_deref().map(|service| service as &dyn ModelCatalog)
 }
 
 fn profile_response(result: Result<Value, ProfileError>) -> Response {

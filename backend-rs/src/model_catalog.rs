@@ -1564,6 +1564,29 @@ mod tests {
         assert_eq!(codex["excludedModels"], json!(["gpt-next"]));
     }
 
+    /// 설정 저장은 실행 중 카탈로그 모델을 받아야 한다. 내장 목록만 보면 지금 쓰는 모델이 모두 거절됐다.
+    #[tokio::test]
+    async fn settings_validation_accepts_catalog_models() {
+        use crate::character_settings::{ModelCatalog as SettingsCatalog, normalize_character_settings_update};
+        let clock = Arc::new(Mutex::new(time("2026-09-05T00:00:00Z")));
+        let service = service_with(Arc::new(FakeStore::default()), FakeHost::with_payloads(), clock);
+        service.load_cached().await.unwrap();
+        service.refresh_due(false).await.unwrap();
+        let body = json!({
+            "characterId": "left-man", "backend": "claude", "model": "opus[1m]",
+            "effort": "max", "fastMode": true, "permission": "bypassPermissions"
+        });
+        assert!(normalize_character_settings_update(&body, true, None).is_err());
+        let catalog: &dyn SettingsCatalog = &*service;
+        let update = normalize_character_settings_update(&body, true, Some(catalog)).unwrap();
+        assert_eq!((update.model.as_str(), update.effort.as_str(), update.fast_mode), ("opus[1m]", "max", true));
+        let unknown = json!({
+            "characterId": "left-man", "backend": "claude", "model": "gemini-9",
+            "effort": "high", "fastMode": false, "permission": "bypassPermissions"
+        });
+        assert!(normalize_character_settings_update(&unknown, true, Some(catalog)).is_err());
+    }
+
     #[tokio::test]
     async fn failed_refresh_keeps_last_good_models_and_exclusions() {
         let store = Arc::new(FakeStore::default());
