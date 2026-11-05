@@ -12,7 +12,16 @@ fn native_result_cli_roundtrip_and_rejected_input_preserve_metadata() {
     assert!(call(&["source", "--kind", "file", "--title", "코드", "--locator", "src/main.rs"]).status.success());
     assert!(call(&["wiki", "--page-key", "native-result", "--kind", "decision", "--title", "제출", "--body", "네이티브 CLI를 쓴다."]).status.success());
     assert!(call(&["source", "--kind", "rag", "--title", "검색", "--rag-document-id", "11111111-1111-4111-8111-111111111111"]).status.success());
-    for args in [vec!["source", "--kind", "file", "--title", "x"], vec!["source", "--kind", "file", "--kind", "web"], vec!["source", "--kind"], vec!["unknown"]] {
+    for args in [
+        vec!["source", "--kind", "file", "--title", "x"],
+        vec!["source", "--kind", "file", "--kind", "web"],
+        vec!["source", "--kind"],
+        vec!["unknown"],
+        // Node처럼 빈 ID·빈 locator로는 근거를 만들지 않는다.
+        vec!["source", "--kind", "rag", "--title", "x", "--rag-document-id", ""],
+        vec!["source", "--kind", "database", "--title", "x", "--work-record-id", ""],
+        vec!["source", "--kind", "file", "--title", "x", "--locator", ""],
+    ] {
         assert!(!call(&args).status.success());
     }
     let state: Value = serde_json::from_slice(&call(&["show"]).stdout).unwrap();

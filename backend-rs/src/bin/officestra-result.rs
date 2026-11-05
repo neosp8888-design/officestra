@@ -47,11 +47,13 @@ fn run(args: &[String]) -> Result<String, String> {
     match command {
         "source" => {
             let kind = required(&options, "kind")?;
+            // Node처럼 빈 locator는 거부하고, 빈 ID로는 locator를 만들지 않는다.
+            let id = |option: &str| options.get(option).filter(|id| !id.is_empty());
             let locator = options.get("locator").cloned().or_else(|| match kind {
-                "rag" => options.get("rag-document-id").map(|id| format!("rag_documents:{id}")),
-                "database" => options.get("work-record-id").map(|id| format!("work_records:{id}")),
+                "rag" => id("rag-document-id").map(|id| format!("rag_documents:{id}")),
+                "database" => id("work-record-id").map(|id| format!("work_records:{id}")),
                 _ => None,
-            }).ok_or_else(|| "--locator가 필요합니다.".to_string())?;
+            }).filter(|locator| !locator.is_empty()).ok_or_else(|| "--locator가 필요합니다.".to_string())?;
             let mut source = Map::new();
             source.insert("kind".into(), Value::String(kind.into()));
             source.insert("title".into(), Value::String(required(&options, "title")?.into()));
