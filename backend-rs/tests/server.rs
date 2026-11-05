@@ -179,6 +179,19 @@ async fn 설정_경로는_db_전에_형식과_검증_오류를_낸다() {
     assert!(state.runtime.is_draining(), "남의 드레인은 풀지 않는다");
 }
 
+#[tokio::test]
+async fn 큰_본문도_node처럼_413_없이_끝까지_읽는다() {
+    // axum 기본 2MB 제한을 넘는 3MB 본문이 검증 단계까지 간다.
+    let padding = "x".repeat(3 * 1024 * 1024);
+    let request = trusted_put(
+        "/api/characters/settings/bulk",
+        &json!({ "updates": [{ "characterId": "boss", "backend": "nope", "padding": padding }] }),
+    );
+    let (status, _, body) = call(state_without_db(), request).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "지원하지 않는 CLI입니다.");
+}
+
 fn codex_settings(character_id: &str, effort: &str, fast_mode: bool) -> Value {
     json!({
         "characterId": character_id, "backend": "codex", "model": "gpt-5.6-sol",

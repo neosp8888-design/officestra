@@ -126,9 +126,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/work-board", any(work_board_handler))
         .route("/api/work-board/", any(work_board_handler))
         .route("/api/work-board/{*rest}", any(work_board_handler))
-        // Node readJSON은 크기 제한이 없다. 프리셋 가져오기는 20MiB 파일의 base64라 기본 2MB 제한을 끈다.
-        .route("/api/roleplay/", any(roleplay_handler).layer(DefaultBodyLimit::disable()))
-        .route("/api/roleplay/{*rest}", any(roleplay_handler).layer(DefaultBodyLimit::disable()))
+        .route("/api/roleplay/", any(roleplay_handler))
+        .route("/api/roleplay/{*rest}", any(roleplay_handler))
         .route("/api/rag/documents", post(rag_documents_handler))
         .route("/api/rag/search", post(rag_search_handler))
         .route("/api/wiki/pages", get(wiki_pages_handler))
@@ -158,6 +157,8 @@ pub fn router(state: AppState) -> Router {
         .method_not_allowed_fallback(not_found)
         // 경로·대체 처리기를 모두 등록한 뒤에 감싸야 404 경로에도 적용된다.
         .layer(middleware::from_fn(reject_malformed_route_parameters))
+        // Node readJSON은 크기 제한이 없다. 롤플레이 프리셋(20MiB 파일의 base64)·긴 지시·문서 등록이 막히지 않게 기본 2MB 제한을 끈다.
+        .layer(DefaultBodyLimit::disable())
         .with_state(state)
 }
 
