@@ -217,7 +217,7 @@ struct CodexTranscriptPresentation: Equatable {
         var collaborationBatchIndexByActivityID: [String: Int] = [:]
 
         for activity in visibleActivities {
-            if activity.kind == "message" {
+            if activity.kind == "message" || activity.kind == AgentSteerNote.activityKind {
                 currentCollaborationBatchIndex = nil
                 continue
             }
@@ -353,6 +353,14 @@ struct CodexTranscriptPresentation: Equatable {
                 continue
             }
 
+            if let note = AgentSteerNote(activity) {
+                // 실행 중 끼워 넣은 입력도 원래 시간 위치에서 작업 기록을 끊는다.
+                appendActivityPhase(phaseActivities)
+                phaseActivities.removeAll(keepingCapacity: true)
+                entries.append(.steer(note))
+                continue
+            }
+
             phaseActivities.append(activity)
         }
 
@@ -402,6 +410,7 @@ struct CodexTranscriptPresentation: Equatable {
 enum CodexTranscriptEntry: Identifiable, Equatable {
     case activityGroup(CodexActivityGroup)
     case message(CodexTranscriptMessage)
+    case steer(AgentSteerNote)
 
     var id: String {
         switch self {
@@ -409,6 +418,8 @@ enum CodexTranscriptEntry: Identifiable, Equatable {
             group.id
         case .message(let message):
             message.id
+        case .steer(let note):
+            note.id
         }
     }
 }
@@ -1277,6 +1288,8 @@ struct CodexTranscriptView: View {
                     }
                 )
             }
+        case .steer(let note):
+            AgentSteerBubbleView(note: note)
         }
     }
 }

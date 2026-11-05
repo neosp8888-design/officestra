@@ -50,6 +50,7 @@ impl Fake {
             on_exit: Box::new(|_| {}),
             suggestion_grace: Duration::from_millis(grace_milliseconds),
             interrupt_result_timeout: DEFAULT_INTERRUPT_RESULT_TIMEOUT,
+            steer_result_timeout: DEFAULT_STEER_RESULT_TIMEOUT,
         }
     }
 
@@ -229,6 +230,135 @@ async fn 이전_턴에서_늦은_추천은_다음_턴에_붙이지_않는다() {
     let second: Vec<Value> = fake.received.lock().unwrap()[first..].to_vec();
     assert!(!second.iter().any(|event| event["suggestion"] == "늦은 첫 추천"));
     assert!(second.iter().any(|event| event["suggestion"] == "둘째 추천"));
+    worker.close(DEFAULT_CLOSE_REASON);
+}
+
+const STEER_ID: &str = "8d1f0c52-3b7e-4f6a-9c2d-5e4b3a2f1d00";
+
+async fn wait_for_results(fake: &Fake, count: usize) {
+    for _ in 0..500 {
+        if fake.results().len() >= count {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("result {count}개를 기다리다 끝났습니다.");
+}
+
+fn delivered(fake: &Fake) -> Vec<Value> {
+    fake.received.lock().unwrap().iter().filter(|event| event["type"] == STEER_DELIVERED_EVENT).cloned().collect()
+}
+
+#[tokio::test]
+async fn 도구_실행_중_끼어든_메시지는_같은_턴의_result_하나로_끝난다() {
+    let fake = Fake::new(
+        &[
+            vec![
+                json!({ "type": "user", "isReplay": true, "uuid": "first-id", "message": { "role": "user", "content": "첫 질문" } }),
+                json!({ "type": "assistant", "message": { "id": "m1", "content": [{ "type": "tool_use", "id": "t1", "name": "Bash", "input": {} }] } }),
+            ],
+            vec![
+                json!({ "type": "user", "isReplay": true, "uuid": STEER_ID, "message": { "role": "user", "content": "끼어들기" } }),
+                json!({ "type": "result", "subtype": "success", "is_error": false, "result": "합친 답", "num_turns": 2, "total_cost_usd": 0.2 }),
+                json!({ "type": "prompt_suggestion", "suggestion": "추천", "uuid": "suggestion-1" }),
+            ],
+        ],
+        None,
+    );
+    let worker = ClaudePersistentWorker::spawn(fake.options(None, None, 50));
+    let running = {
+        let (worker, collector) = (Arc::clone(&worker), fake.collector());
+        tokio::spawn(async move { worker.run_turn("첫 질문", collector).await })
+    };
+    fake.wait_for_input(1).await;
+    worker.steer(STEER_ID, "끼어들기").await.unwrap();
+    running.await.unwrap().unwrap();
+
+    let input = fake.stdin();
+    assert_eq!(
+        input[1],
+        json!({ "type": "user", "uuid": STEER_ID, "message": { "role": "user", "content": "끼어들기" }, "parent_tool_use_id": null })
+    );
+    assert_eq!(delivered(&fake), vec![json!({ "type": STEER_DELIVERED_EVENT, "steerId": STEER_ID })]);
+    assert!(fake.received.lock().unwrap().iter().all(|event| event["type"] != "user"), "첫 메시지 되돌림은 넘기지 않는다");
+    assert_eq!(fake.results().len(), 1);
+    worker.close(DEFAULT_CLOSE_REASON);
+}
+
+#[tokio::test]
+async fn result_뒤에_끼어든_메시지는_다음_result까지_한_업무로_세고_사용량은_업무_전체다() {
+    let fake = Fake::new(
+        &[
+            vec![
+                json!({ "type": "result", "subtype": "success", "is_error": false, "result": "앞 업무", "total_cost_usd": 1.0 }),
+                json!({ "type": "prompt_suggestion", "suggestion": "앞 추천", "uuid": "suggestion-0" }),
+            ],
+            vec![json!({ "type": "result", "subtype": "success", "is_error": false, "result": "첫 답", "total_cost_usd": 1.1 })],
+            vec![
+                json!({ "type": "prompt_suggestion", "suggestion": "낡은 추천", "uuid": "suggestion-1" }),
+                json!({ "type": "user", "isReplay": true, "uuid": STEER_ID, "message": { "role": "user", "content": "끼어들기" } }),
+                json!({ "type": "result", "subtype": "success", "is_error": false, "result": "끼어든 답", "total_cost_usd": 1.4 }),
+                json!({ "type": "prompt_suggestion", "suggestion": "새 추천", "uuid": "suggestion-2" }),
+            ],
+        ],
+        None,
+    );
+    let worker = ClaudePersistentWorker::spawn(fake.options(None, None, 2_000));
+    worker.run_turn("앞 질문", fake.collector()).await.unwrap();
+    let running = {
+        let (worker, collector) = (Arc::clone(&worker), fake.collector());
+        tokio::spawn(async move { worker.run_turn("질문", collector).await })
+    };
+    wait_for_results(&fake, 2).await;
+    worker.steer(STEER_ID, "끼어들기").await.unwrap();
+    running.await.unwrap().unwrap();
+
+    let results = fake.results();
+    assert_eq!(results.len(), 3);
+    assert!(close_to(&results[1]["total_cost_usd"], 0.1));
+    assert!(close_to(&results[2]["total_cost_usd"], 0.4), "뒤 result는 업무 시작 전 누적값을 뺀 업무 전체다");
+    assert_eq!(delivered(&fake).len(), 1);
+    let suggestions: Vec<Value> =
+        fake.received.lock().unwrap().iter().filter(|event| event["type"] == "prompt_suggestion").map(|event| event["suggestion"].clone()).collect();
+    assert_eq!(suggestions, vec![json!("앞 추천"), json!("새 추천")]);
+    worker.close(DEFAULT_CLOSE_REASON);
+}
+
+#[tokio::test]
+async fn 끼어든_메시지를_받아_간_되돌림이_끝내_없으면_제한_시간_뒤_업무를_끝낸다() {
+    let fake = Fake::new(
+        &[vec![json!({ "type": "assistant", "message": { "id": "m1", "content": [{ "type": "tool_use", "id": "t1", "name": "Bash", "input": {} }] } })]],
+        None,
+    );
+    std::fs::write(
+        format!("{}/2.jsonl", fake.dir),
+        format!("{}\n", json!({ "type": "result", "subtype": "success", "is_error": false, "result": "답", "total_cost_usd": 0.1 })),
+    )
+    .unwrap();
+    let mut options = fake.options(None, None, 5_000);
+    options.steer_result_timeout = Duration::from_millis(150);
+    let worker = ClaudePersistentWorker::spawn(options);
+    let running = {
+        let (worker, collector) = (Arc::clone(&worker), fake.collector());
+        tokio::spawn(async move { worker.run_turn("질문", collector).await })
+    };
+    fake.wait_for_input(1).await;
+    // 가짜 CLI는 끼어든 줄을 받으면 되돌림 없이 result만 낸다.
+    worker.steer("other-id", "끼어들기").await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3), running).await.expect("제한 시간 뒤 끝나야 한다").unwrap().unwrap();
+    assert!(delivered(&fake).is_empty());
+    // 보낸 끼어들기의 늦은 답이 다음 업무에 섞이지 않도록 이 프로세스는 닫고 다시 쓰지 않는다.
+    wait_until_gone(worker.pid().unwrap()).await;
+    assert!(!worker.matches("same", None), "제한 시간이 지난 지속 세션을 다음 업무에 다시 쓰면 안 된다");
+    assert!(worker.run_turn("다음 질문", fake.collector()).await.is_err());
+}
+
+#[tokio::test]
+async fn 진행_중인_업무가_없으면_끼어들기를_거절한다() {
+    let fake = Fake::new(&[], None);
+    let worker = ClaudePersistentWorker::spawn(fake.options(None, None, 5));
+    assert!(worker.steer(STEER_ID, "끼어들기").await.is_err());
+    assert!(fake.stdin().is_empty());
     worker.close(DEFAULT_CLOSE_REASON);
 }
 

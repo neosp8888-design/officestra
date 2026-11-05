@@ -10,14 +10,15 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use sqlx::{AssertSqlSafe, PgConnection, Row};
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::MissedTickBehavior;
 
 use super::attachments::{prompt_with_attachments, remove_staged_attachments, stage_attachments};
 use super::claude_session::{claude_session_path, claude_usage_session_path, prepare_claude_session_resume};
+use super::codex_app_server::{self, CodexSteer, CodexTurnRequest, codex_turn_input};
 use super::launch::{
     RuntimeCharacter, build_arguments, claude_persistent_arguments, claude_persistent_worker_signature,
-    execution_environment,
+    codex_app_server_arguments, execution_environment,
 };
 use super::locate_executable;
 use super::process_group::{ProcessGroup, detached_command};
@@ -31,7 +32,7 @@ use super::workspace::{
 use crate::antigravity_local_state::antigravity_session_usage;
 use crate::antigravity_reasoning::antigravity_latest_step_index;
 use crate::character_settings::CharacterSettingsError;
-use crate::claude_persistent_worker::{ClaudePersistentWorker, WorkerOptions};
+use crate::claude_persistent_worker::{ClaudePersistentWorker, DEFAULT_STEER_RESULT_TIMEOUT, WorkerOptions};
 use crate::db::with_transaction;
 use crate::developer_tool_events::parse_developer_tool_event;
 use crate::health::{Runtime, SessionEndPlan};
@@ -56,6 +57,9 @@ const MONITOR_INTERVAL: Duration = Duration::from_millis(400);
 const STDERR_LIMIT: usize = 200_000;
 /// terminateProcessGroup의 SIGKILL 유예.
 const FORCE_KILL_AFTER: Duration = Duration::from_millis(1500);
+/// 턴이 끝나 입력을 닫은 뒤 Codex app-server가 스스로 끝나기를 기다리는 시간.
+const APP_SERVER_EXIT_GRACE: Duration = Duration::from_secs(10);
+const STEER_UNSUPPORTED: &str = "이 직원의 현재 업무는 실행 중 끼어들기를 받을 수 없습니다. 다음 턴 예약으로 보내세요.";
 /// BLOCKED_WORKSPACE_STATUSES.
 const BLOCKED_WORKSPACE_STATUSES: [&str; 3] = ["awaiting_approval", "merging", "conflict"];
 const SESSION_END_BUSY: &str = "이 직원의 실행 중인 업무가 끝난 뒤 CLI를 변경하세요.";
@@ -829,26 +833,42 @@ impl Runtime {
         handle: &Arc<TurnHandle>,
         local: Option<&LocalAgentLaunch>,
     ) -> Result<(), String> {
-        let (executable, arguments, environment, workdir, backend) = {
+        let (executable, arguments, environment, workdir, backend, app_server) = {
             let state = handle.state.lock().await;
+            // 클라우드 Codex는 실행 중 끼어들기를 받으려고 exec 대신 app-server로 한 턴을 돌린다.
+            let app_server = (local.is_none() && state.backend() == "codex").then(|| {
+                let images: Vec<String> =
+                    state.attachments.iter().filter(|attachment| attachment.is_codex_image).map(|attachment| attachment.path.clone()).collect();
+                CodexTurnRequest {
+                    thread_id: state.external_session_id.clone().filter(|id| !id.is_empty()),
+                    cwd: state.workdir.clone(),
+                    sandbox: state.character.permission.clone(),
+                    input: codex_turn_input(&state.execution_prompt, &images),
+                }
+            });
             let (executable, arguments, environment) = match local {
                 Some(local) => (local.executable.clone(), local.args.clone(), local.env.clone()),
                 None => (
                     locate_executable(state.backend(), &state.character.config)?,
-                    build_arguments(
-                        &state.character,
-                        &state.execution_prompt,
-                        state.external_session_id.as_deref(),
-                        &state.attachments,
-                        Some(&state.workdir),
-                    )?,
+                    if app_server.is_some() {
+                        codex_app_server_arguments(&state.character)
+                    } else {
+                        build_arguments(
+                            &state.character,
+                            &state.execution_prompt,
+                            state.external_session_id.as_deref(),
+                            &state.attachments,
+                            Some(&state.workdir),
+                        )?
+                    },
                     execution_environment(&state.character, &process_environment(), Some(&state.workdir), &services.paths),
                 ),
             };
-            (executable, arguments, environment, state.workdir.clone(), state.backend().to_string())
+            (executable, arguments, environment, state.workdir.clone(), state.backend().to_string(), app_server)
         };
         let mut command = detached_command(&executable, &arguments, Some(&workdir), &environment);
-        command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let input = if app_server.is_some() { Stdio::piped() } else { Stdio::null() };
+        command.stdin(input).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
@@ -871,11 +891,42 @@ impl Runtime {
                 None => String::new(),
             }
         });
-        let output = match child.stdout.take() {
-            Some(stdout) => consume_output(services, handle, stdout).await,
-            None => Ok(()),
+        let mut app_server_ended_early = false;
+        let uses_app_server = app_server.is_some();
+        let output = match (child.stdout.take(), app_server) {
+            (Some(stdout), Some(request)) => {
+                let (sender, receiver) = mpsc::unbounded_channel();
+                handle.set_codex_steer(Some(sender));
+                let (line_handle, line_services) = (Arc::clone(handle), Arc::clone(services));
+                let on_line = move |line: String| {
+                    let (handle, services) = (Arc::clone(&line_handle), Arc::clone(&line_services));
+                    async move { handle.state.lock().await.consume_output_line(&services, &line).await }
+                };
+                let result = codex_app_server::drive(child.stdin.take(), stdout, request, receiver, on_line).await;
+                handle.set_codex_steer(None);
+                match result {
+                    Ok(completed) => {
+                        app_server_ended_early = !completed;
+                        handle.state.lock().await.complete_pending_initial_codex_reasoning(services, None).await
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            (Some(stdout), None) => consume_output(services, handle, stdout).await,
+            (None, _) => Ok(()),
         };
-        let status = child.wait().await;
+        let status = if uses_app_server {
+            match tokio::time::timeout(APP_SERVER_EXIT_GRACE, child.wait()).await {
+                Ok(status) => status,
+                Err(_) => {
+                    // app-server는 입력을 닫으면 끝난다. 그래도 남아 있으면 프로세스 그룹을 끝낸다.
+                    process.terminate(FORCE_KILL_AFTER, false);
+                    child.wait().await
+                }
+            }
+        } else {
+            child.wait().await
+        };
         if let Ok(status) = &status {
             process.record_exit(status);
         }
@@ -890,6 +941,12 @@ impl Runtime {
         let mut state = handle.state.lock().await;
         if state.settle_cancelled_output(services).await? {
             return Ok(());
+        }
+        if app_server_ended_early {
+            if !stderr.is_empty() {
+                return Err(stderr);
+            }
+            return Err(format!("Codex app-server가 업무를 끝내기 전에 종료 코드 {exit_text}로 끝났습니다."));
         }
         if let Some(failure) = state.failure.clone().filter(|failure| !failure.is_empty()) {
             // agy는 한도 오류가 한 번 난 대화를 이어 가면 정상 종료한 턴에도 그때의 오류를 보낸다. 답이 있으면 경고로 낮춘다.
@@ -1037,6 +1094,7 @@ impl Runtime {
             }),
             suggestion_grace: services.claude_suggestion_grace,
             interrupt_result_timeout: services.claude_interrupt_result_timeout,
+            steer_result_timeout: DEFAULT_STEER_RESULT_TIMEOUT,
         });
         self.jobs().claude_workers.insert(character_id, Arc::clone(&worker));
         worker
@@ -1259,6 +1317,8 @@ impl Runtime {
             return Ok(());
         }
         state.complete_pending_initial_codex_reasoning(services, None).await?;
+        // CLI가 받아 갔다는 확인이 끝내 없던 끼어들기는 반영됨으로 바꾸지 않는다.
+        state.settle_pending_steers(services).await?;
         state.finalize_running_activities(services, "completed").await?;
         state.normalize_completed_message_activity(services, decoded).await?;
         let session_key = state.external_session_id.clone().unwrap_or_default();
@@ -1390,6 +1450,68 @@ impl Runtime {
             "characterId": handle.character_id,
             "costChanged": true,
         }));
+    }
+
+    /// 실행 중인 GUI 업무에 메시지를 끼워 넣는다. Claude는 지속 세션 입력으로, Codex는 app-server turn/steer로 보낸다.
+    /// CLI가 받아들이면 접수로 답하고, 실제로 받아 갔는지는 활동 상태(steer)로 알린다. 받을 수 없으면 Busy(409)다.
+    pub async fn steer(
+        self: &Arc<Self>,
+        character_id: &str,
+        prompt: Option<&Value>,
+        attachment_paths: Option<&Value>,
+    ) -> Result<Value, AgentError> {
+        let services = self.services()?;
+        let Some(handle) = self.jobs().running.get(character_id).cloned() else {
+            return Err(AgentError::JobNotFound("실행 중인 업무를 찾을 수 없습니다.".into()));
+        };
+        let text = match prompt {
+            None | Some(Value::Null) => String::new(),
+            Some(prompt) => js_trim(&js_string(prompt)).to_string(),
+        };
+        let attachment_paths = attachment_paths.cloned().unwrap_or_else(|| json!([]));
+        if text.is_empty() && attachment_list_is_empty(&attachment_paths)? {
+            return Err(AgentError::Failed("끼어들 내용을 입력하세요.".into()));
+        }
+        let (claude, codex) = (handle.claude_worker(), handle.codex_steer());
+        if handle.cancel_requested() || (claude.is_none() && codex.is_none()) {
+            return Err(AgentError::Busy(STEER_UNSUPPORTED.into()));
+        }
+        let record_text = if text.is_empty() { "첨부 파일을 확인해줘.".to_string() } else { text };
+        let steer_id = random_uuid();
+        let (prompt_text, images, attachments) = {
+            let mut state = handle.state.lock().await;
+            let attachments = stage_attachments(&attachment_paths, &state.workdir).map_err(AgentError::Failed)?;
+            if let Err(error) = state.begin_steer(&services, &steer_id, &record_text).await {
+                // 기록하지 못하면 CLI에 보내지 않는다. 앱이 원본으로 다시 보내므로 이번 복사본은 남기지 않는다.
+                remove_staged_attachments(&attachments);
+                return Err(AgentError::Failed(error));
+            }
+            let images: Vec<String> =
+                attachments.iter().filter(|attachment| attachment.is_codex_image).map(|attachment| attachment.path.clone()).collect();
+            (prompt_with_attachments(&record_text, &attachments), images, attachments)
+        };
+        let sent = match (claude, codex) {
+            (Some(worker), _) => worker.steer(&steer_id, &prompt_text).await,
+            (None, Some(codex)) => {
+                let (reply, answer) = oneshot::channel();
+                let steer = CodexSteer { steer_id: steer_id.clone(), input: codex_turn_input(&prompt_text, &images), reply };
+                match codex.send(steer) {
+                    Ok(()) => answer.await.unwrap_or_else(|_| Err(STEER_UNSUPPORTED.into())),
+                    Err(_) => Err(STEER_UNSUPPORTED.into()),
+                }
+            }
+            (None, None) => Err(STEER_UNSUPPORTED.into()),
+        };
+        if let Err(error) = sent {
+            remove_staged_attachments(&attachments);
+            let mut state = handle.state.lock().await;
+            if let Err(saved) = state.finish_steer(&services, &steer_id, false).await {
+                eprintln!("[agent-runtime] {character_id} 끼어들기 실패를 저장하지 못했습니다. {saved}");
+            }
+            eprintln!("[agent-runtime] {character_id} 끼어들기를 전달하지 못했습니다. {error}");
+            return Err(AgentError::Busy(STEER_UNSUPPORTED.into()));
+        }
+        Ok(json!({ "turnId": handle.turn_id, "steerId": steer_id, "status": "accepted" }))
     }
 
     /// cancel. 응답을 기다리던 요청이 끊겨도 중단 저장이 멈추지 않도록 별도 작업에서 돈다.

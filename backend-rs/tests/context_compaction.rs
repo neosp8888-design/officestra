@@ -30,38 +30,45 @@ const BUSY: &str = "이 직원의 현재 업무와 후속 처리가 끝난 뒤 �
 const NOT_FOUND: &str = "캐릭터를 찾을 수 없습니다.";
 const UNSUPPORTED: &str = "상태 변경 요청은 application/json 형식이어야 합니다.";
 
-/// exec는 업무 턴, app-server는 압축이다. 압축 시작을 받으면 기록에 압축 뒤 점유를 덧붙이고 compact-release를 기다린다.
+/// 업무 턴과 압축 모두 app-server다. 압축 시작을 받은 프로세스만 인자·폴더·받은 입력을 남기고,
+/// 기록에 압축 뒤 점유를 덧붙인 뒤 compact-release를 기다린다. 업무 턴은 wait 모드면 release를 기다렸다 끝낸다.
 /// 시험이 중간에 끊겨 폴더가 지워지면 대기를 끝내 고아 프로세스로 남지 않는다.
-const FAKE_CODEX: &str = r#"#!/bin/sh
+const FAKE_CODEX: &str = r##"#!/bin/sh
 dir='__DIR__'
-if [ "$1" = "app-server" ]; then
-  pwd > "$dir/app-server-cwd.txt"
-  echo "$*" > "$dir/app-server-args.txt"
-  while IFS= read -r line; do
-    printf '%s\n' "$line" >> "$dir/app-server-input.log"
-    case "$line" in
-      *'"method":"initialize"'*) echo '{"id":1,"result":{"userAgent":"test"}}' ;;
-      *'"method":"thread/resume"'*) echo '{"id":2,"result":{"thread":{"id":"thread-ok"}}}' ;;
-      *'"method":"thread/compact/start"'*)
-        printf '%s\n' '__AFTER__' >> '__ROLLOUT__'
-        while [ ! -f "$dir/compact-release" ] && [ -d "$dir" ]; do sleep 0.05; done
-        echo '{"id":3,"result":{}}'
-        echo '{"method":"item/completed","params":{"threadId":"thread-ok","turnId":"turn-compact","item":{"type":"contextCompaction"}}}' ;;
-    esac
-  done
-  exit 0
-fi
-for prompt; do :; done
-case "$prompt" in
-  *MOCK_WAIT*)
-    echo '{"type":"thread.started","thread_id":"thread-wait"}'
-    while [ ! -f "$dir/release" ] && [ -d "$dir" ]; do sleep 0.05; done ;;
-  *)
-    echo '{"type":"thread.started","thread_id":"thread-ok"}' ;;
-esac
-echo '{"type":"item.completed","item":{"id":"m1","type":"agent_message","text":"모의 답변입니다."}}'
-echo '{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":5}}'
-"#;
+mode='__MODE__'
+thread='__THREAD__'
+turn="turn-$mode"
+received="$dir/app-server-$$.log"
+field() { printf '%s\n' "$line" | sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p"; }
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$received"
+  id=$(printf '%s\n' "$line" | sed -n 's/^{"id":\([0-9]*\),.*/\1/p')
+  case "$line" in
+    *'"method":"initialize",'*) echo "{\"id\":$id,\"result\":{\"userAgent\":\"test\"}}" ;;
+    *'"method":"thread/start",'*) echo "{\"id\":$id,\"result\":{\"thread\":{\"id\":\"$thread\"}}}" ;;
+    *'"method":"thread/resume",'*)
+      thread=$(field threadId)
+      echo "{\"id\":$id,\"result\":{\"thread\":{\"id\":\"$thread\"}}}" ;;
+    *'"method":"thread/compact/start",'*)
+      pwd > "$dir/app-server-cwd.txt"
+      echo "$*" > "$dir/app-server-args.txt"
+      cat "$received" >> "$dir/app-server-input.log"
+      printf '%s\n' '__AFTER__' >> '__ROLLOUT__'
+      while [ ! -f "$dir/compact-release" ] && [ -d "$dir" ]; do sleep 0.05; done
+      echo "{\"id\":$id,\"result\":{}}"
+      echo "{\"method\":\"item/completed\",\"params\":{\"threadId\":\"$thread\",\"turnId\":\"turn-compact\",\"item\":{\"type\":\"contextCompaction\"}}}" ;;
+    *'"method":"turn/start",'*)
+      echo "{\"id\":$id,\"result\":{\"turn\":{\"id\":\"$turn\"}}}"
+      if [ "$mode" = wait ]; then
+        while [ ! -f "$dir/release" ] && [ -d "$dir" ]; do sleep 0.05; done
+      fi
+      echo "{\"method\":\"item/completed\",\"params\":{\"threadId\":\"$thread\",\"turnId\":\"$turn\",\"item\":{\"id\":\"m1\",\"type\":\"agentMessage\",\"text\":\"모의 답변입니다.\"}}}"
+      echo "{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"$thread\",\"turnId\":\"$turn\",\"tokenUsage\":{\"total\":{\"inputTokens\":10,\"cachedInputTokens\":0,\"outputTokens\":5}}}}"
+      echo "{\"method\":\"turn/completed\",\"params\":{\"threadId\":\"$thread\",\"turn\":{\"id\":\"$turn\",\"status\":\"completed\"}}}" ;;
+  esac
+done
+rm -f "$received"
+"##;
 
 /// /compact 입력에는 실제 CLI처럼 기록에 압축 경계를 남기고, 출력의 압축 경계에는 기록과 다른 토큰 수를 싣는다.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
@@ -99,11 +106,17 @@ impl Fixture {
         let bin = root.join("bin");
         let fixture = Self { root, bin };
         let directory = fixture.root.to_str().unwrap();
-        let codex = FAKE_CODEX
-            .replace("__DIR__", directory)
-            .replace("__ROLLOUT__", fixture.rollout().to_str().unwrap())
-            .replace("__AFTER__", &codex_token_count("2026-10-01T00:00:01.000Z", 31_000));
-        write_script(&fixture.bin.join("codex"), &codex);
+        // 실행기는 파일 이름이 codex인 것만 받으므로 대기 모드 스크립트는 하위 폴더에 둔다.
+        for (folder, mode, thread) in [("", "ok", "thread-ok"), ("wait", "wait", "thread-wait")] {
+            let codex = FAKE_CODEX
+                .replace("__DIR__", directory)
+                .replace("__MODE__", mode)
+                .replace("__THREAD__", thread)
+                .replace("__ROLLOUT__", fixture.rollout().to_str().unwrap())
+                .replace("__AFTER__", &codex_token_count("2026-10-01T00:00:01.000Z", 31_000));
+            std::fs::create_dir_all(fixture.bin.join(folder)).unwrap();
+            write_script(&fixture.bin.join(folder).join("codex"), &codex);
+        }
         let claude = FAKE_CLAUDE.replace("__DIR__", directory).replace("__TRANSCRIPT__", fixture.transcript().to_str().unwrap());
         write_script(&fixture.bin.join("claude"), &claude);
         fixture
@@ -369,7 +382,7 @@ async fn 모의_cli로_압축하고_직원_설정과_이력을_돌려준다() {
     let fixture = Fixture::new();
     for (id, name, backend, permission, config) in [
         ("codex-a", "코덱스", "codex", "workspace-write", fixture.config("codex")),
-        ("codex-wait", "대기", "codex", "workspace-write", fixture.config("codex")),
+        ("codex-wait", "대기", "codex", "workspace-write", fixture.config("wait/codex")),
         ("claude-a", "클로드", "claude", "acceptEdits", fixture.config("claude")),
         ("fresh", "새 직원", "codex", "workspace-write", fixture.config("codex")),
     ] {

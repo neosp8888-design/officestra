@@ -359,6 +359,53 @@ final class ClaudeTranscriptPresentationTests: XCTestCase {
         XCTAssertEqual(last.text, "이어서 작성 중")
     }
 
+    func testSteerSplitsToolGroupsAndKeepsWaitingWhileUndelivered() throws {
+        let activities = try [
+            makeActivity(
+                id: "tool-1",
+                kind: "tool",
+                text: "도구 · Bash · swift build",
+                status: "completed"
+            ),
+            makeActivity(
+                id: "steer-1",
+                kind: "steer",
+                text: "테스트도 같이 돌려줘",
+                status: "running"
+            ),
+            makeActivity(
+                id: "tool-2",
+                kind: "tool",
+                text: "도구 · Bash · swift test",
+                status: "completed"
+            ),
+        ]
+
+        let presentation = ClaudeTranscriptPresentation.make(
+            turnID: "turn-1",
+            activities: activities,
+            response: "",
+            responseUpdatedAt: Date(timeIntervalSince1970: 2_000),
+            isRunning: true
+        )
+
+        guard
+            presentation.entries.count == 3,
+            case .tools = presentation.entries[0],
+            case .steer(let note) = presentation.entries[1],
+            case .tools = presentation.entries[2]
+        else {
+            return XCTFail("끼어들기가 발생 위치에서 작업 묶음을 끊지 않았습니다.")
+        }
+        XCTAssertEqual(note.text, "테스트도 같이 돌려줘")
+        XCTAssertEqual(note.status, .running)
+        XCTAssertEqual(note.statusLabel, OfficeLocalization.string("전달 대기"))
+        XCTAssertTrue(
+            presentation.showsWaiting,
+            "전달을 기다리는 끼어들기 때문에 생각 중 표시가 사라지면 안 됩니다."
+        )
+    }
+
     func testMessagesStayAtChronologicalPositionsBetweenWorkGroups() throws {
         let activities = try [
             makeActivity(

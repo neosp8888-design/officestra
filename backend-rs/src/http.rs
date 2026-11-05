@@ -141,6 +141,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/cli-updates/apply", post(apply_cli_updates_handler))
         .route("/api/agent-jobs", get(agent_jobs_handler).post(start_agent_job_handler))
         .route("/api/agent-jobs/{id}", delete(cancel_agent_job_handler))
+        .route("/api/agent-jobs/{id}/steer", post(steer_agent_job_handler))
         .route("/api/workspace-reviews/{id}", any(workspace_review_handler))
         .route("/api/workspace-reviews/{id}/approve", any(workspace_approve_handler))
         .route("/api/workspace-reviews/{id}/reject", any(workspace_reject_handler))
@@ -167,6 +168,7 @@ fn node_route_parameter(path: &str) -> Option<&str> {
         ["characters", id, "name" | "settings" | "identity-prompt" | "context-settings" | "history"]
         | ["characters", id, "context", "compact"]
         | ["agent-jobs", id]
+        | ["agent-jobs", id, "steer"]
         | ["terminal-sessions", id]
         | ["terminal-sessions", id, "events" | "interrupt" | "dispatch"]
         | ["live-feed", id]
@@ -864,6 +866,34 @@ async fn cancel_agent_job_handler(State(state): State<AppState>, Path(character_
     match state.runtime.cancel(&character_id).await {
         Ok(result) => send(StatusCode::OK, &result),
         Err(AgentError::JobNotFound(message)) => error(StatusCode::NOT_FOUND, &message),
+        Err(other) => error(StatusCode::INTERNAL_SERVER_ERROR, &other.to_string()),
+    }
+}
+
+/// POST /api/agent-jobs/:characterId/steer. 실행 중인 GUI 업무에 끼어든다. 받아들이면 202,
+/// 이 업무가 끼어들기를 받을 수 없으면 409(앱은 다음 턴 예약으로 돌린다), 실행 중인 업무가 없으면 404다.
+async fn steer_agent_job_handler(
+    State(state): State<AppState>,
+    Path(character_id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(response) = trusted_json_mutation(&headers) {
+        return response;
+    }
+    let body = match read_json(&body) {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
+    if state.runtime.services().is_err() {
+        return error(StatusCode::SERVICE_UNAVAILABLE, RUNTIME_UNAVAILABLE);
+    }
+    match state.runtime.steer(&character_id, body.get("prompt"), body.get("attachmentPaths")).await {
+        Ok(result) => send(StatusCode::ACCEPTED, &result),
+        Err(AgentError::JobNotFound(message)) => error(StatusCode::NOT_FOUND, &message),
+        Err(AgentError::Busy(message)) => error(StatusCode::CONFLICT, &message),
+        Err(AgentError::Failed(message)) => error(StatusCode::BAD_REQUEST, &message),
+        Err(AgentError::Unavailable) => error(StatusCode::SERVICE_UNAVAILABLE, RUNTIME_UNAVAILABLE),
         Err(other) => error(StatusCode::INTERNAL_SERVER_ERROR, &other.to_string()),
     }
 }

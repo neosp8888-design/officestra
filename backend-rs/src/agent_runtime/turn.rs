@@ -7,8 +7,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use serde_json::{Map, Value, json};
 use sqlx::PgConnection;
+use tokio::sync::mpsc;
 
 use super::attachments::StagedAttachment;
+use super::codex_app_server::CodexSteer;
 use super::file_changes::{FileSnapshots, capture_file_snapshots, file_change_statistics};
 use super::launch::RuntimeCharacter;
 use super::process_group::ProcessGroup;
@@ -18,7 +20,7 @@ use super::usage::{accumulated_usage, usage_for_turn};
 use crate::agent_event_parser::{decode_agent_response, file_change_activity_text, parse_agent_event};
 use crate::antigravity_local_state::antigravity_turn_request_usages;
 use crate::antigravity_reasoning::antigravity_step_reasonings;
-use crate::claude_persistent_worker::ClaudePersistentWorker;
+use crate::claude_persistent_worker::{ClaudePersistentWorker, STEER_DELIVERED_EVENT};
 use crate::developer_tool_events::DeveloperToolEventKeys;
 use crate::js::{is_js_integer, js_join, js_string, js_trim, js_truthy, now_milliseconds, number_to_string, pg_text, to_js_json};
 use crate::structured_turn_result::{apply_structured_turn_result, consume_structured_turn_result};
@@ -32,6 +34,8 @@ pub struct TurnHandle {
     pub(crate) cancel_requested: Arc<AtomicBool>,
     pub(crate) process: Mutex<Option<ProcessGroup>>,
     pub(crate) claude_worker: Mutex<Option<Arc<ClaudePersistentWorker>>>,
+    /// Codex app-server 턴의 끼어들기 통로. 턴이 끝나면 비운다.
+    pub(crate) codex_steer: Mutex<Option<mpsc::UnboundedSender<CodexSteer>>>,
     pub(crate) state: tokio::sync::Mutex<TurnState>,
 }
 
@@ -43,8 +47,17 @@ impl TurnHandle {
             cancel_requested: Arc::clone(&state.cancel_requested),
             process: Mutex::new(None),
             claude_worker: Mutex::new(None),
+            codex_steer: Mutex::new(None),
             state: tokio::sync::Mutex::new(state),
         })
+    }
+
+    pub(crate) fn set_codex_steer(&self, sender: Option<mpsc::UnboundedSender<CodexSteer>>) {
+        *self.codex_steer.lock().unwrap_or_else(PoisonError::into_inner) = sender;
+    }
+
+    pub(crate) fn codex_steer(&self) -> Option<mpsc::UnboundedSender<CodexSteer>> {
+        self.codex_steer.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
 
     pub fn cancel_requested(&self) -> bool {
@@ -130,6 +143,8 @@ pub struct TurnState {
     pub(crate) response_text: String,
     pub(crate) partial_text: String,
     last_partial_persisted_at: f64,
+    /// 보냈지만 CLI가 받아 갔다는 확인을 아직 못 받은 끼어들기. 열쇠는 끼어들기 ID, 값은 본문이다.
+    pending_steers: HashMap<String, String>,
 }
 
 /// TurnState를 만들 때 prepareTurn·startAccepted가 정하는 값.
@@ -194,6 +209,7 @@ impl TurnState {
             response_text: String::new(),
             partial_text: String::new(),
             last_partial_persisted_at: 0.0,
+            pending_steers: HashMap::new(),
         }
     }
 
@@ -223,8 +239,51 @@ impl TurnState {
         services.broadcast(json!({ "type": "feed.changed", "turnId": self.turn_id, "characterId": self.character_id() }));
     }
 
+    /// 끼어든 메시지를 실행 중 활동으로 남긴다. 그 앞까지 쓴 글은 중간 메시지로 확정해 뒤 답과 섞이지 않게 한다.
+    pub async fn begin_steer(&mut self, services: &RuntimeServices, steer_id: &str, text: &str) -> Result<(), String> {
+        self.complete_pending_initial_codex_reasoning(services, None).await?;
+        self.promote_pending_agent_message(services).await?;
+        if self.backend() == "codex" {
+            self.response_text.clear();
+            self.partial_text.clear();
+        }
+        let activity = json!({ "kind": "steer", "text": text, "eventKey": steer_event_key(steer_id), "status": "running" });
+        self.add_activity(services, &activity).await?;
+        self.pending_steers.insert(steer_id.to_string(), text.to_string());
+        Ok(())
+    }
+
+    /// 끼어들기 결과. CLI가 받아 가면 기록 질문에도 덧붙이고, 전달하지 못했으면 실패로 남긴다.
+    pub async fn finish_steer(&mut self, services: &RuntimeServices, steer_id: &str, delivered: bool) -> Result<(), String> {
+        let Some(text) = self.pending_steers.remove(steer_id) else {
+            return Ok(());
+        };
+        if delivered {
+            self.record_prompt = format!("{}\n\n[끼어들기] {text}", self.record_prompt);
+        }
+        let status = if delivered { "completed" } else { "failed" };
+        let activity = json!({ "kind": "steer", "text": text, "eventKey": steer_event_key(steer_id), "status": status });
+        self.add_activity(services, &activity).await
+    }
+
+    /// 턴이 끝날 때까지 받아 갔다는 확인이 없던 끼어들기를 실패로 남긴다.
+    pub async fn settle_pending_steers(&mut self, services: &RuntimeServices) -> Result<(), String> {
+        let pending: Vec<String> = self.pending_steers.keys().cloned().collect();
+        for steer_id in pending {
+            self.finish_steer(services, &steer_id, false).await?;
+        }
+        Ok(())
+    }
+
     /// consumeOutputLine.
     pub async fn consume_output_line(&mut self, services: &RuntimeServices, line: &str) -> Result<(), String> {
+        if line.contains(STEER_DELIVERED_EVENT)
+            && let Ok(event) = serde_json::from_str::<Value>(line)
+            && event.get("type").and_then(Value::as_str) == Some(STEER_DELIVERED_EVENT)
+        {
+            let steer_id = event.get("steerId").and_then(Value::as_str).unwrap_or_default().to_string();
+            return self.finish_steer(services, &steer_id, true).await;
+        }
         let Some(mut event) = parse_agent_event(line, &self.character.backend, Some(&self.workdir))? else {
             return Ok(());
         };
@@ -970,6 +1029,10 @@ fn template(value: Option<&Value>) -> String {
 
 fn message_event_key(key: Option<&str>) -> Value {
     key.filter(|key| !key.is_empty()).map_or(Value::Null, |key| Value::String(format!("message:{key}")))
+}
+
+fn steer_event_key(steer_id: &str) -> String {
+    format!("steer:{steer_id}")
 }
 
 fn json_text(value: &Value) -> String {

@@ -22,25 +22,50 @@ const BUSY_HINT: &str = "수신 직원의 실행 상태를 확인하세요. work
 const NOTE: &str =
     "현재 시점의 접수 가능 여부입니다. 실제 접수는 POST 응답으로 확인하세요. 기록·세션의 active는 실행 상태가 아닙니다.";
 
-/// 마지막 인자(프롬프트)의 표식으로 동작을 고른다. 받은 앞 인자 넷을 남긴다.
-const FAKE_CODEX: &str = r#"#!/bin/sh
+/// codex app-server 흉내. 스크립트마다 모드(ok·wait·fail)와 새 스레드 ID를 정한다.
+/// ok는 turn/start에 답·사용량·완료를 바로 내고, wait는 끝내지 않은 채 끼어들기(turn/steer)만 받으며, fail은 첫 요청에서 표준 오류를 남기고 끝난다.
+/// 받은 앞 인자 둘과 마지막 인자, 스레드 요청, 끼어들기 요청을 남긴다.
+const FAKE_CODEX: &str = r##"#!/bin/sh
 dir='__DIR__'
-echo "$1 $2 $3 $4" >> "$dir/codex-args.log"
-for prompt; do :; done
-case "$prompt" in
-  *MOCK_FAIL*)
-    echo '모의 CLI가 실패했습니다.' >&2
-    exit 3 ;;
-  *MOCK_WAIT*)
-    echo $$ > "$dir/wait.pid"
-    echo '{"type":"thread.started","thread_id":"thread-wait"}'
-    while [ ! -f "$dir/release" ] && [ -d "$dir" ]; do sleep 0.05; done ;;
-  *)
-    echo '{"type":"thread.started","thread_id":"thread-ok"}' ;;
-esac
-echo '{"type":"item.completed","item":{"id":"m1","type":"agent_message","text":"모의 답변입니다."}}'
-echo '{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":5}}'
-"#;
+mode='__MODE__'
+thread='__THREAD__'
+turn="turn-$mode"
+for last; do :; done
+echo "$1 $2 $last" >> "$dir/codex-args.log"
+if [ "$mode" = wait ]; then echo $$ > "$dir/wait.pid"; fi
+if [ "$mode" = fail ]; then
+  IFS= read -r line
+  echo '모의 CLI가 실패했습니다.' >&2
+  exit 3
+fi
+field() { printf '%s\n' "$line" | sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p"; }
+while IFS= read -r line; do
+  id=$(printf '%s\n' "$line" | sed -n 's/^{"id":\([0-9]*\),.*/\1/p')
+  case "$line" in
+    *'"method":"initialize",'*)
+      echo "{\"id\":$id,\"result\":{\"userAgent\":\"test\"}}" ;;
+    *'"method":"thread/start",'*)
+      echo 'thread/start' >> "$dir/codex-threads.log"
+      echo "{\"id\":$id,\"result\":{\"thread\":{\"id\":\"$thread\"}}}" ;;
+    *'"method":"thread/resume",'*)
+      thread=$(field threadId)
+      echo "thread/resume $thread" >> "$dir/codex-threads.log"
+      echo "{\"id\":$id,\"result\":{\"thread\":{\"id\":\"$thread\"}}}" ;;
+    *'"method":"turn/start",'*)
+      echo "{\"id\":$id,\"result\":{\"turn\":{\"id\":\"$turn\"}}}"
+      if [ "$mode" = ok ]; then
+        echo "{\"method\":\"item/completed\",\"params\":{\"threadId\":\"$thread\",\"turnId\":\"$turn\",\"item\":{\"id\":\"m1\",\"type\":\"agentMessage\",\"text\":\"모의 답변입니다.\"}}}"
+        echo "{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"$thread\",\"turnId\":\"$turn\",\"tokenUsage\":{\"total\":{\"inputTokens\":10,\"cachedInputTokens\":0,\"outputTokens\":5}}}}"
+        echo "{\"method\":\"turn/completed\",\"params\":{\"threadId\":\"$thread\",\"turn\":{\"id\":\"$turn\",\"status\":\"completed\"}}}"
+      fi ;;
+    *'"method":"turn/steer",'*)
+      printf '%s\n' "$line" >> "$dir/steer-input.log"
+      client=$(field clientUserMessageId)
+      echo "{\"id\":$id,\"result\":{\"turnId\":\"$turn\"}}"
+      echo "{\"method\":\"item/started\",\"params\":{\"threadId\":\"$thread\",\"turnId\":\"$turn\",\"item\":{\"id\":\"user-$client\",\"type\":\"userMessage\",\"clientId\":\"$client\",\"content\":[]}}}" ;;
+  esac
+done
+"##;
 
 /// stream-json 입력 한 줄마다 init과 result를 낸다. 중단 제어 요청은 무시한다.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
@@ -72,7 +97,13 @@ impl Fixture {
         let root = std::fs::canonicalize(&root).unwrap();
         let bin = root.join("bin");
         let text = root.to_str().unwrap();
-        write_script(&bin.join("codex"), &FAKE_CODEX.replace("__DIR__", text));
+        // 실행기는 파일 이름이 codex인 것만 받으므로 모드별 스크립트를 하위 폴더에 둔다.
+        for (folder, mode, thread) in [("", "ok", "thread-ok"), ("wait", "wait", "thread-wait"), ("fail", "fail", "thread-fail")] {
+            let directory = bin.join(folder);
+            std::fs::create_dir_all(&directory).unwrap();
+            let codex = FAKE_CODEX.replace("__DIR__", text).replace("__MODE__", mode).replace("__THREAD__", thread);
+            write_script(&directory.join("codex"), &codex);
+        }
         write_script(&bin.join("claude"), &FAKE_CLAUDE.replace("__DIR__", text));
         Self { root, bin }
     }
@@ -260,8 +291,8 @@ async fn 모의_cli로_잡을_접수하고_끝낸다() {
     let fixture = Fixture::new();
     for (id, name, backend, permission, config) in [
         ("codex-a", "코덱스", "codex", "workspace-write", fixture.config("codex")),
-        ("codex-wait", "대기", "codex", "workspace-write", fixture.config("codex")),
-        ("codex-fail", "실패", "codex", "workspace-write", fixture.config("codex")),
+        ("codex-wait", "대기", "codex", "workspace-write", fixture.config("wait/codex")),
+        ("codex-fail", "실패", "codex", "workspace-write", fixture.config("fail/codex")),
         ("claude-a", "클로드", "claude", "acceptEdits", fixture.config("claude")),
         ("sender", "발신", "codex", "workspace-write", json!({})),
     ] {
@@ -358,7 +389,8 @@ async fn 모의_cli로_잡을_접수하고_끝낸다() {
     assert_eq!(second_job["conversationId"], job["conversationId"]);
     let second = second_job["turnId"].as_str().unwrap().to_string();
     assert_eq!(wait_for_turn(&state, &second, "codex-a").await, ("completed".to_string(), None));
-    assert_eq!(fixture.read("codex-args.log"), "exec --json --skip-git-repo-check -c\nexec resume thread-ok --json\n");
+    assert_eq!(fixture.read("codex-args.log"), "app-server -c --stdio\napp-server -c --stdio\n");
+    assert_eq!(fixture.read("codex-threads.log"), "thread/start\nthread/resume thread-ok\n");
 
     // 답 없이 실패하면 표준 오류가 실패 사유이고, 외부 세션이 없으니 CLI 세션을 닫는다.
     let (status, job) = start(&state, json!({ "characterId": "codex-fail", "prompt": "MOCK_FAIL" })).await;
@@ -379,7 +411,7 @@ async fn 모의_cli로_잡을_접수하고_끝낸다() {
     assert!(ended);
     assert_eq!(availability(&state, "codex-fail").await["state"], "ready");
 
-    // 실행 중: 상태·중복 접수·도구 이벤트·드레인·CLI 변경 차단·중단.
+    // 실행 중: 상태·중복 접수·끼어들기·도구 이벤트·드레인·CLI 변경 차단·중단.
     let (status, job) = start(&state, json!({ "characterId": "codex-wait", "prompt": "MOCK_WAIT" })).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{job}");
     let waiting = job["turnId"].as_str().unwrap().to_string();
@@ -399,6 +431,43 @@ async fn 모의_cli로_잡을_접수하고_끝낸다() {
             "statusURL": "/api/agent-jobs?characterId=codex-wait",
             "hint": BUSY_HINT,
         })
+    );
+
+    // 끼어들기는 app-server turn/steer로 실행 중 턴에 보내고, CLI가 받아 가면 활동을 완료로 남긴다.
+    let steer = |prompt: &str| json!({ "prompt": prompt });
+    let (status, body) = call(&state, "POST", "/api/agent-jobs/codex-wait/steer", Some(steer("  "))).await;
+    assert_eq!((status, body), (StatusCode::BAD_REQUEST, json!({ "error": "끼어들 내용을 입력하세요." })));
+    let (status, body) = call(&state, "POST", "/api/agent-jobs/codex-wait/steer", Some(steer("  방향을 바꿔 줘  "))).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!((&body["turnId"], &body["status"]), (&json!(waiting), &json!("accepted")));
+    let steer_id = body["steerId"].as_str().unwrap().to_string();
+    let sent: Value = serde_json::from_str(fixture.read("steer-input.log").trim()).unwrap();
+    assert_eq!(sent["method"], "turn/steer");
+    assert_eq!(
+        sent["params"],
+        json!({
+            "threadId": "thread-wait", "expectedTurnId": "turn-wait", "clientUserMessageId": steer_id,
+            "input": [{ "type": "text", "text": "방향을 바꿔 줘" }],
+        })
+    );
+    let mut steer_activity = None;
+    for _ in 0..200 {
+        let row: Option<(String, String, String)> =
+            sqlx::query_as("SELECT event_key, text, status FROM turn_activities WHERE turn_id = $1::uuid AND kind = 'steer'")
+                .bind(&waiting)
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        if row.as_ref().is_some_and(|row| row.2 == "completed") {
+            steer_activity = row;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        steer_activity,
+        Some((format!("steer:{steer_id}"), "방향을 바꿔 줘".to_string(), "completed".to_string())),
+        "끼어들기 활동이 완료로 남지 않았습니다."
     );
 
     let event = |session: &str, mode: &str| {
@@ -448,6 +517,8 @@ async fn 모의_cli로_잡을_접수하고_끝낸다() {
     assert_eq!((status, body), (StatusCode::OK, json!({ "turnId": waiting, "status": "interrupted" })));
     assert!(wait_for_exit(pid).await, "중단한 모의 CLI가 끝나지 않았습니다.");
     let (status, body) = call(&state, "DELETE", "/api/agent-jobs/codex-wait", None).await;
+    assert_eq!((status, body), (StatusCode::NOT_FOUND, json!({ "error": "실행 중인 업무를 찾을 수 없습니다." })));
+    let (status, body) = call(&state, "POST", "/api/agent-jobs/codex-wait/steer", Some(steer("늦은 끼어들기"))).await;
     assert_eq!((status, body), (StatusCode::NOT_FOUND, json!({ "error": "실행 중인 업무를 찾을 수 없습니다." })));
     // 끊긴 프로세스의 뒤처리가 중단 기록을 덮지 않는다.
     tokio::time::sleep(Duration::from_millis(300)).await;

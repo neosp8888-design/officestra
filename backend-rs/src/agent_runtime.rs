@@ -2,6 +2,7 @@
 
 pub mod attachments;
 pub mod claude_session;
+pub mod codex_app_server;
 pub mod compaction;
 pub mod file_changes;
 pub mod launch;

@@ -200,6 +200,7 @@ enum ClaudeTranscriptEntry: Identifiable, Equatable {
     case edits(ClaudeEditRun)
     case plan(ClaudePlanBoard)
     case message(ClaudeTranscriptMessage)
+    case steer(AgentSteerNote)
 
     var id: String {
         switch self {
@@ -213,6 +214,8 @@ enum ClaudeTranscriptEntry: Identifiable, Equatable {
             board.id
         case .message(let message):
             message.id
+        case .steer(let note):
+            note.id
         }
     }
 }
@@ -603,6 +606,12 @@ struct ClaudeTranscriptPresentation: Equatable {
                         )
                     )
                 )
+            case AgentSteerNote.activityKind:
+                // 실행 중 끼워 넣은 입력은 그 시점에서 작업 묶음을 끊는다.
+                flushGroups()
+                if let note = AgentSteerNote(activity) {
+                    entries.append(.steer(note))
+                }
             default:
                 let call = ClaudeToolCall.parse(activity)
                 let step = ClaudeToolStep(
@@ -691,7 +700,9 @@ struct ClaudeTranscriptPresentation: Equatable {
             showsWaiting: isRunning
                 && streamingMessageID == nil
                 && !activities.contains { activity in
+                    // 전달을 기다리는 끼어들기는 모델 진행 카드가 아니다.
                     activity.status == .running
+                        && activity.kind != AgentSteerNote.activityKind
                         && !(
                             activity.kind == "thinking"
                                 && !ClaudeThought.hasContent(activity)

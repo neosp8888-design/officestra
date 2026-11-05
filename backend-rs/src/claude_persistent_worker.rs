@@ -21,12 +21,18 @@ use crate::local_embedding::signal_name;
 pub const DEFAULT_SUGGESTION_GRACE: Duration = Duration::from_secs(3);
 /// 중단 제어 요청을 보내면 Claude Code는 보통 수십 ms 안에 비용이 담긴 result를 돌려준다. 이 안에 오지 않으면 그대로 끝낸다.
 pub const DEFAULT_INTERRUPT_RESULT_TIMEOUT: Duration = Duration::from_secs(3);
+/// 끼어든 메시지가 result 뒤에 다음 턴으로 처리될 때, 추천 문장을 만든 뒤라 몇 초 늦게 시작한다.
+/// 이 시간 안에 그 메시지를 받았다는 되돌림이 오지 않으면 업무를 끝내 멈춰 있지 않게 한다.
+pub const DEFAULT_STEER_RESULT_TIMEOUT: Duration = Duration::from_secs(90);
+/// 끼어든 메시지를 Claude Code가 받아 갔을 때 줄 처리기에 넘기는 합성 이벤트 종류다.
+pub const STEER_DELIVERED_EVENT: &str = "officestra_steer_delivered";
 const FORCE_KILL_DELAY: Duration = Duration::from_secs(5);
 const STDERR_TAIL_UNITS: usize = 8_192;
 const COMPACT_PROMPT: &str = "/compact OFFICESTRA 직원 이름과 직급 호칭을 쓰지 말고, 사용자는 '사용자'로 표현하며 요청·결정·진행 상태만 내용 중심으로 요약해 주세요.";
 const CLOSED: &str = "Claude Code 지속 세션이 종료됐습니다.";
 pub const DEFAULT_CLOSE_REASON: &str = "Claude Code 지속 세션을 종료했습니다.";
 const CANCELLED: &str = "사용자가 Claude Code 업무를 중단했습니다.";
+const STEER_TIMEOUT_CLOSE_REASON: &str = "끼어든 메시지를 받아 갔다는 확인이 없어 Claude Code 지속 세션을 닫았습니다.";
 const MODEL_USAGE_FIELDS: [&str; 10] = [
     "inputTokens",
     "input_tokens",
@@ -57,6 +63,7 @@ pub struct WorkerOptions {
     pub on_exit: Box<dyn FnOnce(u64) + Send>,
     pub suggestion_grace: Duration,
     pub interrupt_result_timeout: Duration,
+    pub steer_result_timeout: Duration,
 }
 
 /// Claude 결과의 세션 누적 비용과 모델별 누적 사용량. 다음 결과에서 이 값을 빼 턴 증분을 만든다.
@@ -80,6 +87,12 @@ struct Current {
     settled: watch::Sender<()>,
     result_seen: bool,
     suggestion_timer: Option<tokio::task::AbortHandle>,
+    /// 보냈지만 Claude Code가 아직 받아 가지 않은 끼어들기 메시지의 uuid. 남아 있으면 result가 와도 업무를 끝내지 않는다.
+    pending_steers: Vec<String>,
+    /// 이 업무의 첫 result 직전 누적값. 끼어들기로 result가 여러 번 와도 업무 전체를 한 번에 센다. 첫 result 전에는 None이다.
+    result_baseline: Option<Option<CumulativeUsage>>,
+    /// 재개 직후라 비용 기준이 없던 업무다. 뒤따르는 result의 비용도 같이 비운다.
+    cost_unsafe: bool,
 }
 
 struct State {
@@ -100,6 +113,7 @@ pub struct ClaudePersistentWorker {
     pub cwd: Option<String>,
     suggestion_grace: Duration,
     interrupt_result_timeout: Duration,
+    steer_result_timeout: Duration,
     process: ProcessGroup,
     stdin: tokio::sync::Mutex<Option<ChildStdin>>,
     state: Mutex<State>,
@@ -129,6 +143,7 @@ impl ClaudePersistentWorker {
             cwd: options.cwd,
             suggestion_grace: options.suggestion_grace,
             interrupt_result_timeout: options.interrupt_result_timeout,
+            steer_result_timeout: options.steer_result_timeout,
             process: ProcessGroup::new(child.as_ref().and_then(tokio::process::Child::id)),
             stdin: tokio::sync::Mutex::new(child.as_mut().and_then(|child| child.stdin.take())),
             state: Mutex::new(State {
@@ -213,6 +228,9 @@ impl ClaudePersistentWorker {
                 settled: watch::Sender::new(()),
                 result_seen: false,
                 suggestion_timer: None,
+                pending_steers: Vec::new(),
+                result_baseline: None,
+                cost_unsafe: false,
             });
             receiver
         };
@@ -225,6 +243,46 @@ impl ClaudePersistentWorker {
             self.fail(error);
         }
         receiver.await.unwrap_or_else(|_| Err(CLOSED.into()))
+    }
+
+    /// 진행 중인 업무에 사용자 메시지를 끼워 넣는다. Claude Code는 다음 도구 경계에서 같은 턴에 합치거나,
+    /// 마지막 글을 쓰던 중이면 result 뒤에 이어서 처리한다. 어느 쪽이든 그 메시지를 받아 간 뒤의 result까지 이 업무로 받는다.
+    pub async fn steer(self: &Arc<Self>, steer_id: &str, prompt: &str) -> Result<(), String> {
+        let turn = {
+            let mut state = self.lock();
+            if state.closed || state.terminal_error.is_some() {
+                return Err(state.terminal_error.clone().unwrap_or_else(|| CLOSED.into()));
+            }
+            let Some(current) = state.current.as_mut() else {
+                return Err("Claude Code 지속 세션에 진행 중인 업무가 없습니다.".into());
+            };
+            current.pending_steers.push(steer_id.to_string());
+            // result 뒤 추천 대기 중이었다면 끝내지 않고 끼어든 메시지의 result까지 기다린다.
+            if current.result_seen {
+                self.arm_steer_timeout(current);
+            }
+            current.turn
+        };
+        let message = json!({
+            "type": "user",
+            "uuid": steer_id,
+            "message": { "role": "user", "content": prompt },
+            "parent_tool_use_id": null,
+        });
+        if let Err(error) = self.write_line(&message).await {
+            let finished = {
+                let mut state = self.lock();
+                state.current.as_mut().filter(|current| current.turn == turn).is_some_and(|current| {
+                    current.pending_steers.retain(|id| id != steer_id);
+                    current.result_seen && current.pending_steers.is_empty()
+                })
+            };
+            if finished {
+                self.finish_current(turn);
+            }
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// compact. `/compact`를 한 턴으로 보내고 완료 경계의 압축 전후 토큰을 돌려준다.
@@ -397,13 +455,36 @@ impl ClaudePersistentWorker {
             if kind.as_deref() == Some("result") {
                 object = turn_scoped_result(&mut state, &object);
             }
-            state.current.as_ref().map(|current| (current.turn, Arc::clone(&current.on_line), current.result_seen))
+            // 보낸 메시지의 되돌림(--replay-user-messages)이다. 끼어든 메시지면 받아 갔다는 합성 이벤트로 바꿔 넘기고,
+            // 업무 첫 메시지처럼 화면에 이미 있는 되돌림은 넘기지 않는다.
+            if kind.as_deref() == Some("user") && object.get("isReplay") == Some(&Value::Bool(true)) {
+                let uuid = object.get("uuid").and_then(Value::as_str).map(str::to_string);
+                let current = state.current.as_mut();
+                let Some((current, index, uuid)) = current.zip(uuid).and_then(|(current, uuid)| {
+                    current.pending_steers.iter().position(|id| *id == uuid).map(|index| (current, index, uuid))
+                }) else {
+                    return Ok(());
+                };
+                current.pending_steers.remove(index);
+                if current.result_seen {
+                    // 앞 result 뒤에 새 턴으로 받아 갔다. 그 턴의 result와 추천을 다시 기다린다.
+                    current.result_seen = false;
+                    if let Some(timer) = current.suggestion_timer.take() {
+                        timer.abort();
+                    }
+                }
+                object = json!({ "type": STEER_DELIVERED_EVENT, "steerId": uuid });
+            }
+            state.current.as_ref().map(|current| {
+                (current.turn, Arc::clone(&current.on_line), current.result_seen, !current.pending_steers.is_empty())
+            })
         };
-        let Some((turn, on_line, result_seen)) = current else {
+        let Some((turn, on_line, result_seen, steering)) = current else {
             return Ok(());
         };
         // 정상 추천은 그 턴의 result 뒤에 온다. 이전 턴 유예 시간을 넘겨 늦게 온 추천은 다음 턴에 붙이지 않는다.
-        if kind.as_deref() == Some("prompt_suggestion") && !result_seen {
+        // 끼어든 메시지를 기다리는 동안의 추천은 곧 낡으므로 넘기지 않는다.
+        if kind.as_deref() == Some("prompt_suggestion") && (!result_seen || steering) {
             return Ok(());
         }
         let text = String::from_utf8(to_js_json(&object).map_err(|error| error.to_string())?).unwrap_or_default();
@@ -423,6 +504,11 @@ impl ClaudePersistentWorker {
                 return Ok(());
             };
             current.result_seen = true;
+            if !current.pending_steers.is_empty() {
+                // 끼어든 메시지를 아직 받아 가지 않았다. 실패 result여도 Claude Code는 그 메시지를 이어서 처리한다.
+                self.arm_steer_timeout(current);
+                return Ok(());
+            }
             if !failed {
                 let worker = Arc::clone(self);
                 let grace = self.suggestion_grace;
@@ -440,9 +526,36 @@ impl ClaudePersistentWorker {
         Ok(())
     }
 
+    /// result 뒤에 끼어든 메시지의 되돌림을 기다린다. 제한 시간 안에 오지 않으면 그 메시지는 버리고 업무를 끝낸다.
+    /// 이미 보낸 메시지는 취소되지 않아 늦게 처리될 수 있다. 같은 프로세스를 다음 업무에 쓰면 그 답이 섞이므로 지속 세션도 닫는다.
+    fn arm_steer_timeout(self: &Arc<Self>, current: &mut Current) {
+        if let Some(timer) = current.suggestion_timer.take() {
+            timer.abort();
+        }
+        let (worker, turn, timeout) = (Arc::clone(self), current.turn, self.steer_result_timeout);
+        current.suggestion_timer = Some(
+            tokio::spawn(async move {
+                tokio::time::sleep(timeout).await;
+                let expired = {
+                    let mut state = worker.lock();
+                    state.current.as_mut().filter(|current| current.turn == turn).map(|current| {
+                        current.pending_steers.clear();
+                        current.suggestion_timer = None;
+                    })
+                };
+                if expired.is_some() {
+                    eprintln!("[claude-worker] 끼어든 메시지를 받아 갔다는 되돌림이 오지 않아 업무를 끝내고 지속 세션을 닫습니다.");
+                    worker.finish_current(turn);
+                    worker.close(STEER_TIMEOUT_CLOSE_REASON);
+                }
+            })
+            .abort_handle(),
+        );
+    }
+
     fn finish_current(&self, turn: u64) {
         let mut state = self.lock();
-        if state.current.as_ref().is_none_or(|current| current.turn != turn) {
+        if state.current.as_ref().is_none_or(|current| current.turn != turn || !current.pending_steers.is_empty()) {
             return;
         }
         if let Some(current) = state.current.take() {
@@ -484,12 +597,26 @@ async fn collect_stderr(worker: Arc<ClaudePersistentWorker>, stderr: Option<Chil
 
 /// turnScopedResult. 누적 결과를 턴 증분으로 바꾼다. 재개했는데 저장된 누적 기준이 없으면 첫 결과의 비용은 모르는 값으로 둔다.
 fn turn_scoped_result(state: &mut State, result: &Value) -> Value {
-    let (scoped, cumulative) = scoped_claude_cumulative_result(result, state.cumulative.as_ref());
+    // 끼어들기로 한 업무에 result가 여러 번 오면, 뒤 result도 업무 첫 result 직전 누적값을 빼 업무 전체를 담는다.
+    // 실행기는 result의 사용량을 덮어쓰므로 마지막 result가 업무 전체 값이 된다.
+    let session_cumulative = state.cumulative.clone();
+    let previous = match state.current.as_mut() {
+        Some(current) => current.result_baseline.get_or_insert(session_cumulative).clone(),
+        None => session_cumulative,
+    };
+    let (scoped, cumulative) = scoped_claude_cumulative_result(result, previous.as_ref());
     state.cumulative = Some(cumulative);
-    if !state.resumed_without_cost_baseline {
+    let first_unsafe = std::mem::take(&mut state.resumed_without_cost_baseline);
+    let unsafe_cost = match state.current.as_mut() {
+        Some(current) => {
+            current.cost_unsafe |= first_unsafe;
+            current.cost_unsafe
+        }
+        None => first_unsafe,
+    };
+    if !unsafe_cost {
         return scoped;
     }
-    state.resumed_without_cost_baseline = false;
     // 첫 재개 누적값에는 이전 턴이 섞일 수 있다. 사용량은 두고 비용과 모델별 누적은 지운다.
     let mut safe = scoped;
     if let Some(object) = safe.as_object_mut() {

@@ -143,6 +143,51 @@ final class AgentActivityLogPresentationTests: XCTestCase {
         XCTAssertEqual(visibleLatest.text, latest.text)
     }
 
+    func testSteerFollowsTheMessageItInterruptedWithoutDeferringIt() throws {
+        let message = try makeActivity(
+            id: "message-1",
+            kind: "message",
+            text: "빌드부터 확인하겠습니다.",
+            status: "completed"
+        )
+        let steer = try makeActivity(
+            id: "steer-1",
+            kind: "steer",
+            text: "테스트도 같이 돌려줘",
+            status: "completed"
+        )
+        let command = try makeActivity(
+            id: "command-1",
+            kind: "command",
+            text: "swift test",
+            status: "running"
+        )
+        let presentation = CodexTranscriptPresentation.make(
+            turnID: "turn-1",
+            activities: [message, steer, command],
+            response: "",
+            responseUpdatedAt: Date(timeIntervalSince1970: 1_000),
+            isRunning: true
+        )
+
+        XCTAssertNotEqual(
+            presentation.deferredResponseMessageID,
+            "activity:message-1",
+            "끼어들기 앞의 메시지는 이미 공개된 진행문입니다."
+        )
+        guard
+            presentation.entries.count == 3,
+            case .message(let shown) = presentation.entries[0],
+            case .steer(let note) = presentation.entries[1],
+            case .activityGroup = presentation.entries[2]
+        else {
+            return XCTFail("끼어들기가 원래 시간 위치에 있지 않습니다.")
+        }
+        XCTAssertEqual(shown.text, message.text)
+        XCTAssertEqual(note.statusLabel, OfficeLocalization.string("반영됨"))
+        XCTAssertTrue(presentation.showsWaiting)
+    }
+
     func testVisibleMessageStaysInPlaceWhenItBecomesConclusion() throws {
         let message = try makeActivity(
             id: "message-final",

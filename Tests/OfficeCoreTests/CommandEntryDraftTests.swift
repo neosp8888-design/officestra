@@ -123,6 +123,57 @@ final class CommandEntryDraftTests: XCTestCase {
         XCTAssertNil(director.replyRecipients[.boss], "Recipient choices belong to the sending employee")
     }
 
+    func testQueuedCardAndSteerBubbleRenderInBothThemes() throws {
+        let fallback = QueuedCommand(prompt: "끼어들기가 거절되어 예약으로 옮긴 요청")
+        let commands = [
+            QueuedCommand(prompt: "테스트 결과도 같이 정리해줘"),
+            fallback,
+        ]
+        let steer = try XCTUnwrap(AgentSteerNote(try makeActivity(kind: "steer", text: "그 파일 말고 설정 파일부터 봐줘")))
+        XCTAssertNil(AgentSteerNote(try makeActivity(kind: "message", text: "일반 응답")))
+        for scheme in [ColorScheme.light, .dark] {
+            let card = QueuedCommandCard(
+                commands: commands, accent: DashboardPalette.providerAccent(for: .claude),
+                isRunning: true, canSteer: true, fallbackCommandIDs: [fallback.id],
+                onSteer: { _ in }, onApply: { _ in }, onCancel: { _ in }
+            )
+            let host = NSHostingView(rootView: VStack(alignment: .leading, spacing: 16) {
+                AgentSteerBubbleView(note: steer)
+                card
+            }.padding(12).environment(\.colorScheme, scheme)
+                .frame(width: 560, height: 230, alignment: .topLeading)
+                .background(scheme == .dark ? Color(white: 0.13) : Color(white: 0.96)))
+            host.frame = NSRect(x: 0, y: 0, width: 560, height: 230)
+            host.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+            host.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            XCTAssertGreaterThan(bitmap.pixelsWide, 0)
+            if let directory = ProcessInfo.processInfo.environment["OFFICESTRA_COMPOSER_PREVIEW_DIR"] {
+                let url = URL(fileURLWithPath: directory).appendingPathComponent("queue-steer-\(scheme == .dark ? "dark" : "light").png")
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: url)
+            }
+        }
+        let filled = NSHostingView(rootView: QueuedCommandCard(
+            commands: commands, accent: .purple, isRunning: true, canSteer: false,
+            onSteer: { _ in }, onApply: { _ in }, onCancel: { _ in }
+        ).frame(width: 560))
+        let empty = NSHostingView(rootView: QueuedCommandCard(
+            commands: [], accent: .purple, isRunning: true, canSteer: false,
+            onSteer: { _ in }, onApply: { _ in }, onCancel: { _ in }
+        ).frame(width: 560))
+        XCTAssertGreaterThan(filled.fittingSize.height, 60, "Two queued commands need a visible card")
+        XCTAssertEqual(empty.fittingSize.height, 0, "An empty queue shows no card")
+    }
+
+    func testIdleCharacterCannotBeSteeredOrQueued() {
+        let director = AgentDirector(startBackgroundTasks: false)
+        XCTAssertFalse(director.canSteer(.leftWoman))
+        XCTAssertFalse(director.steerCommand("지금 끼어들기", for: .leftWoman))
+        XCTAssertTrue(director.queuedCommands(for: .leftWoman).isEmpty)
+        XCTAssertTrue(director.steerFallbackCommandIDs.isEmpty)
+    }
+
     func testAvailabilityAllowsReadyIdleSelectedCharacter() {
         let availability = CommandEntryAvailability(
             isReady: true,
@@ -213,6 +264,37 @@ final class CommandEntryDraftTests: XCTestCase {
         XCTAssertFalse(
             availability.canChooseAttachments(currentCount: 0)
         )
+    }
+
+    func testSteerableRunningCharacterAcceptsInputEvenWhenQueueIsFull() {
+        let availability = CommandEntryAvailability(
+            isReady: true,
+            isUpdatingConfiguration: false,
+            hasSelectedCharacter: true,
+            isSelectedCharacterRunning: true,
+            canQueueForSelectedCharacter: false,
+            canSteerSelectedCharacter: true
+        )
+
+        XCTAssertFalse(availability.canSubmit)
+        XCTAssertFalse(availability.canQueue, "가득 찬 예약은 더 받지 않아야 합니다.")
+        XCTAssertTrue(availability.canSteer)
+        XCTAssertTrue(availability.acceptsInput, "예약이 가득 차도 끼어들기는 받아야 합니다.")
+        XCTAssertTrue(availability.canChooseAttachments(currentCount: 0))
+    }
+
+    func testSteeringNeedsARunningCharacter() {
+        let availability = CommandEntryAvailability(
+            isReady: true,
+            isUpdatingConfiguration: false,
+            hasSelectedCharacter: true,
+            isSelectedCharacterRunning: false,
+            canQueueForSelectedCharacter: false,
+            canSteerSelectedCharacter: true
+        )
+
+        XCTAssertFalse(availability.canSteer)
+        XCTAssertTrue(availability.canSubmit)
     }
 
     func testCompactingCharacterCannotReceiveOrQueueWork() {
@@ -382,6 +464,66 @@ final class CommandEntryDraftTests: XCTestCase {
         )
         await fulfillment(of: [didSubmit], timeout: 1)
         XCTAssertEqual(submittedText, "한글")
+        XCTAssertEqual(textView.string, "")
+    }
+
+    func testTabQueuesInsteadOfSubmittingWhenQueueHandlerIsSet() throws {
+        let textView = CommandComposerTextView()
+        textView.string = "다음 업무"
+        var submittedText: String?
+        var queuedText: String?
+        textView.onSubmit = {
+            submittedText = $0
+            return true
+        }
+        textView.onQueue = {
+            queuedText = $0
+            return true
+        }
+
+        textView.keyDown(with: try makeTabEvent())
+
+        XCTAssertNil(submittedText, "Tab은 끼어들기·보내기가 아니라 예약이어야 합니다.")
+        XCTAssertEqual(queuedText, "다음 업무")
+        XCTAssertEqual(textView.string, "")
+    }
+
+    func testTabWithoutQueueHandlerNeverSubmits() throws {
+        let textView = CommandComposerTextView()
+        textView.string = "업무"
+        var submittedText: String?
+        textView.onSubmit = {
+            submittedText = $0
+            return true
+        }
+
+        textView.keyDown(with: try makeTabEvent())
+
+        XCTAssertNil(submittedText)
+        XCTAssertTrue(textView.string.hasPrefix("업무"), "예약이 없을 때 Tab이 입력을 지우면 안 됩니다.")
+    }
+
+    func testTabCommitsMarkedKoreanTextBeforeQueueing() async throws {
+        let textView = CommandComposerTextView()
+        textView.setMarkedText(
+            "예약",
+            selectedRange: NSRange(location: 2, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        var queuedText: String?
+        let didQueue = expectation(description: "조합 완료 뒤 예약")
+        textView.onQueue = {
+            queuedText = $0
+            didQueue.fulfill()
+            return true
+        }
+
+        textView.keyDown(with: try makeTabEvent())
+
+        XCTAssertFalse(textView.hasMarkedText())
+        XCTAssertNil(queuedText, "한글 조합 완료 이벤트보다 예약이 먼저 실행되면 안 됩니다.")
+        await fulfillment(of: [didQueue], timeout: 1)
+        XCTAssertEqual(queuedText, "예약")
         XCTAssertEqual(textView.string, "")
     }
 
@@ -592,6 +734,36 @@ final class CommandEntryDraftTests: XCTestCase {
                 keyCode: 36
             )
         )
+    }
+
+    private func makeTabEvent() throws -> NSEvent {
+        try XCTUnwrap(
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                characters: "\t",
+                charactersIgnoringModifiers: "\t",
+                isARepeat: false,
+                keyCode: 48
+            )
+        )
+    }
+
+    private func makeActivity(kind: String, text: String) throws -> LiveFeedActivity {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "id": "activity-\(kind)",
+            "kind": kind,
+            "text": text,
+            "status": "completed",
+            "occurredAt": 1_000,
+        ])
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        return try decoder.decode(LiveFeedActivity.self, from: data)
     }
 
     private func makeTextEvent(

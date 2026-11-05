@@ -274,6 +274,8 @@ struct ClaudeTranscriptView: View {
                 onFinishedTyping: onResponsePresented,
                 backend: backend
             )
+        case .steer(let note):
+            AgentSteerBubbleView(note: note)
         }
     }
 }

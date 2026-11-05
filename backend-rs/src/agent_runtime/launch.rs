@@ -100,6 +100,22 @@ fn codex_arguments(character: &RuntimeCharacter, prompt: &str, previous: Option<
         Some(session) => arguments.extend(["resume".into(), session.to_string(), "--json".into()]),
         None => arguments.extend(["--json".into(), "--skip-git-repo-check".into()]),
     }
+    arguments.extend(codex_config_overrides(character));
+    if previous.is_some() {
+        arguments.extend(["-c".into(), format!("sandbox_mode=\"{}\"", character.permission)]);
+    } else {
+        arguments.extend(["-s".into(), character.permission.clone()]);
+    }
+    for attachment in attachments.iter().filter(|attachment| attachment.is_codex_image) {
+        arguments.extend(["-i".into(), attachment.path.clone()]);
+    }
+    arguments.push(prompt.to_string());
+    arguments
+}
+
+/// exec와 app-server가 함께 쓰는 Codex 설정 덮어쓰기(-c).
+fn codex_config_overrides(character: &RuntimeCharacter) -> Vec<String> {
+    let mut arguments: Vec<String> = Vec::new();
     if let Some(model) = character.configured_model() {
         arguments.extend(["-c".into(), format!("model=\"{model}\"")]);
     }
@@ -117,15 +133,15 @@ fn codex_arguments(character: &RuntimeCharacter, prompt: &str, previous: Option<
         "-c".into(),
         format!("developer_instructions={}", quoted(&configured_identity_prompt(character))),
     ]);
-    if previous.is_some() {
-        arguments.extend(["-c".into(), format!("sandbox_mode=\"{}\"", character.permission)]);
-    } else {
-        arguments.extend(["-s".into(), character.permission.clone()]);
-    }
-    for attachment in attachments.iter().filter(|attachment| attachment.is_codex_image) {
-        arguments.extend(["-i".into(), attachment.path.clone()]);
-    }
-    arguments.push(prompt.to_string());
+    arguments
+}
+
+/// GUI Codex 턴의 app-server 실행 인자. 실행 중 끼어들기(turn/steer)를 받으려고 exec 대신 쓴다.
+/// 작업 권한·질문·첨부 이미지는 JSON-RPC 요청에 담는다.
+pub fn codex_app_server_arguments(character: &RuntimeCharacter) -> Vec<String> {
+    let mut arguments: Vec<String> = vec!["app-server".into()];
+    arguments.extend(codex_config_overrides(character));
+    arguments.push("--stdio".into());
     arguments
 }
 
@@ -167,6 +183,8 @@ pub fn claude_persistent_arguments(character: &RuntimeCharacter, previous_sessio
         "stream-json".into(),
         "--input-format".into(),
         "stream-json".into(),
+        // 끼어든 메시지를 받아 간 순간을 알아야 같은 턴에 합쳐졌는지, 다음 턴으로 처리됐는지 가린다.
+        "--replay-user-messages".into(),
     ];
     claude_common_arguments(character, head, previous_session_id.filter(|id| !id.is_empty()))
 }

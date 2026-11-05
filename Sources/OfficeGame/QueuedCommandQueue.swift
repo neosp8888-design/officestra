@@ -79,6 +79,23 @@ struct QueuedCommandQueue: Equatable {
         commands.insert(command, at: 0)
     }
 
+    /// 끼어들기를 못 받은 내용을 예약으로 옮긴다. 자리가 있으면 맨 뒤에 둔다.
+    /// 가득 찼을 때 예약에서 꺼냈던 항목은 제 자리였던 맨 앞을 되찾지만, 새로 쓴
+    /// 내용은 최대 개수를 넘기지 않도록 받지 않는다. false면 호출자가 입력창에 되돌린다.
+    mutating func takeRejectedSteer(
+        _ command: QueuedCommand,
+        heldSlot: Bool
+    ) -> Bool {
+        if enqueue(command) {
+            return true
+        }
+        guard heldSlot else {
+            return false
+        }
+        restoreToFront(command)
+        return true
+    }
+
     /// 바로 적용은 고른 예약을 맨 앞으로 옮긴 뒤 배수 경로를 그대로
     /// 태운다. 순서만 바꾸므로 나머지 예약은 그대로 남는다.
     @discardableResult

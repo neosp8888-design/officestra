@@ -1537,7 +1537,8 @@ private struct LiveWorkspaceCommandBar: View {
             if let selectedCharacterID {
                 QueuedCommandStrip(
                     director: director,
-                    character: selectedCharacterID
+                    character: selectedCharacterID,
+                    allowsSteering: conversationMode == .chat
                 )
             }
 
@@ -1554,8 +1555,10 @@ private struct LiveWorkspaceCommandBar: View {
                     attachmentCount: attachments.count,
                     isPreparingAttachments: isPreparingAttachments,
                     supportsAttachments: isEnabled(.attachments),
+                    supportsSteering: conversationMode == .chat,
                     onChooseAttachments: chooseAttachments,
-                    onSubmit: submitCommand
+                    onSubmit: { submitCommand($0) },
+                    onQueue: { submitCommand($0, queues: true) }
                 )
                 .frame(maxWidth: .infinity)
             }
@@ -1776,6 +1779,17 @@ private struct LiveWorkspaceCommandBar: View {
                 )
             }
             if director.runningCharacters.contains(selectedCharacterID) {
+                if conversationMode == .chat, director.canSteer(selectedCharacterID) {
+                    return director.selectedCharacterQueueAvailability == .full
+                        ? OfficeLocalization.format(
+                            "%@에게 지금 끼어들 내용을 입력하세요 · 예약은 가득 찼습니다",
+                            selectedName
+                        )
+                        : OfficeLocalization.format(
+                            "%@에게 지금 끼어들 내용을 입력하세요 · Tab은 다음 턴 예약",
+                            selectedName
+                        )
+                }
                 switch director.selectedCharacterQueueAvailability {
                 case .available:
                     return OfficeLocalization.format(
@@ -1827,7 +1841,7 @@ enum CharacterSelectorLabelStyle {
 }
 
 private extension LiveWorkspaceCommandBar {
-    private func submitCommand(_ prompt: String) -> Bool {
+    private func submitCommand(_ prompt: String, queues: Bool = false) -> Bool {
         guard
             director.isReadyForSubmissions,
             !director.isUpdatingConfiguration,
@@ -1843,20 +1857,33 @@ private extension LiveWorkspaceCommandBar {
             return director.roleplay.send(prompt, for: selectedCharacterID)
         }
 
-        // 응답 생성 중이면 같은 입력을 다음 턴 예약으로 넘긴다.
-        // 첨부는 예약이 실제로 제출될 때까지 director가 들고 있다가
-        // 정리하므로 여기서 목록만 비운다. 터미널 모드도 같은 예약을 쓰고,
+        // 응답 생성 중이면 Enter는 지금 업무에 끼어들고 Tab은 다음 턴 예약이다.
+        // 끼어들기를 못 받는 업무(터미널·로컬 모델·Antigravity)는 Enter도 예약이다.
+        // 첨부는 실제로 전달될 때까지 director가 들고 있다가 정리하므로
+        // 여기서 목록만 비운다. 터미널 모드도 같은 예약을 쓰고,
         // 응답이 끝나면 director가 CLI에 타이핑한 것처럼 흘려보낸다.
         if director.runningCharacters.contains(selectedCharacterID) {
-            let queued = director.enqueueCommand(
-                prompt,
-                attachments: attachments,
-                for: selectedCharacterID
-            )
-            if queued {
+            let steers = !queues
+                && conversationMode == .chat
+                && director.canSteer(selectedCharacterID)
+            let accepted = steers
+                ? director.steerCommand(
+                    prompt,
+                    attachments: attachments,
+                    for: selectedCharacterID
+                )
+                : director.enqueueCommand(
+                    prompt,
+                    attachments: attachments,
+                    for: selectedCharacterID
+                )
+            if accepted {
                 attachments = []
             }
-            return queued
+            return accepted
+        }
+        if queues {
+            return false
         }
 
         if conversationMode == .terminal {

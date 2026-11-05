@@ -944,6 +944,34 @@ struct OfficeDatabaseClient: Sendable {
         return try JSONDecoder().decode(StartedAgentJob.self, from: data)
     }
 
+    /// 실행 중인 업무에 지금 입력을 끼워 넣는다. 받을 수 없는 업무면 409·404로 실패한다.
+    func steerAgentJob(
+        character: OfficeCharacter,
+        prompt: String,
+        attachmentPaths: [String]
+    ) async throws -> SteeredAgentJob {
+        let url = baseURL
+            .appending(path: "api")
+            .appending(path: "agent-jobs")
+            .appending(path: character.rawValue)
+            .appending(path: "steer")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "content-type"
+        )
+        request.httpBody = try JSONEncoder().encode(
+            SteerAgentJobRequest(
+                prompt: prompt,
+                attachmentPaths: attachmentPaths
+            )
+        )
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response, data: data)
+        return try JSONDecoder().decode(SteeredAgentJob.self, from: data)
+    }
+
     func cancelAgentJob(
         character: OfficeCharacter
     ) async throws -> CancelledAgentJob {
@@ -2059,6 +2087,16 @@ struct StartedAgentJob: Decodable, Sendable {
 struct CancelledAgentJob: Decodable, Sendable {
     let turnId: String
     let status: String
+}
+
+private struct SteerAgentJobRequest: Encodable {
+    let prompt: String
+    let attachmentPaths: [String]
+}
+
+struct SteeredAgentJob: Decodable, Sendable {
+    let turnId: String
+    let steerId: String
 }
 
 private struct NameRequest: Encodable {

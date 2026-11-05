@@ -780,6 +780,8 @@ final class AgentDirector: ObservableObject {
     /// 응답 생성 중에 미리 걸어 둔 다음 업무다. 직원마다 최대 3개.
     @Published private(set) var queuedCommands:
         [OfficeCharacter: QueuedCommandQueue] = [:]
+    /// 끼어들기를 받지 못해 예약으로 옮겨진 항목이다. 예약 칩에 그 사실을 표시한다.
+    @Published private(set) var steerFallbackCommandIDs: Set<UUID> = []
     @Published var replyRecipients: [OfficeCharacter: Set<OfficeCharacter>] = [:]
     @Published private(set) var pausedReplyRoutes: Set<OfficeCharacter> = []
     @Published private(set) var savingReplyRoutes: Set<OfficeCharacter> = []
@@ -1714,6 +1716,125 @@ final class AgentDirector: ObservableObject {
         return true
     }
 
+    /// 실행 중인 GUI 업무가 지금 입력을 받을 수 있는지 본다. Claude Code와 Codex만
+    /// 실행 중 입력을 받는다. 터미널 턴·로컬 모델·롤플레이는 다음 턴 예약을 쓴다.
+    func canSteer(_ character: OfficeCharacter) -> Bool {
+        guard
+            isReadyForSubmissions,
+            !isUpdatingConfiguration,
+            runningCharacters.contains(character),
+            !cancellingCharacters.contains(character),
+            !compactingCharacters.contains(character),
+            !roleplay.isEnabled(character),
+            localProfileID(for: character) == nil,
+            let backend = characters.first(where: { $0.id == character })?.backend,
+            backend == .claude || backend == .codex
+        else {
+            return false
+        }
+        guard let running = liveFeedStore.turns(for: character.rawValue)
+            .first(where: { $0.status.isRunning })
+        else {
+            return true
+        }
+        return running.providerKind != "local" && running.origin != "terminal"
+    }
+
+    /// 응답 생성 중인 업무에 지금 입력을 끼워 넣는다. 업무가 받을 수 없으면
+    /// 적어 둔 내용이 사라지지 않게 다음 턴 예약으로 옮긴다.
+    @discardableResult
+    func steerCommand(
+        _ prompt: String,
+        attachments: [PendingAttachment] = [],
+        for character: OfficeCharacter
+    ) -> Bool {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return false
+        }
+        guard canSteer(character) else {
+            return enqueueCommand(trimmed, attachments: attachments, for: character)
+        }
+        let command = QueuedCommand(prompt: trimmed, attachments: attachments)
+        Task {
+            do {
+                let steered = try await database.steerAgentJob(
+                    character: character,
+                    prompt: command.prompt,
+                    attachmentPaths: command.attachments.map(\.stagedURL.path)
+                )
+                // 백엔드가 첨부를 업무 폴더로 옮긴 뒤 응답하므로 받은함은 비운다.
+                releaseStagedAttachments(command.attachments)
+                scheduleRealtimeFeedRefresh(turnID: steered.turnId)
+            } catch {
+                queueRejectedSteer(command, for: character, heldSlot: false)
+            }
+        }
+        return true
+    }
+
+    /// 예약해 둔 업무를 기다리지 않고 지금 업무에 끼워 넣는다.
+    func steerQueuedCommandNow(id: UUID, for character: OfficeCharacter) {
+        guard
+            canSteer(character),
+            var queue = queuedCommands[character],
+            let command = queue.remove(id: id)
+        else {
+            return
+        }
+        queuedCommands[character] = queue
+        steerFallbackCommandIDs.remove(id)
+        Task {
+            do {
+                let steered = try await database.steerAgentJob(
+                    character: character,
+                    prompt: command.prompt,
+                    attachmentPaths: command.attachments.map(\.stagedURL.path)
+                )
+                releaseStagedAttachments(command.attachments)
+                scheduleRealtimeFeedRefresh(turnID: steered.turnId)
+            } catch {
+                queueRejectedSteer(command, for: character, heldSlot: true)
+            }
+        }
+    }
+
+    /// 끼어들기를 못 받은 내용을 예약 맨 뒤에 둔다. 예약에서 꺼낸 항목은 가득 찼어도
+    /// 제 자리였던 맨 앞에 되돌리고, 새로 쓴 내용은 가득 찼으면 입력창에 되돌린다.
+    /// 그 사이 업무가 정상 완료됐으면 예약 차례가 지나갔으므로 바로 보낸다.
+    private func queueRejectedSteer(
+        _ command: QueuedCommand,
+        for character: OfficeCharacter,
+        heldSlot: Bool
+    ) {
+        var queue = queuedCommands[character] ?? QueuedCommandQueue()
+        guard queue.takeRejectedSteer(command, heldSlot: heldSlot) else {
+            restoreRejectedSteerToComposer(command, for: character)
+            return
+        }
+        queuedCommands[character] = queue
+        steerFallbackCommandIDs.insert(command.id)
+        let latest = liveFeedStore.turns(for: character.rawValue)
+            .max(by: { $0.startedAt < $1.startedAt })
+        if !runningCharacters.contains(character), latest?.status == .completed {
+            drainQueuedCommand(for: character)
+        }
+    }
+
+    /// 예약이 가득 차 받지 못한 끼어들기를 그 직원의 입력창에 되돌린다.
+    /// 그 사이 새로 적은 글과 첨부는 지우지 않고 뒤에 남긴다.
+    func restoreRejectedSteerToComposer(
+        _ command: QueuedCommand,
+        for character: OfficeCharacter
+    ) {
+        var draft = employeeComposerStore.drafts[character] ?? CommandEntryDraft()
+        let typed = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft.text = typed.isEmpty ? command.prompt : command.prompt + "\n\n" + draft.text
+        employeeComposerStore.drafts[character] = draft
+        employeeComposerStore.attachments[character, default: []]
+            .insert(contentsOf: command.attachments, at: 0)
+    }
+
     func cancelReplyDelivery(sourceTurnID: String) {
         Task {
             do {
@@ -1736,6 +1857,7 @@ final class AgentDirector: ObservableObject {
             return
         }
         queuedCommands[character] = queue
+        steerFallbackCommandIDs.remove(id)
         releaseStagedAttachments(removed.attachments)
     }
 
@@ -1774,6 +1896,7 @@ final class AgentDirector: ObservableObject {
             return
         }
         queuedCommands[character] = queue
+        steerFallbackCommandIDs.remove(next.id)
         if let sink = terminalInputSink, next.replyRecipient == nil {
             // 터미널 모드에서는 예약을 CLI에 타이핑한 것처럼 보낸다. 첨부는
             // 경로를 이어 적어 CLI가 직접 읽게 한다. 그 직원의 터미널이 없어

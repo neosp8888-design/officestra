@@ -39,6 +39,7 @@ struct CommandEntryAvailability: Equatable {
     let isSelectedCharacterRunning: Bool
     let isSelectedCharacterCompacting: Bool
     let canQueueForSelectedCharacter: Bool
+    let canSteerSelectedCharacter: Bool
 
     init(
         isReady: Bool,
@@ -46,7 +47,8 @@ struct CommandEntryAvailability: Equatable {
         hasSelectedCharacter: Bool,
         isSelectedCharacterRunning: Bool,
         isSelectedCharacterCompacting: Bool = false,
-        canQueueForSelectedCharacter: Bool
+        canQueueForSelectedCharacter: Bool,
+        canSteerSelectedCharacter: Bool = false
     ) {
         self.isReady = isReady
         self.isUpdatingConfiguration = isUpdatingConfiguration
@@ -54,6 +56,7 @@ struct CommandEntryAvailability: Equatable {
         self.isSelectedCharacterRunning = isSelectedCharacterRunning
         self.isSelectedCharacterCompacting = isSelectedCharacterCompacting
         self.canQueueForSelectedCharacter = canQueueForSelectedCharacter
+        self.canSteerSelectedCharacter = canSteerSelectedCharacter
     }
 
     var canSubmit: Bool {
@@ -74,8 +77,18 @@ struct CommandEntryAvailability: Equatable {
             && canQueueForSelectedCharacter
     }
 
+    /// 응답 생성 중에도 지금 업무에 바로 끼어들 수 있다. 예약이 가득 차도 받는다.
+    var canSteer: Bool {
+        isReady
+            && !isUpdatingConfiguration
+            && hasSelectedCharacter
+            && isSelectedCharacterRunning
+            && !isSelectedCharacterCompacting
+            && canSteerSelectedCharacter
+    }
+
     var acceptsInput: Bool {
-        canSubmit || canQueue
+        canSubmit || canQueue || canSteer
     }
 
     func canChooseAttachments(currentCount: Int) -> Bool {
@@ -154,22 +167,31 @@ struct CommandEntryRow: View {
     let isPreparingAttachments: Bool
     /// 터미널 모드는 글만 CLI로 넘기므로 첨부 버튼을 두지 않는다.
     var supportsAttachments = true
+    /// 대화 모드에서만 응답 생성 중 Enter가 끼어들기다. 터미널은 CLI 화면에서 직접 끼어든다.
+    var supportsSteering = false
     let onChooseAttachments: () -> Void
+    /// Enter와 보내기 버튼. 응답 생성 중이면 호출자가 끼어들기나 예약으로 보낸다.
     let onSubmit: (String) -> Bool
+    /// Tab과 예약 버튼. 응답 생성 중에만 쓴다.
+    var onQueue: ((String) -> Bool)?
 
     @State private var composerHeight = CommandComposerLayout.minimumHeight
     @State private var isSubmittingMentions = false
 
     init(director: AgentDirector, placeholder: String, attachmentCount: Int,
          isPreparingAttachments: Bool, supportsAttachments: Bool = true,
-         onChooseAttachments: @escaping () -> Void, onSubmit: @escaping (String) -> Bool) {
+         supportsSteering: Bool = false,
+         onChooseAttachments: @escaping () -> Void, onSubmit: @escaping (String) -> Bool,
+         onQueue: ((String) -> Bool)? = nil) {
         self.director = director
         self.placeholder = placeholder
         self.attachmentCount = attachmentCount
         self.isPreparingAttachments = isPreparingAttachments
         self.supportsAttachments = supportsAttachments
+        self.supportsSteering = supportsSteering
         self.onChooseAttachments = onChooseAttachments
         self.onSubmit = onSubmit
+        self.onQueue = onQueue
         _composerStore = ObservedObject(wrappedValue: director.employeeComposerStore.draftStore)
     }
 
@@ -187,7 +209,10 @@ struct CommandEntryRow: View {
             isSelectedCharacterCompacting:
                 director.isSelectedCharacterCompacting,
             canQueueForSelectedCharacter:
-                director.canQueueForSelectedCharacter
+                director.canQueueForSelectedCharacter,
+            canSteerSelectedCharacter:
+                supportsSteering
+                    && director.selectedCharacterID.map(director.canSteer) == true
         )
     }
 
@@ -279,12 +304,18 @@ struct CommandEntryRow: View {
                 onSubmit: {
                     guard director.selectedCharacterID == inputCharacter else { return false }
                     return submitDraft()
-                }
+                },
+                onQueue: isRunning && onQueue != nil
+                    ? {
+                        guard director.selectedCharacterID == inputCharacter else { return false }
+                        return submitDraft(queues: true)
+                    }
+                    : nil
             )
             .id(director.selectedCharacterID)
             .frame(height: composerHeight)
 
-            if director.isSelectedCharacterRunning {
+            if isRunning {
                 Button(action: director.cancelSelectedJob) {
                     Image(systemName: "stop.fill")
                         .font(.system(size: 13, weight: .bold))
@@ -298,16 +329,50 @@ struct CommandEntryRow: View {
                     director.isCancellingSelectedCharacter ? 0.42 : 1
                 )
 
-                Button(action: { _ = submitDraft() }) {
+                if canSteer {
+                    let canSend = canSubmit && availability.canSteer
+                    Button(action: { _ = submitDraft() }) {
+                        Image(systemName: "text.bubble.fill")
+                            .font(.system(size: 13, weight: .bold))
+                            .frame(width: 36, height: 36)
+                    }
+                    .buttonStyle(OfficeGameButtonStyle(accent: modelAccent, emphasis: .hero, cornerRadius: 11))
+                    .accessibilityLabel(OfficeLocalization.string("지금 끼어들기"))
+                    .help(OfficeLocalization.string("지금 하는 업무에 바로 전달 · Enter"))
+                    .disabled(!canSend)
+                    .opacity(canSend ? 1 : 0.42)
+                }
+
+                let canQueueDraft = canSubmit && availability.canQueue
+                Button(action: { _ = submitDraft(queues: canSteer) }) {
                     Image(systemName: "clock.badge.checkmark.fill")
                         .font(.system(size: 13, weight: .bold))
                         .frame(width: 36, height: 36)
                 }
-                .buttonStyle(OfficeGameButtonStyle(accent: modelAccent, emphasis: .hero, cornerRadius: 11))
+                .buttonStyle(OfficeGameButtonStyle(accent: modelAccent, emphasis: canSteer ? .control : .hero, cornerRadius: 11))
+                .overlay(alignment: .topTrailing) {
+                    if queuedCount > 0 {
+                        Text("\(queuedCount)")
+                            .font(.system(size: 9.5, weight: .black, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(.white)
+                            .frame(minWidth: 15, minHeight: 15)
+                            .background(modelAccent, in: Circle())
+                            .offset(x: 5, y: -5)
+                            .accessibilityHidden(true)
+                    }
+                }
                 .accessibilityLabel(OfficeLocalization.string("다음 턴에 예약"))
-                .help(queueHelp)
-                .disabled(!canSubmit)
-                .opacity(canSubmit ? 1 : 0.42)
+                .accessibilityValue(
+                    OfficeLocalization.format(
+                        "다음 턴 예약 %d/%d",
+                        queuedCount,
+                        QueuedCommandQueue.maximumCount
+                    )
+                )
+                .help(queueHelp + (canSteer ? " · Tab" : " · Enter"))
+                .disabled(!canQueueDraft)
+                .opacity(canQueueDraft ? 1 : 0.42)
             } else {
                 Button(action: { _ = submitDraft() }) {
                     Image(systemName: "paperplane.fill")
@@ -325,13 +390,52 @@ struct CommandEntryRow: View {
         .padding(.trailing, 7)
         .padding(.vertical, 6)
         .officeGameSurface(accent: modelAccent, cornerRadius: 14)
+
+            if isRunning {
+                runningKeyHint(accent: modelAccent)
+            }
         }
     }
 
+    private var isRunning: Bool {
+        director.isSelectedCharacterRunning
+    }
+
+    private var canSteer: Bool {
+        availability.canSteerSelectedCharacter
+    }
+
+    private var queuedCount: Int {
+        director.selectedCharacterQueuedCommands.count
+    }
+
+    /// 응답 생성 중에만 보이는 키 안내다. 끼어들기와 예약을 어떻게 고르는지 알린다.
+    private func runningKeyHint(accent: Color) -> some View {
+        HStack(spacing: 10) {
+            if canSteer {
+                Label(OfficeLocalization.string("Enter 지금 끼어들기"), systemImage: "text.bubble")
+                Label(OfficeLocalization.string("Tab 다음 턴 예약"), systemImage: "clock")
+            } else {
+                Label(OfficeLocalization.string("Enter 다음 턴 예약"), systemImage: "clock")
+            }
+            Label(OfficeLocalization.string("Shift+Enter 줄바꿈"), systemImage: "return")
+            Spacer(minLength: 0)
+        }
+        .labelStyle(.titleAndIcon)
+        .font(.system(size: 10, weight: .semibold))
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .padding(.horizontal, 9)
+        .accessibilityIdentifier("commandRunningKeyHint")
+    }
+
     @discardableResult
-    private func submitDraft() -> Bool {
+    private func submitDraft(queues: Bool = false) -> Bool {
         guard let submissionPrompt else {
             return false
+        }
+        let send: (String) -> Bool = { prompt in
+            queues ? (onQueue?(prompt) ?? false) : onSubmit(prompt)
         }
         if let source = director.selectedCharacterID {
             let candidates = director.characters.filter { $0.id != source }.map {
@@ -348,12 +452,12 @@ struct CommandEntryRow: View {
                     isSubmittingMentions = false
                     guard saved, director.selectedCharacterID == source, draft.text == originalDraft,
                           (director.replyRecipients[source] ?? []).isSuperset(of: recipients) else { return }
-                    draft.clearAfterSubmission(accepted: onSubmit(submissionPrompt))
+                    draft.clearAfterSubmission(accepted: send(submissionPrompt))
                 }
                 return false
             }
         }
-        let accepted = onSubmit(submissionPrompt)
+        let accepted = send(submissionPrompt)
         draft.clearAfterSubmission(accepted: accepted)
         return accepted
     }
@@ -399,33 +503,85 @@ struct ReplyDeliveryStatusView: View {
     }
 }
 
-/// 예약된 다음 업무를 보여주고 취소·즉시 적용을 받는다.
+/// 예약된 다음 업무를 카드로 보여주고 끼어들기·즉시 적용·취소를 받는다.
 struct QueuedCommandStrip: View {
     @ObservedObject var director: AgentDirector
     let character: OfficeCharacter
+    /// 대화 모드에서만 예약을 지금 업무에 끼워 넣을 수 있다.
+    var allowsSteering = false
 
-    private var commands: [QueuedCommand] {
-        director.queuedCommands(for: character)
+    var body: some View {
+        QueuedCommandCard(
+            commands: director.queuedCommands(for: character),
+            accent: DashboardPalette.providerAccent(
+                for: director.characters.first { $0.id == character }?.backend ?? .codex
+            ),
+            isRunning: director.runningCharacters.contains(character),
+            canSteer: allowsSteering && director.canSteer(character),
+            fallbackCommandIDs: director.steerFallbackCommandIDs,
+            onSteer: { director.steerQueuedCommandNow(id: $0, for: character) },
+            onApply: { director.applyQueuedCommandNow(id: $0, for: character) },
+            onCancel: { director.cancelQueuedCommand(id: $0, for: character) }
+        )
     }
+}
+
+/// 예약 카드의 화면이다. 값만 받으므로 두 테마 렌더링을 따로 검사할 수 있다.
+struct QueuedCommandCard: View {
+    let commands: [QueuedCommand]
+    let accent: Color
+    let isRunning: Bool
+    let canSteer: Bool
+    var fallbackCommandIDs: Set<UUID> = []
+    let onSteer: (UUID) -> Void
+    let onApply: (UUID) -> Void
+    let onCancel: (UUID) -> Void
 
     var body: some View {
         if !commands.isEmpty {
-            VStack(alignment: .leading, spacing: 5) {
-                Text(
-                    OfficeLocalization.format(
-                        "다음 턴 예약 %d/%d",
-                        commands.count,
-                        QueuedCommandQueue.maximumCount
-                    )
-                )
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 7) {
+                header
 
                 ForEach(Array(commands.enumerated()), id: \.element.id) {
                     index, command in
                     chip(index: index, command: command)
                 }
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .officeGameSurface(accent: accent, emphasis: .control, cornerRadius: 12)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("queuedCommandStrip")
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "clock.badge.checkmark.fill")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(accent)
+                .accessibilityHidden(true)
+
+            Text(
+                OfficeLocalization.format(
+                    "다음 턴 예약 %d/%d",
+                    commands.count,
+                    QueuedCommandQueue.maximumCount
+                )
+            )
+            .font(.system(size: 12, weight: .heavy))
+            .monospacedDigit()
+
+            Spacer(minLength: 6)
+
+            Text(
+                isRunning
+                    ? OfficeLocalization.string("지금 응답이 끝나면 차례로 보냅니다")
+                    : OfficeLocalization.string("바로 적용을 누르면 보냅니다")
+            )
+            .font(.system(size: 10.5, weight: .medium))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
         }
     }
 
@@ -433,44 +589,65 @@ struct QueuedCommandStrip: View {
         index: Int,
         command: QueuedCommand
     ) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 7) {
             Text("\(index + 1)")
                 .font(
-                    .system(size: 9.5, weight: .black, design: .rounded)
+                    .system(size: 10.5, weight: .black, design: .rounded)
                 )
-                .foregroundStyle(DashboardPalette.accent)
-                .frame(width: 15, height: 15)
-                .background(
-                    DashboardPalette.accent.opacity(0.16),
-                    in: Circle()
-                )
+                .foregroundStyle(accent)
+                .frame(width: 19, height: 19)
+                .background(accent.opacity(0.18), in: Circle())
 
             Text(command.summary)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 12, weight: .semibold))
                 .lineLimit(1)
+                .help(command.prompt)
 
             if !command.attachments.isEmpty {
                 Label(
                     "\(command.attachments.count)",
                     systemImage: "paperclip"
                 )
-                .font(.system(size: 9.5, weight: .semibold))
+                .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.secondary)
+            }
+
+            if fallbackCommandIDs.contains(command.id) {
+                Label(
+                    OfficeLocalization.string("끼어들기 대신 예약"),
+                    systemImage: "arrow.uturn.down"
+                )
+                .font(.system(size: 9.5, weight: .bold))
+                .foregroundStyle(.orange)
+                .lineLimit(1)
+                .help(OfficeLocalization.string("지금 업무가 끼어들기를 받지 못해 다음 턴 예약으로 옮겼습니다"))
             }
 
             Spacer(minLength: 4)
 
-            Button {
-                director.applyQueuedCommandNow(
-                    id: command.id,
-                    for: character
+            if canSteer {
+                Button {
+                    onSteer(command.id)
+                } label: {
+                    Label(OfficeLocalization.string("끼어들기"), systemImage: "text.bubble.fill")
+                        .font(.system(size: 10.5, weight: .bold))
+                        .foregroundStyle(accent)
+                }
+                .officeGameTool(accent: accent)
+                .accessibilityLabel(
+                    OfficeLocalization.format("%@ 지금 끼어들기", command.summary)
                 )
-            } label: {
-                Image(systemName: "bolt.fill")
-                    .font(.system(size: 10.5, weight: .bold))
-                    .foregroundStyle(DashboardPalette.accent)
+                .help(OfficeLocalization.string("기다리지 않고 지금 하는 업무에 바로 전달"))
             }
-            .officeGameTool()
+
+            Button {
+                onApply(command.id)
+            } label: {
+                Label(OfficeLocalization.string("바로 적용"), systemImage: "bolt.fill")
+                    .font(.system(size: 10.5, weight: .bold))
+                    .foregroundStyle(accent)
+            }
+            .officeGameTool(accent: accent)
             .accessibilityLabel(
                 OfficeLocalization.format(
                     "%@ 바로 적용",
@@ -480,13 +657,10 @@ struct QueuedCommandStrip: View {
             .help(OfficeLocalization.string("지금 작업을 중단하고 이 예약으로 다시 질문"))
 
             Button {
-                director.cancelQueuedCommand(
-                    id: command.id,
-                    for: character
-                )
+                onCancel(command.id)
             } label: {
                 Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 11))
+                    .font(.system(size: 13))
                     .foregroundStyle(.secondary)
             }
             .officeGameTool()
@@ -499,9 +673,9 @@ struct QueuedCommandStrip: View {
             .help(OfficeLocalization.string("예약 취소"))
         }
         .padding(.horizontal, 9)
-        .frame(height: 27)
+        .frame(minHeight: 32)
         .background(
-            DashboardPalette.accent.opacity(0.075),
+            accent.opacity(0.09),
             in: RoundedRectangle(cornerRadius: 9, style: .continuous)
         )
     }
@@ -516,6 +690,8 @@ struct CommandComposerView: NSViewRepresentable {
     var onMention: ((OfficeCharacter) -> Void)? = nil
     var focusOnMount = false
     let onSubmit: () -> Bool
+    /// 있으면 Tab이 예약 전송이다. 없으면 Tab은 원래 동작을 한다.
+    var onQueue: (() -> Bool)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -603,6 +779,14 @@ struct CommandComposerView: NSViewRepresentable {
                 textBinding.wrappedValue = submittedText
             }
             return onSubmit()
+        }
+        textView.onQueue = onQueue.map { queue in
+            { submittedText in
+                if textBinding.wrappedValue != submittedText {
+                    textBinding.wrappedValue = submittedText
+                }
+                return queue()
+            }
         }
         if textView.placeholder != placeholder {
             textView.placeholder = placeholder
@@ -693,6 +877,7 @@ final class CommandComposerTextView: NSTextView {
         }
     }
     var onSubmit: ((String) -> Bool)?
+    var onQueue: ((String) -> Bool)?
     var onMeasuredHeightChange: ((CGFloat) -> Void)?
     var mentionCandidates: [EmployeeMention] = []
     var onMention: ((OfficeCharacter) -> Void)?
@@ -710,6 +895,13 @@ final class CommandComposerTextView: NSTextView {
 
     override func keyDown(with event: NSEvent) {
         if handleMentionKey(event) { return }
+        // 응답 생성 중 Tab은 다음 턴 예약이다. 멘션 목록의 Tab은 위에서 먼저 받는다.
+        let isPlainTab = event.keyCode == 48
+            && event.modifierFlags.intersection([.shift, .command, .option, .control]).isEmpty
+        if isPlainTab, let onQueue {
+            submitConfirmedText(with: onQueue)
+            return
+        }
         let isReturn = event.keyCode == 36 || event.keyCode == 76
         guard isReturn else {
             beginNextUserEdit()
@@ -729,8 +921,14 @@ final class CommandComposerTextView: NSTextView {
             return
         }
 
+        submitConfirmedText { [weak self] text in
+            self?.onSubmit?(text) == true
+        }
+    }
+
+    private func submitConfirmedText(with handler: @escaping (String) -> Bool) {
         guard hasMarkedText() else {
-            if onSubmit?(string) == true {
+            if handler(string) {
                 completeAcceptedSubmission()
             }
             return
@@ -745,7 +943,7 @@ final class CommandComposerTextView: NSTextView {
             guard let self else {
                 return
             }
-            if self.onSubmit?(self.string) == true {
+            if handler(self.string) {
                 self.completeAcceptedSubmission()
             }
         }

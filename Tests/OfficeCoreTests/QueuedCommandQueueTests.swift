@@ -167,6 +167,67 @@ final class QueuedCommandQueueTests: XCTestCase {
         )
     }
 
+    func testRejectedSteerKeepsReservationLimitAndOrder() {
+        // 자리가 있으면 새로 쓴 끼어들기는 기존 예약 뒤에 선다.
+        var queue = QueuedCommandQueue()
+        XCTAssertTrue(queue.enqueue(QueuedCommand(prompt: "예약 1")))
+        XCTAssertTrue(queue.takeRejectedSteer(QueuedCommand(prompt: "끼어들기"), heldSlot: false))
+        XCTAssertEqual(queue.commands.map(\.prompt), ["예약 1", "끼어들기"])
+
+        // 가득 찼으면 새로 쓴 끼어들기는 받지 않아 3/3과 순서를 지킨다.
+        var fullQueue = QueuedCommandQueue()
+        for index in 1...QueuedCommandQueue.maximumCount {
+            XCTAssertTrue(fullQueue.enqueue(QueuedCommand(prompt: "예약 \(index)")))
+        }
+        XCTAssertFalse(fullQueue.takeRejectedSteer(QueuedCommand(prompt: "예약 4"), heldSlot: false))
+        XCTAssertEqual(
+            fullQueue.commands.map(\.prompt),
+            ["예약 1", "예약 2", "예약 3"],
+            "실패한 새 끼어들기가 최대 개수를 넘기거나 맨 앞에 끼면 안 됩니다."
+        )
+
+        // 예약에서 꺼내 끼어들었던 항목은 가득 찼어도 제 자리였던 맨 앞을 되찾는다.
+        guard let head = fullQueue.removeFirst() else {
+            XCTFail("꺼낼 예약이 없습니다.")
+            return
+        }
+        XCTAssertTrue(fullQueue.enqueue(QueuedCommand(prompt: "새 예약")))
+        XCTAssertTrue(fullQueue.takeRejectedSteer(head, heldSlot: true))
+        XCTAssertEqual(fullQueue.commands.map(\.prompt), ["예약 1", "예약 2", "예약 3", "새 예약"])
+    }
+
+    func testRejectedSteerReturnsToComposerWithoutDroppingNewDraft() {
+        let director = AgentDirector(startBackgroundTasks: false)
+        let attachment = PendingAttachment(
+            sourceURL: URL(fileURLWithPath: "/tmp/steer.txt"),
+            stagedURL: URL(fileURLWithPath: "/tmp/staged-steer.txt")
+        )
+        let typed = PendingAttachment(
+            sourceURL: URL(fileURLWithPath: "/tmp/typed.txt"),
+            stagedURL: URL(fileURLWithPath: "/tmp/staged-typed.txt")
+        )
+
+        director.restoreRejectedSteerToComposer(
+            QueuedCommand(prompt: "끼어들기", attachments: [attachment]),
+            for: .boss
+        )
+        XCTAssertEqual(director.employeeComposerStore.drafts[.boss]?.text, "끼어들기")
+        XCTAssertEqual(director.employeeComposerStore.attachments[.boss], [attachment])
+
+        director.employeeComposerStore.drafts[.rightWoman] = CommandEntryDraft(text: "새로 적은 글")
+        director.employeeComposerStore.attachments[.rightWoman] = [typed]
+        director.restoreRejectedSteerToComposer(
+            QueuedCommand(prompt: "끼어들기", attachments: [attachment]),
+            for: .rightWoman
+        )
+        XCTAssertEqual(
+            director.employeeComposerStore.drafts[.rightWoman]?.text,
+            "끼어들기\n\n새로 적은 글"
+        )
+        XCTAssertEqual(director.employeeComposerStore.attachments[.rightWoman], [attachment, typed])
+        XCTAssertTrue(director.queuedCommands(for: .rightWoman).isEmpty)
+    }
+
     func testDirectorRejectsReservationForIdleCharacter() {
         let director = AgentDirector(startBackgroundTasks: false)
 

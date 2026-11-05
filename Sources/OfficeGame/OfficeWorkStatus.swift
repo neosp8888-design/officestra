@@ -102,7 +102,8 @@ final class OfficeWorkStatusStore: ObservableObject {
         }
         if turn.status == .pending { publish(.waiting) }
         else if let terminalPhase, terminalPhase.turnID == turn.id { publish(terminalPhase.phase) }
-        else if let activity = turn.activities.last {
+        // 끼워 넣은 사용자 입력은 직원의 현재 동작이 아니다.
+        else if let activity = turn.activities.last(where: { $0.kind != "steer" }) {
             publish(.current(kind: activity.kind, text: activity.text, status: activity.status.rawValue))
         } else { publish(.working) }
     }
