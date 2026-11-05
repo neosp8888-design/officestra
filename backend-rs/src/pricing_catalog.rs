@@ -42,7 +42,7 @@ pub static PRICING_CATALOG_SOURCES: [PricingSource; 2] = [
     PricingSource {
         provider: "antigravity",
         url: "https://ai.google.dev/gemini-api/docs/pricing?hl=en",
-        parse: parse_gemini_pricing_html,
+        parse: parse_gemini_pricing,
     },
 ];
 
@@ -451,6 +451,17 @@ static GEMINI_ROW: LazyLock<Regex> = LazyLock::new(|| pattern(r"<(?i-u:tr)(?-u:\
 static GEMINI_CELL: LazyLock<Regex> = LazyLock::new(|| pattern(r"<(?i-u:td)(?-u:\b)[^>]*>((?s:.)*?)</(?i-u:td)>"));
 static GEMINI_BREAK: LazyLock<Regex> =
     LazyLock::new(|| pattern(concat!(r"<(?i-u:br)", js_space!(), r"*/?", js_space!(), r"*>")));
+// 2026-11 초부터 Gemini 가격 페이지는 HTML 대신 Markdoc 원문(text/plain)으로 온다.
+static MARKDOC_HEADING: LazyLock<Regex> = LazyLock::new(|| pattern(r"(?m)^##[ \t]"));
+static MARKDOC_ID: LazyLock<Regex> = LazyLock::new(|| pattern(r#"\{%[ \t]*id="([^"]+)"[ \t]*%\}"#));
+static MARKDOC_TABS: LazyLock<Regex> = LazyLock::new(|| pattern(r"\{%[ \t]*tabs[ \t]*%\}"));
+static MARKDOC_STANDARD_TAB: LazyLock<Regex> =
+    LazyLock::new(|| pattern(r#"\{%[ \t]*tab[ \t]+title="(?i-u:standard)"[^%]*%\}"#));
+static MARKDOC_TABLE: LazyLock<Regex> =
+    LazyLock::new(|| pattern(r"\{%[ \t]*table(?-u:\b)[^%]*%\}((?s:.)*?)\{%[ \t]*/table[ \t]*%\}"));
+// 모델 ID는 `` [`gemini-…`](/docs/models/…) `` 링크에서만 읽는다. 머리말 안내문의 다른 모델 이름에 표를 달지 않는다.
+static MARKDOC_CODE: LazyLock<Regex> = LazyLock::new(|| pattern(r"\[`((?i-u:gemini-)[^`]+)`\]\("));
+static MARKDOC_ROW_RULE: LazyLock<Regex> = LazyLock::new(|| pattern(r"(?m)^[ \t]*---[ \t]*$"));
 static STORAGE_PRICE: LazyLock<Regex> = LazyLock::new(|| pattern(r"(?i-u:storage price)"));
 static DOLLAR_PRICE: LazyLock<Regex> =
     LazyLock::new(|| pattern(concat!(r"\$", js_space!(), r"*([0-9]+(?:[.,][0-9]+)?)")));
@@ -630,33 +641,123 @@ pub fn parse_gemini_pricing_html(source: &str) -> Result<PricingCatalog, String>
         if table.is_empty() {
             continue;
         }
-        let rules = combine_gemini_price_rules(&gemini_standard_price_cells(table));
-        if rules.is_empty() {
-            continue;
-        }
-        let mut identifiers: Vec<String> = Vec::new();
-        for captures in GEMINI_CODE.captures_iter(header) {
-            let identifier = html_text(&captures[1]).to_lowercase();
-            if valid_model_id(&identifier) && !identifiers.contains(&identifier) {
-                identifiers.push(identifier);
-            }
-        }
-        if identifiers.is_empty() && valid_model_id(&section_id) {
-            identifiers.push(section_id);
-        }
-        for identifier in &identifiers {
-            catalog.set(identifier, PricingModes::standard(rules.clone()));
-            if let Some(base) = identifier.strip_suffix("-preview")
-                && catalog.get(base).is_none()
-            {
-                catalog.set(base, PricingModes::standard(rules.clone()));
-            }
-        }
+        let header_ids = GEMINI_CODE.captures_iter(header).map(|captures| html_text(&captures[1]).to_lowercase());
+        insert_gemini_section(&mut catalog, &section_id, header_ids, table);
     }
     if catalog.models.is_empty() {
         return Err("Gemini 가격표에서 모델 단가를 찾지 못했습니다.".into());
     }
     Ok(catalog)
+}
+
+/// Gemini 가격 페이지. HTML로 읽지 못하면 2026-11 초부터 오는 Markdoc 원문으로 읽는다.
+pub fn parse_gemini_pricing(source: &str) -> Result<PricingCatalog, String> {
+    parse_gemini_pricing_html(source).or_else(|_| parse_gemini_pricing_markdoc(source))
+}
+
+/// Markdoc 원문. `## 제목 {% id="gemini-…" %}` 절마다 Standard 탭의 첫 표를 읽는다.
+/// 탭 없이 표 하나만 있는 절(Live 모델)은 그 표가 Standard 단가다.
+pub fn parse_gemini_pricing_markdoc(source: &str) -> Result<PricingCatalog, String> {
+    let mut catalog = PricingCatalog::default();
+    let starts: Vec<usize> = MARKDOC_HEADING.find_iter(source).map(|heading| heading.start()).collect();
+    for (index, start) in starts.iter().enumerate() {
+        let section = &source[*start..starts.get(index + 1).copied().unwrap_or(source.len())];
+        let Some(id) = MARKDOC_ID.captures(section.lines().next().unwrap_or("")) else {
+            continue;
+        };
+        let section_id = id[1].to_lowercase();
+        if !section_id.starts_with("gemini-") {
+            continue;
+        }
+        let standard = match MARKDOC_STANDARD_TAB.find(section) {
+            Some(tab) => Some(tab.start()),
+            None if !MARKDOC_TABS.is_match(section) => MARKDOC_TABLE.find(section).map(|table| table.start()),
+            None => None,
+        };
+        let Some(standard) = standard else {
+            continue;
+        };
+        let Some(table) = MARKDOC_TABLE.captures(&section[standard..]).and_then(|captures| captures.get(1)) else {
+            continue;
+        };
+        let header_ids = MARKDOC_CODE.captures_iter(&section[..standard]).map(|captures| captures[1].trim().to_lowercase());
+        insert_gemini_section(&mut catalog, &section_id, header_ids, &markdoc_table_html(table.as_str()));
+    }
+    if catalog.models.is_empty() {
+        return Err("Gemini 가격표에서 모델 단가를 찾지 못했습니다.".into());
+    }
+    Ok(catalog)
+}
+
+/// Markdoc `{% table %}` 본문을 HTML 표(`<tr><td>`)로 옮겨 HTML과 같은 칸 해석을 쓴다.
+/// 줄은 `---`로 나뉘고 칸은 `* `로 시작한다. 칸 안의 강제 줄바꿈(줄 끝 공백 둘 이상이나 `\`)과 빈 줄은 `<br>`,
+/// 나머지 줄바꿈은 공백이다.
+fn markdoc_table_html(table: &str) -> String {
+    let escape = |text: &str| text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+    let mut html = String::new();
+    for row in MARKDOC_ROW_RULE.split(table) {
+        let mut cells: Vec<String> = Vec::new();
+        let mut line_break = false;
+        for line in row.lines() {
+            let mut text = line.trim();
+            if text.is_empty() {
+                line_break = true;
+                continue;
+            }
+            // 이 페이지는 `\\`로도 줄을 바꾼다. HTML 시절 결과도 이 자리에서 `<br>`이었다.
+            let backslash_break = text.ends_with('\\');
+            if backslash_break {
+                text = text.trim_end_matches('\\').trim_end();
+            }
+            match if text == "*" { Some("") } else { text.strip_prefix("* ") } {
+                Some(cell) => cells.push(escape(cell)),
+                None => {
+                    let Some(cell) = cells.last_mut() else {
+                        continue;
+                    };
+                    cell.push_str(if line_break { "<br>" } else { " " });
+                    cell.push_str(&escape(text));
+                }
+            }
+            line_break = backslash_break || line.ends_with("  ");
+        }
+        html.push_str("<tr>");
+        for cell in &cells {
+            html.push_str(&format!("<td>{cell}</td>"));
+        }
+        html.push_str("</tr>");
+    }
+    html
+}
+
+/// 한 절의 Standard 표 단가를 절 머리의 모델 ID(없으면 절 ID)에 단다. `-preview`는 뗀 이름도 비어 있으면 단다.
+fn insert_gemini_section(
+    catalog: &mut PricingCatalog,
+    section_id: &str,
+    header_ids: impl Iterator<Item = String>,
+    table_html: &str,
+) {
+    let rules = combine_gemini_price_rules(&gemini_standard_price_cells(table_html));
+    if rules.is_empty() {
+        return;
+    }
+    let mut identifiers: Vec<String> = Vec::new();
+    for identifier in header_ids {
+        if valid_model_id(&identifier) && !identifiers.contains(&identifier) {
+            identifiers.push(identifier);
+        }
+    }
+    if identifiers.is_empty() && valid_model_id(section_id) {
+        identifiers.push(section_id.to_string());
+    }
+    for identifier in &identifiers {
+        catalog.set(identifier, PricingModes::standard(rules.clone()));
+        if let Some(base) = identifier.strip_suffix("-preview")
+            && catalog.get(base).is_none()
+        {
+            catalog.set(base, PricingModes::standard(rules.clone()));
+        }
+    }
 }
 
 /// Standard 표에서 입력·출력·컨텍스트 캐시 줄의 마지막(유료) 칸 HTML. 같은 줄이 여럿이면 뒤의 것이다.
@@ -1423,6 +1524,145 @@ mod tests {
         );
         assert_eq!(catalogs.rate_for(&query("gemini-new-pro", 200_001.0, None)).unwrap().output, 18.0);
         assert_eq!(catalogs.rate_for(&query("gemini-new-pro", 200_000.0, None)).unwrap().output, 12.0);
+    }
+
+    /// 2026-11 Markdoc 원문 모양. `[br]`은 줄 끝 공백 세 칸(강제 줄바꿈)이다.
+    const GEMINI_MARKDOC_FIXTURE: &str = r#"
+# Gemini Developer API pricing
+
+## Gemini New Flash  {% id="gemini-new-flash" %}
+
+  *[`gemini-new-flash`](/docs/models/gemini-new-flash)*
+
+{% tabs %}
+  {% tab title="Batch" %}
+  {% table %}
+  * Input price
+  * Not available
+  * $9.00
+
+  ---
+
+  * Output price (including thinking tokens)
+  * Not available
+  * $9.00
+  {% /table %}
+  {% /tab %}
+
+  {% tab title="Standard" %}
+  {% table %}
+  * Feature
+  * Free Tier
+  * Paid Tier, per 1M tokens in USD{% sup %}*{% /sup %}
+
+  ---
+
+  * Input price
+  * Free of charge
+  * $0.75 through December 31, 2026.[br]
+  $1.50 starting January 1, 2027.
+
+  ---
+
+  * Output price (including thinking tokens)
+  * Free of charge
+  * $3.75 through December 31, 2026.[br]
+  $7.50 starting January 1, 2027.
+
+  ---
+
+  * Context caching price
+  * Free of charge
+  * $0.075 through December 31, 2026.[br]
+  $0.15 starting January 1, 2027.[br]
+  $1.00 / 1,000,000 tokens per hour (storage price)
+
+  ---
+
+  * Grounding with Google Search
+  * Not Supported
+  *
+  {% /table %}
+  {% /tab %}
+{% /tabs %}
+
+## Gemini New Pro  {% id="gemini-new-pro-preview" %}
+
+  *[`gemini-new-pro-preview`](/docs/models/gemini-new-pro-preview)*
+
+{% callout type="caution" %}
+  Requests to `gemini-new-pro-preview` will route to
+  [Gemini New Flash (`gemini-new-flash`)](/docs/models/gemini-new-flash).
+{% /callout %}
+
+{% tabs %}
+  {% tab title="Standard" %}
+  {% table %}
+  * Input price
+  * Not available
+  * $2.00, prompts <= 200k tokens[br]
+  $4.00, prompts > 200k tokens
+
+  ---
+
+  * Output price (including thinking tokens)
+  * Not available
+  * $12.00, prompts <= 200k tokens \\
+  $18.00, prompts > 200k
+
+  ---
+
+  * Context caching price
+  * Not available
+  * $0.20, prompts <=
+  200k tokens[br]
+  $0.40, prompts > 200k
+  {% /table %}
+  {% /tab %}
+{% /tabs %}
+
+## Gemini New Live  {% id="gemini-new-live" %}
+
+  *[`gemini-new-live`](/docs/models/gemini-new-live)*
+
+{% table %}
+  * Input price
+  * Free of charge
+  * $0.75 (text)[br]
+    $3.00 or $0.005/min (audio)
+
+  ---
+
+  * Output price (including thinking tokens)
+  * Free of charge
+  * $4.50 (text)
+{% /table %}
+
+## Pricing for tools  {% id="pricing-for-tools" %}
+
+{% table %}
+  * Input price
+  * $1.00
+{% /table %}
+"#;
+
+    #[test]
+    fn gemini_markdoc_가격표를_html과_같은_규칙으로_읽는다() {
+        let source = GEMINI_MARKDOC_FIXTURE.replace("[br]", "   ");
+        let parsed = parse_gemini_pricing_markdoc(&source).unwrap();
+        let names: Vec<&str> = parsed.models.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["gemini-new-flash", "gemini-new-pro-preview", "gemini-new-pro", "gemini-new-live"]);
+        // Batch 탭이 앞에 있어도 Standard 표를 읽고, 저장 요금 줄은 뺀다. 문장 중간 줄바꿈은 한 조각이고 `\\`는 줄바꿈이다.
+        // Pro 머리말 안내문의 gemini-new-flash에는 Pro 단가를 달지 않는다.
+        let html = parse_gemini_pricing_html(GEMINI_FIXTURE).unwrap();
+        for model in ["gemini-new-flash", "gemini-new-pro-preview", "gemini-new-pro"] {
+            assert_eq!(standard(&parsed, model), standard(&html, model), "{model}");
+        }
+        // 탭 없는 Live 절은 표 하나가 Standard다. 같은 조건의 첫 금액(텍스트)을 쓴다.
+        assert_eq!(standard(&parsed, "gemini-new-live"), [PricingRule::rate(0.75, None, None, 4.5)]);
+        assert_eq!(parse_gemini_pricing(&source).unwrap().models, parsed.models);
+        assert_eq!(parse_gemini_pricing(GEMINI_FIXTURE).unwrap().models, html.models);
+        assert_eq!(parse_gemini_pricing("## 제목").unwrap_err(), "Gemini 가격표에서 모델 단가를 찾지 못했습니다.");
     }
 
     #[test]
